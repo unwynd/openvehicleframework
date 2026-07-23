@@ -1,0 +1,315 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_python//python:defs.bzl", "py_test")
+
+package(default_visibility = ["//visibility:public"])
+
+py_test(
+    name = "ir_valid",
+    srcs = [
+        "__init__.py",
+        "b1_test.py",
+        "//:__init__.py",
+        "//bazel:__init__.py",
+    ],
+    args = [
+        "ir",
+        "0",
+        "com/model/examples/radar.ovf-ir.json",
+    ],
+    data = [
+        "//com/model/examples:radar_ir",
+        "//tools:validate_ir",
+    ],
+    main = "b1_test.py",
+)
+
+py_test(
+    name = "ir_additive_compatible",
+    srcs = [
+        "__init__.py",
+        "b1_test.py",
+        "//:__init__.py",
+        "//bazel:__init__.py",
+    ],
+    args = [
+        "ir",
+        "0",
+        "com/model/examples/radar-additive.ovf-ir.json",
+        "--baseline",
+        "com/model/examples/radar.ovf-ir.json",
+    ],
+    data = [
+        "//com/model/examples:radar-additive.ovf-ir.json",
+        "//com/model/examples:radar_ir",
+        "//tools:validate_ir",
+    ],
+    main = "b1_test.py",
+)
+
+py_test(
+    name = "ir_breaking_rejected",
+    srcs = [
+        "__init__.py",
+        "b1_test.py",
+        "//:__init__.py",
+        "//bazel:__init__.py",
+    ],
+    args = [
+        "ir",
+        "1",
+        "com/model/examples/radar-breaking.ovf-ir.json",
+        "--baseline",
+        "com/model/examples/radar.ovf-ir.json",
+    ],
+    data = [
+        "//com/model/examples:radar-breaking.ovf-ir.json",
+        "//com/model/examples:radar_ir",
+        "//tools:validate_ir",
+    ],
+    main = "b1_test.py",
+)
+
+py_test(
+    name = "deployment_inproc",
+    srcs = [
+        "__init__.py",
+        "b1_test.py",
+        "//:__init__.py",
+        "//bazel:__init__.py",
+    ],
+    args = [
+        "deployment",
+        "0",
+        "radar-inproc.json",
+    ],
+    data = [
+        "//com/deployment:all_inputs",
+        "//com/model/examples:radar_ir",
+        "//tools:validate_deployment",
+    ],
+    main = "b1_test.py",
+)
+
+py_test(
+    name = "deployment_multitransport",
+    srcs = [
+        "__init__.py",
+        "b1_test.py",
+        "//:__init__.py",
+        "//bazel:__init__.py",
+    ],
+    args = [
+        "deployment",
+        "0",
+        "radar-multitransport.json",
+    ],
+    data = [
+        "//com/deployment:all_inputs",
+        "//com/model/examples:radar_ir",
+        "//tools:validate_deployment",
+    ],
+    main = "b1_test.py",
+)
+
+py_test(
+    name = "deployment_vsomeip",
+    srcs = [
+        "__init__.py",
+        "b1_test.py",
+        "//:__init__.py",
+        "//bazel:__init__.py",
+    ],
+    args = [
+        "deployment",
+        "0",
+        "radar-vsomeip.json",
+    ],
+    data = [
+        "//com/deployment:all_inputs",
+        "//com/model/examples:radar_ir",
+        "//tools:validate_deployment",
+    ],
+    main = "b1_test.py",
+)
+
+py_test(
+    name = "deployment_iceoryx2",
+    srcs = [
+        "__init__.py",
+        "b1_test.py",
+        "//:__init__.py",
+        "//bazel:__init__.py",
+    ],
+    args = [
+        "deployment",
+        "0",
+        "radar-iceoryx2.json",
+    ],
+    data = [
+        "//com/deployment:all_inputs",
+        "//com/model/examples:radar_ir",
+        "//tools:validate_deployment",
+    ],
+    main = "b1_test.py",
+)
+
+py_test(
+    name = "deployment_invalid_rejected",
+    srcs = [
+        "__init__.py",
+        "b1_test.py",
+        "//:__init__.py",
+        "//bazel:__init__.py",
+    ],
+    args = [
+        "deployment",
+        "1",
+        "radar-invalid-capabilities.json",
+    ],
+    data = [
+        "//com/deployment:all_inputs",
+        "//com/model/examples:radar_ir",
+        "//tools:validate_deployment",
+    ],
+    main = "b1_test.py",
+)
+
+py_test(
+    name = "plan_inproc_reproducible",
+    srcs = [
+        "__init__.py",
+        "b1_test.py",
+        "//:__init__.py",
+        "//bazel:__init__.py",
+    ],
+    args = [
+        "reproducible",
+        "plan",
+        "radar-inproc.json",
+    ],
+    data = [
+        "//com/deployment:all_inputs",
+        "//com/model/examples:radar_ir",
+        "//tools:validate_deployment",
+    ],
+    main = "b1_test.py",
+)
+
+py_test(
+    name = "plan_multitransport_reproducible",
+    srcs = [
+        "__init__.py",
+        "b1_test.py",
+        "//:__init__.py",
+        "//bazel:__init__.py",
+    ],
+    args = [
+        "reproducible",
+        "plan",
+        "radar-multitransport.json",
+    ],
+    data = [
+        "//com/deployment:all_inputs",
+        "//com/model/examples:radar_ir",
+        "//tools:validate_deployment",
+    ],
+    main = "b1_test.py",
+)
+
+py_test(
+    name = "generation_reproducible",
+    srcs = [
+        "__init__.py",
+        "b1_test.py",
+        "//:__init__.py",
+        "//bazel:__init__.py",
+    ],
+    args = [
+        "reproducible",
+        "generate",
+    ],
+    data = [
+        "//codegen:ovf_codegen",
+        "//com/model/examples:radar_ir",
+    ],
+    main = "b1_test.py",
+)
+
+genrule(
+    name = "smithy_model",
+    srcs = [
+        "//com/model:ovf-profile.smithy",
+        "//com/model:smithy-build.json",
+        "//contracts/radar:radar.smithy",
+    ],
+    outs = ["smithy/ovf/model/model.json"],
+    cmd = "$(location //bazel/host_tools:smithy) build " +
+          "--config $(location //com/model:smithy-build.json) " +
+          "--output $(RULEDIR)/smithy-tmp --no-color >/dev/null && " +
+          "cp $(RULEDIR)/smithy-tmp/ovf/model/model.json $@",
+    tools = [
+        "//bazel/host_tools:smithy",
+        "//bazel/host_tools:smithy_runtime",
+    ],
+)
+
+genrule(
+    name = "smithy_ir",
+    srcs = [":smithy_model"],
+    outs = ["smithy/radar.ovf-ir.json"],
+    cmd = "$(execpath //tools:smithy_ast_to_ir) $(location :smithy_model) --output $@",
+    tools = ["//tools:smithy_ast_to_ir"],
+)
+
+py_test(
+    name = "smithy_ir_equivalence",
+    srcs = [
+        "__init__.py",
+        "b1_test.py",
+        "//:__init__.py",
+        "//bazel:__init__.py",
+    ],
+    args = [
+        "compare",
+        "bazel/tests/smithy/radar.ovf-ir.json",
+        "com/model/examples/radar.ovf-ir.json",
+    ],
+    data = [
+        ":smithy_ir",
+        "//com/model/examples:radar_ir",
+        "//tools:compare_ir",
+    ],
+    main = "b1_test.py",
+)
+
+py_test(
+    name = "application_bundle",
+    srcs = [
+        "__init__.py",
+        "application_bundle_test.py",
+        "//:__init__.py",
+        "//bazel:__init__.py",
+    ],
+    data = ["//examples/radar_app:radar_app_bundle"],
+    main = "application_bundle_test.py",
+)
+
+test_suite(
+    name = "all_tests",
+    tests = [
+        ":application_bundle",
+        ":deployment_iceoryx2",
+        ":deployment_inproc",
+        ":deployment_invalid_rejected",
+        ":deployment_multitransport",
+        ":deployment_vsomeip",
+        ":generation_reproducible",
+        ":ir_additive_compatible",
+        ":ir_breaking_rejected",
+        ":ir_valid",
+        ":plan_inproc_reproducible",
+        ":plan_multitransport_reproducible",
+        ":smithy_ir_equivalence",
+    ],
+)

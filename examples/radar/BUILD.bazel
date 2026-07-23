@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("//bazel:application.bzl", "ovf_cc_application", "ovf_vsomeip_configuration")
+
+package(default_visibility = ["//visibility:public"])
+
+ovf_cc_application(
+    name = "radar_service",
+    srcs = ["service/main.cpp"],
+    deployment = "deployments/vsomeip/service.json",
+    idl = ["//contracts/radar:radar.smithy"],
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
+ovf_cc_application(
+    name = "radar_client",
+    srcs = ["client/main.cpp"],
+    deployment = "deployments/vsomeip/client.json",
+    idl = ["//contracts/radar:radar.smithy"],
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
+ovf_vsomeip_configuration(
+    name = "provider_configuration",
+    deployments = [
+        ":radar_client_deployment",
+        ":radar_service_deployment",
+    ],
+)

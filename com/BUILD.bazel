@@ -1,0 +1,151 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_shared_library.bzl", "cc_shared_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "provider_abi",
+    hdrs = ["include/ovf/com/transport_abi.h"],
+    includes = ["include"],
+)
+
+cc_library(
+    name = "generated_support",
+    hdrs = [
+        "include/ovf/com/generated.hpp",
+        "include/ovf/com/version.hpp",
+    ],
+    includes = ["include"],
+    deps = [":provider_abi"],
+)
+
+cc_library(
+    name = "runtime",
+    srcs = [
+        "src/provider_binding.cpp",
+        "src/runtime.cpp",
+    ],
+    hdrs = [
+        "include/ovf/com/provider_binding.hpp",
+        "include/ovf/com/runtime.hpp",
+    ],
+    copts = ["-std=c++20"],
+    includes = ["include"],
+    linkopts = select({
+        "@platforms//os:linux": ["-ldl"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":generated_support",
+        ":provider_abi",
+    ],
+)
+
+cc_shared_library(
+    name = "shared",
+    shared_lib_name = select({
+        "@platforms//os:osx": "libovf_com.dylib",
+        "//conditions:default": "libovf_com.so",
+    }),
+    deps = [":runtime"],
+)
+
+cc_library(
+    name = "public_headers",
+    hdrs = [
+        "include/ovf/com/generated.hpp",
+        "include/ovf/com/provider_binding.hpp",
+        "include/ovf/com/runtime.hpp",
+        "include/ovf/com/transport_abi.h",
+        "include/ovf/com/version.hpp",
+    ],
+    includes = ["include"],
+)
+
+cc_import(
+    name = "api",
+    shared_library = ":shared",
+    deps = [":public_headers"],
+)
+
+filegroup(
+    name = "middleware_runtime",
+    srcs = [":shared"],
+)
+
+cc_library(
+    name = "inproc_plugin_entry",
+    srcs = ["transports/inproc/src/plugin_entry.cpp"],
+    deps = [":inproc_transport"],
+)
+
+cc_shared_library(
+    name = "inproc_plugin",
+    shared_lib_name = select({
+        "@platforms//os:osx": "libovf_com_provider_inproc.dylib",
+        "//conditions:default": "libovf_com_provider_inproc.so",
+    }),
+    deps = [":inproc_plugin_entry"],
+)
+
+filegroup(
+    name = "middleware_inproc",
+    srcs = [
+        ":inproc_plugin",
+        ":middleware_runtime",
+    ],
+)
+
+cc_library(
+    name = "inproc_transport",
+    srcs = ["transports/inproc/src/inproc_transport.cpp"],
+    hdrs = ["transports/inproc/include/ovf/com/transports/inproc.h"],
+    includes = [
+        "include",
+        "transports/inproc/include",
+    ],
+    deps = [":provider_abi"],
+)
+
+cc_library(
+    name = "vsomeip_mapping",
+    srcs = ["transports/vsomeip/src/vsomeip_mapping.cpp"],
+    hdrs = ["transports/vsomeip/include/ovf/com/transports/vsomeip_mapping.hpp"],
+    includes = ["transports/vsomeip/include"],
+)
+
+cc_library(
+    name = "vsomeip_transport",
+    srcs = ["transports/vsomeip/src/vsomeip_transport.cpp"],
+    hdrs = ["transports/vsomeip/include/ovf/com/transports/vsomeip.h"],
+    includes = [
+        "include",
+        "transports/vsomeip/include",
+    ],
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        ":provider_abi",
+        ":vsomeip_mapping",
+        "@vsomeip_source//:vsomeip",
+    ],
+)
+
+cc_library(
+    name = "vsomeip_plugin_entry",
+    srcs = ["transports/vsomeip/src/plugin_entry.cpp"],
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [":vsomeip_transport"],
+)
+
+cc_shared_library(
+    name = "vsomeip_plugin",
+    shared_lib_name = "libovf_com_provider_vsomeip.so",
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [":vsomeip_plugin_entry"],
+)

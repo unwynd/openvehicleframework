@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@bazel_skylib//rules:native_binary.bzl", "native_binary")
+load("@rules_cc//cc:defs.bzl", "cc_import")
+load("@rules_rust_bindgen//:defs.bzl", "rust_bindgen_toolchain")
+
+package(default_visibility = ["//visibility:public"])
+
+native_binary(
+    name = "clang",
+    src = "@llvm_toolchain_llvm_llvm//:bin/clang",
+)
+
+cc_import(
+    name = "libclang",
+    shared_library = "@llvm_toolchain_llvm_llvm//:lib/libclang.dylib",
+)
+
+rust_bindgen_toolchain(
+    name = "rust_bindgen_toolchain",
+    bindgen = "@rules_rust_bindgen//3rdparty:bindgen",
+    clang = ":clang",
+    libclang = ":libclang",
+)
+
+toolchain(
+    name = "toolchain",
+    toolchain = ":rust_bindgen_toolchain",
+    toolchain_type = "@rules_rust_bindgen//:toolchain_type",
+)

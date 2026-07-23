@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+
+/build/
+/build-*/
+/out/
+__pycache__/
+*.pyc
+bazel-*
+/docs/design/
+/integration/separate_app/MODULE.bazel.lock
+/com/model/toolchain.lock.json

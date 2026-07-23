@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ovf:com:schema:ir:v1",
+  "title": "OVF communication canonical IR v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["irVersion", "namespace", "services", "types"],
+  "properties": {
+    "irVersion": { "const": 1 },
+    "namespace": { "$ref": "#/$defs/qualifiedName" },
+    "services": { "type": "array", "items": { "$ref": "#/$defs/service" } },
+    "types": { "type": "array", "items": { "$ref": "#/$defs/type" } }
+  },
+  "$defs": {
+    "uuid": { "type": "string", "format": "uuid", "pattern": "^[0-9a-f-]{36}$" },
+    "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+    "qualifiedName": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.]*$" },
+    "tag": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+    "typeRef": { "type": "string", "minLength": 1 },
+    "member": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "tag", "type", "required"],
+      "properties": {
+        "name": { "$ref": "#/$defs/name" }, "tag": { "$ref": "#/$defs/tag" },
+        "type": { "$ref": "#/$defs/typeRef" }, "required": { "type": "boolean" }
+      }
+    },
+    "type": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["kind", "name", "signed", "bits"], "properties": { "kind": { "const": "integer" }, "name": { "$ref": "#/$defs/name" }, "signed": { "type": "boolean" }, "bits": { "enum": [8, 16, 32, 64] } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "name", "members"], "properties": { "kind": { "const": "struct" }, "name": { "$ref": "#/$defs/name" }, "members": { "type": "array", "items": { "$ref": "#/$defs/member" } } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "name", "element", "storage"], "properties": { "kind": { "const": "sequence" }, "name": { "$ref": "#/$defs/name" }, "element": { "$ref": "#/$defs/typeRef" }, "storage": { "enum": ["fixed", "bounded", "unbounded"] }, "capacity": { "type": "integer", "minimum": 1 } } }
+        ,{ "type": "object", "additionalProperties": false, "required": ["kind", "name", "storage"], "properties": { "kind": { "const": "string" }, "name": { "$ref": "#/$defs/name" }, "storage": { "enum": ["fixed", "bounded", "unbounded"] }, "capacity": { "type": "integer", "minimum": 1 } } }
+      ]
+    },
+    "elementBase": {
+      "type": "object",
+      "required": ["id", "name", "tag"],
+      "properties": { "id": { "$ref": "#/$defs/uuid" }, "name": { "$ref": "#/$defs/name" }, "tag": { "$ref": "#/$defs/tag" } }
+    },
+    "event": {
+      "allOf": [
+        { "$ref": "#/$defs/elementBase" },
+        { "type": "object", "required": ["payload"], "properties": { "payload": { "$ref": "#/$defs/typeRef" } }, "unevaluatedProperties": false }
+      ]
+    },
+    "method": {
+      "allOf": [
+        { "$ref": "#/$defs/elementBase" },
+        { "type": "object", "required": ["input", "output", "idempotent"], "properties": { "input": { "$ref": "#/$defs/typeRef" }, "output": { "$ref": "#/$defs/typeRef" }, "errors": { "type": "array", "items": { "$ref": "#/$defs/typeRef" } }, "idempotent": { "type": "boolean" } }, "unevaluatedProperties": false }
+      ]
+    },
+    "field": {
+      "allOf": [
+        { "$ref": "#/$defs/elementBase" },
+        { "type": "object", "required": ["value", "readable", "writable", "notifiable"], "properties": { "value": { "$ref": "#/$defs/typeRef" }, "readable": { "type": "boolean" }, "writable": { "type": "boolean" }, "notifiable": { "type": "boolean" } }, "unevaluatedProperties": false }
+      ]
+    },
+    "service": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "name", "version", "events", "methods", "fields"],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" }, "name": { "$ref": "#/$defs/name" },
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "events": { "type": "array", "items": { "$ref": "#/$defs/event" } },
+        "methods": { "type": "array", "items": { "$ref": "#/$defs/method" } },
+        "fields": { "type": "array", "items": { "$ref": "#/$defs/field" } }
+      }
+    }
+  }
+}

@@ -1,0 +1,152 @@
+# SPDX-License-Identifier: Apache-2.0
+
+module(
+    name = "openvehicleframework",
+    version = "0.0.1",
+    compatibility_level = 0,
+)
+
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "bazel_skylib", version = "1.8.2")
+bazel_dep(name = "buildifier_prebuilt", version = "8.5.1.3")
+
+bazel_dep(name = "iceoryx2", version = "0.9.999", dev_dependency = True)
+
+bazel_dep(name = "rules_cc", version = "0.2.17")
+bazel_dep(name = "rules_python", version = "2.2.0")
+bazel_dep(name = "rules_rust", version = "0.71.3")
+bazel_dep(name = "rules_rust_bindgen", version = "0.68.1")
+bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
+bazel_dep(name = "toolchains_llvm", version = "1.8.0")
+bazel_dep(name = "googletest", version = "1.17.0.bcr.2")
+
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(
+    is_default = True,
+    python_version = "3.12",
+)
+use_repo(python, "python_3_12")
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2024",
+    extra_target_triples = [
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-gnu",
+    ],
+    sha256s = {
+        "cargo-1.97.0-aarch64-apple-darwin.tar.xz": "ca46bbef082ff751c06807b29872b59c05296c3acd4da1a98fac6367bb8bb2c5",
+        "clippy-1.97.0-aarch64-apple-darwin.tar.xz": "4c74f4390fb9381d28e0ccb06439c9dda9d5b293b3c25d4465e879eb42d70094",
+        "llvm-tools-1.97.0-aarch64-apple-darwin.tar.xz": "70abd5460151294f959de6f0bf4767a12827c710b8e8b0568706be60d1e0e7e5",
+        "rust-std-1.97.0-aarch64-apple-darwin.tar.xz": "df26b872f1bbcc5cd700eacb76231d6ba97aeda76ccd44f5b7de3db3757a38ee",
+        "rustc-1.97.0-aarch64-apple-darwin.tar.xz": "53e339f16382bb348566f648d01775797e038fdd6bfc6ddd8859c5a0eac09f68",
+    },
+    versions = ["1.97.0"],
+)
+use_repo(rust, "rust_toolchains")
+
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+crate.spec(
+    package = "minijinja",
+    version = "2.12.0",
+)
+crate.spec(
+    features = ["derive"],
+    package = "serde",
+    version = "1.0",
+)
+crate.spec(
+    package = "serde_json",
+    version = "1.0",
+)
+crate.from_specs()
+use_repo(crate, "crates")
+
+llvm = use_extension(
+    "@toolchains_llvm//toolchain/extensions:llvm.bzl",
+    "llvm",
+    dev_dependency = True,
+)
+llvm.toolchain(
+    name = "llvm_toolchain_llvm",
+    llvm_version = "20.1.4",
+)
+use_repo(llvm, "llvm_toolchain_llvm", "llvm_toolchain_llvm_llvm")
+
+register_toolchains(
+    "@llvm_toolchain_llvm//:all",
+    "//bazel/bindgen:toolchain",
+    dev_dependency = True,
+)
+
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "boost_source",
+    build_file = "//bazel/third_party:boost.BUILD.bazel",
+    sha256 = "0a9cc56ceae46986f5f4d43fe0311d90cf6d2fa9028258a95cab49ffdacf92ad",
+    strip_prefix = "boost-1.85.0",
+    urls = ["https://github.com/boostorg/boost/releases/download/boost-1.85.0/boost-1.85.0-cmake.tar.xz"],
+)
+
+http_archive(
+    name = "vsomeip_source",
+    build_file = "//bazel/third_party:vsomeip.BUILD.bazel",
+    sha256 = "62a245eadc81ef9431e0d782d06ad7abcf18f6801cf6d26302a16a97d20aa48b",
+    strip_prefix = "vsomeip-7bcc1e06f16a774e70931ed641f475fbba9c8c64",
+    urls = ["https://github.com/COVESA/vsomeip/archive/7bcc1e06f16a774e70931ed641f475fbba9c8c64.tar.gz"],
+)
+
+archive_override(
+    module_name = "iceoryx2",
+    integrity = "sha256-MgxwcmhCcVHSgIlkXENyEM4PSHBM3rdgj9hapNRdCjI=",
+    patch_strip = 1,
+    patches = [
+        "//bazel/third_party:iceoryx2-module.patch",
+    ],
+    strip_prefix = "iceoryx2-5797fbdf5e1b14d28761cd23ded664bed9888ec3",
+    urls = ["https://github.com/eclipse-iceoryx/iceoryx2/archive/5797fbdf5e1b14d28761cd23ded664bed9888ec3.tar.gz"],
+)
+
+http_archive(
+    name = "smithy_cli_darwin_aarch64",
+    build_file_content = """
+package(default_visibility = ["//visibility:public"])
+exports_files(["bin/smithy"])
+filegroup(name = "runtime", srcs = glob(["**"]))
+""",
+    sha256 = "cbeb49c53df026083f2ba0e4ea077828602b5fcd0a3d668f3f90c43354694afc",
+    strip_prefix = "smithy-cli-darwin-aarch64",
+    urls = [
+        "https://github.com/smithy-lang/smithy/releases/download/1.72.1/smithy-cli-darwin-aarch64.zip",
+    ],
+)
+
+http_archive(
+    name = "smithy_cli_linux_x86_64",
+    build_file_content = """
+package(default_visibility = ["//visibility:public"])
+exports_files(["bin/smithy"])
+filegroup(name = "runtime", srcs = glob(["**"]))
+""",
+    sha256 = "05ca13293eb949abfa3a38cefb053b0f91ad9e15b39c9e996258227b866644c1",
+    strip_prefix = "smithy-cli-linux-x86_64",
+    urls = [
+        "https://github.com/smithy-lang/smithy/releases/download/1.72.1/smithy-cli-linux-x86_64.zip",
+    ],
+)
+
+http_archive(
+    name = "smithy_cli_linux_aarch64",
+    build_file_content = """
+package(default_visibility = ["//visibility:public"])
+exports_files(["bin/smithy"])
+filegroup(name = "runtime", srcs = glob(["**"]))
+""",
+    sha256 = "5d067d80b9a881b444c64b5a63059be226360cdee4c7b392616854495fe03dfb",
+    strip_prefix = "smithy-cli-linux-aarch64",
+    urls = [
+        "https://github.com/smithy-lang/smithy/releases/download/1.72.1/smithy-cli-linux-aarch64.zip",
+    ],
+)

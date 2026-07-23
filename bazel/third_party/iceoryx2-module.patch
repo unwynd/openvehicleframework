@@ -1,0 +1,4 @@
+--- a/MODULE.bazel
++++ b/MODULE.bazel
+@@ -52 +52,0 @@
+-    "//bazel/bindgen:toolchain",

@@ -1,0 +1,26 @@
+{
+  "deploymentVersion": 1,
+  "contractFingerprint": "8c97ebcf242bc16a3485bb88a34c2786e9f633a18d43a834338919bf5b0fb681",
+  "providers": [{
+    "id": "local", "profile": "inproc", "required": true,
+    "extensions": { "org.openvehicleframework.inproc": { "queueCapacity": 64 } }
+  }],
+  "instances": [{
+    "serviceId": "42bd2fc5-8f32-4e57-8a33-94fb0a5cf71d",
+    "instanceId": "c1813c19-1f06-4914-bb0d-c6080f1a846a",
+    "alias": "front-radar",
+    "routes": [{
+      "provider": "local", "role": "consumer", "required": true, "priority": 0,
+      "requiredFeatures": ["discovery", "events", "methods", "loans", "ordered", "deadlines", "cancellation"],
+      "limits": { "maxPayloadSize": 65536, "maxHistoryDepth": 8, "maxOutstandingOperations": 16, "maxEndpoints": 8 },
+      "mappings": {
+        "service": "radar", "instance": "front",
+        "elements": {
+          "851b0fc7-d41f-4e4f-9673-4be1aeed6f62": "objects",
+          "89dfe84f-1ab7-416d-891c-f603bc1f4557": "calibrate",
+          "aac81bc6-8197-4b52-887c-c918630cbd2d": "vehicle-state"
+        }
+      }
+    }]
+  }]
+}

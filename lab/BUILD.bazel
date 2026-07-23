@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "Dockerfile",
+    "README.md",
+    "docker-bake.hcl",
+    "entrypoint.py",
+])

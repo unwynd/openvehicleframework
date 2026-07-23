@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_shared_library.bzl", "cc_shared_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "mapping",
+    srcs = ["src/iceoryx2_mapping.cpp"],
+    hdrs = ["include/ovf/com/transports/iceoryx2_mapping.hpp"],
+    includes = ["include"],
+)
+
+cc_library(
+    name = "transport",
+    srcs = ["src/iceoryx2_transport.cpp"],
+    hdrs = ["include/ovf/com/transports/iceoryx2.h"],
+    includes = ["include"],
+    deps = [
+        ":mapping",
+        "//com:provider_abi",
+        "@iceoryx2//iceoryx2-ffi/c:iceoryx2-ffi-c-static",
+    ],
+)
+
+cc_library(
+    name = "plugin_entry",
+    srcs = ["src/plugin_entry.cpp"],
+    deps = [":transport"],
+)
+
+cc_shared_library(
+    name = "plugin",
+    shared_lib_name = select({
+        "@platforms//os:osx": "libovf_com_iceoryx2.dylib",
+        "//conditions:default": "libovf_com_iceoryx2.so",
+    }),
+    deps = [":plugin_entry"],
+)

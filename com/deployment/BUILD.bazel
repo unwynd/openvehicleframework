@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+
+filegroup(
+    name = "all_inputs",
+    srcs = glob([
+        "examples/*.json",
+        "schema/*.json",
+    ]) + ["//com/deployment/profiles:all_profiles"],
+    visibility = ["//visibility:public"],
+)
+
+exports_files(glob(["examples/*.json"]))

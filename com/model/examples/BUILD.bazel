@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+
+exports_files([
+    "radar-additive.ovf-ir.json",
+    "radar-breaking.ovf-ir.json",
+    "radar.ovf-ir.json",
+])
+
+filegroup(
+    name = "radar_ir",
+    srcs = ["radar.ovf-ir.json"],
+    visibility = ["//visibility:public"],
+)

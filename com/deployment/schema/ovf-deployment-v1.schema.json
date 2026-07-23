@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ovf:com:schema:deployment:v1",
+  "title": "OVF communication deployment v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["deploymentVersion", "contractFingerprint", "providers", "instances"],
+  "properties": {
+    "deploymentVersion": { "const": 1 },
+    "contractFingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "providers": { "type": "array", "items": { "$ref": "#/$defs/provider" } },
+    "instances": { "type": "array", "items": { "$ref": "#/$defs/instance" } }
+  },
+  "$defs": {
+    "uuid": { "type": "string", "format": "uuid", "pattern": "^[0-9a-f-]{36}$" },
+    "features": { "type": "array", "uniqueItems": true, "items": { "enum": ["discovery", "events", "methods", "loans", "scatterGather", "reliable", "ordered", "deadlines", "cancellation"] } },
+    "limits": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "maxPayloadSize": { "type": "integer", "minimum": 1 },
+        "maxHistoryDepth": { "type": "integer", "minimum": 1 },
+        "maxOutstandingOperations": { "type": "integer", "minimum": 1 },
+        "maxEndpoints": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "provider": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "profile", "required"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$" },
+        "profile": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$" },
+        "required": { "type": "boolean" },
+        "extensions": { "type": "object", "propertyNames": { "pattern": "^[a-z][a-z0-9]*(\\.[a-z][a-z0-9-]*)+$" } }
+      }
+    },
+    "route": {
+      "type": "object", "additionalProperties": false,
+      "required": ["provider", "role", "required", "requiredFeatures", "limits", "mappings"],
+      "properties": {
+        "provider": { "type": "string" },
+        "role": { "enum": ["consumer", "provider"] },
+        "required": { "type": "boolean" },
+        "priority": { "type": "integer", "minimum": 0 },
+        "requiredFeatures": { "$ref": "#/$defs/features" },
+        "limits": { "$ref": "#/$defs/limits" },
+        "mappings": {
+          "type": "object", "additionalProperties": false,
+          "required": ["service", "instance", "elements"],
+          "properties": {
+            "service": {}, "instance": {},
+            "elements": { "type": "object", "additionalProperties": {} }
+          }
+        }
+      }
+    },
+    "instance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["serviceId", "instanceId", "routes"],
+      "properties": {
+        "serviceId": { "$ref": "#/$defs/uuid" },
+        "instanceId": { "$ref": "#/$defs/uuid" },
+        "alias": { "type": "string", "minLength": 1 },
+        "routes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/route" } }
+      }
+    }
+  }
+}

@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+
+"""Hermetic build actions used by the public OVF Bazel application API."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import io
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import tarfile
+import tempfile
+
+from tools.smithy_ast_to_ir import compile_model
+from tools.validate_deployment import (
+    deployment_fingerprint,
+    make_plan,
+    read,
+    validate_deployment,
+)
+from tools.validate_ir import fingerprint
+
+
+def write_if_changed(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists() or path.read_text(encoding="utf-8") != content:
+        path.write_text(content, encoding="utf-8")
+
+
+def compile_contract(args: argparse.Namespace) -> int:
+    with tempfile.TemporaryDirectory(prefix="ovf-contract-") as temporary:
+        root = Path(temporary)
+        config = {
+            "version": "1.0",
+            "sources": [str(path.resolve()) for path in args.idl],
+            "imports": [str(args.profile.resolve())],
+            "projections": {
+                "ovf": {"plugins": {"model": {"includePreludeShapes": False}}}
+            },
+        }
+        config_path = root / "smithy-build.json"
+        config_path.write_text(json.dumps(config, sort_keys=True), encoding="utf-8")
+        output = root / "smithy-output"
+        subprocess.run(
+            [
+                str(args.smithy.resolve()),
+                "build",
+                "--config",
+                str(config_path),
+                "--output",
+                str(output),
+                "--no-color",
+            ],
+            check=True,
+        )
+        ast = read(output / "ovf/model/model.json")
+    model = compile_model(ast, args.service)
+    encoded = json.dumps(model, indent=2, ensure_ascii=False) + "\n"
+    write_if_changed(args.ir, encoded)
+    metadata = {
+        "artifactVersion": 1,
+        "contractFingerprint": fingerprint(model),
+        "ir": args.ir.name,
+        "generatedHeader": args.generated_header,
+        "service": args.service,
+    }
+    write_if_changed(args.metadata, json.dumps(metadata, sort_keys=True, indent=2) + "\n")
+    return 0
+
+
+def compile_deployment(args: argparse.Namespace) -> int:
+    contract = read(args.contract)
+    deployment = read(args.deployment)
+    with tempfile.TemporaryDirectory(prefix="ovf-profiles-") as temporary:
+        profiles = Path(temporary)
+        for profile in args.profile:
+            shutil.copyfile(profile, profiles / profile.name)
+        errors = validate_deployment(contract, deployment, profiles)
+        if errors:
+            raise ValueError("\n".join(errors))
+        plan = make_plan(deployment, profiles)
+    report = {
+        "valid": True,
+        "deploymentFingerprint": deployment_fingerprint(deployment),
+        "errors": [],
+    }
+    write_if_changed(args.plan, json.dumps(plan, sort_keys=True, indent=2) + "\n")
+    write_if_changed(args.report, json.dumps(report, sort_keys=True, indent=2) + "\n")
+    return 0
+
+
+def digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def tar_bytes(content: bytes, mode: int) -> tarfile.TarInfo:
+    info = tarfile.TarInfo()
+    info.size = len(content)
+    info.mode = mode
+    info.mtime = 0
+    info.uid = 0
+    info.gid = 0
+    info.uname = "root"
+    info.gname = "root"
+    return info
+
+
+def add_file(archive: tarfile.TarFile, source: Path, target: str, mode: int) -> None:
+    content = source.read_bytes()
+    info = tar_bytes(content, mode)
+    info.name = target
+    archive.addfile(info, io.BytesIO(content))
+
+
+def package_application(args: argparse.Namespace) -> int:
+    plan = read(args.plan)
+    required = sorted(
+        provider["profile"] for provider in plan["providers"] if provider["required"]
+    )
+    manifest = {
+        "applicationBundleVersion": 1,
+        "name": args.name,
+        "contractFingerprint": plan["contractFingerprint"],
+        "deploymentFingerprint": plan["deploymentFingerprint"],
+        "requiredProviderProfiles": required,
+        "frameworkIncluded": False,
+        "files": {
+            "executable": {
+                "path": f"bin/{args.name}",
+                "sha256": digest(args.executable),
+            },
+            "contract": {
+                "path": f"share/ovf/{args.name}/contract.ovf-ir.json",
+                "sha256": digest(args.contract),
+            },
+            "deployment": {
+                "path": f"etc/ovf/{args.name}/deployment.json",
+                "sha256": digest(args.deployment),
+            },
+            "plan": {
+                "path": f"etc/ovf/{args.name}/plan.json",
+                "sha256": digest(args.plan),
+            },
+            "validationReport": {
+                "path": f"share/ovf/{args.name}/deployment-validation.json",
+                "sha256": digest(args.report),
+            },
+        },
+    }
+    manifest_content = json.dumps(manifest, sort_keys=True, indent=2).encode() + b"\n"
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(args.output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        add_file(archive, args.executable, f"bin/{args.name}", 0o755)
+        add_file(
+            archive,
+            args.deployment,
+            f"etc/ovf/{args.name}/deployment.json",
+            0o644,
+        )
+        add_file(archive, args.plan, f"etc/ovf/{args.name}/plan.json", 0o644)
+        add_file(
+            archive,
+            args.contract,
+            f"share/ovf/{args.name}/contract.ovf-ir.json",
+            0o644,
+        )
+        add_file(
+            archive,
+            args.report,
+            f"share/ovf/{args.name}/deployment-validation.json",
+            0o644,
+        )
+        info = tar_bytes(manifest_content, 0o644)
+        info.name = f"share/ovf/{args.name}/manifest.json"
+        archive.addfile(info, io.BytesIO(manifest_content))
+    return 0
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser()
+    commands = result.add_subparsers(dest="command", required=True)
+    contract = commands.add_parser("contract")
+    contract.add_argument("--smithy", required=True, type=Path)
+    contract.add_argument("--profile", required=True, type=Path)
+    contract.add_argument("--idl", required=True, action="append", type=Path)
+    contract.add_argument("--service")
+    contract.add_argument("--ir", required=True, type=Path)
+    contract.add_argument("--generated-header", required=True)
+    contract.add_argument("--metadata", required=True, type=Path)
+    contract.set_defaults(run=compile_contract)
+
+    deployment = commands.add_parser("deployment")
+    deployment.add_argument("--contract", required=True, type=Path)
+    deployment.add_argument("--deployment", required=True, type=Path)
+    deployment.add_argument("--profile", required=True, action="append", type=Path)
+    deployment.add_argument("--plan", required=True, type=Path)
+    deployment.add_argument("--report", required=True, type=Path)
+    deployment.set_defaults(run=compile_deployment)
+
+    package = commands.add_parser("package")
+    package.add_argument("--name", required=True)
+    package.add_argument("--executable", required=True, type=Path)
+    package.add_argument("--contract", required=True, type=Path)
+    package.add_argument("--deployment", required=True, type=Path)
+    package.add_argument("--plan", required=True, type=Path)
+    package.add_argument("--report", required=True, type=Path)
+    package.add_argument("--output", required=True, type=Path)
+    package.set_defaults(run=package_application)
+    return result
+
+
+def main() -> int:
+    args = parser().parse_args()
+    return args.run(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

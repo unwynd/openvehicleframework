@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+
+package(default_visibility = ["//visibility:public"])
+
+py_library(
+    name = "validation_lib",
+    srcs = [
+        "__init__.py",
+        "validate_ir.py",
+        "//:__init__.py",
+    ],
+)
+
+py_library(
+    name = "build_lib",
+    srcs = [
+        "__init__.py",
+        "smithy_ast_to_ir.py",
+        "validate_deployment.py",
+        "//:__init__.py",
+    ],
+    deps = [":validation_lib"],
+)
+
+py_binary(
+    name = "validate_ir",
+    srcs = [
+        "__init__.py",
+        "validate_ir.py",
+        "//:__init__.py",
+    ],
+    main = "validate_ir.py",
+)
+
+py_binary(
+    name = "validate_deployment",
+    srcs = [
+        "__init__.py",
+        "validate_deployment.py",
+        "//:__init__.py",
+    ],
+    main = "validate_deployment.py",
+    deps = [":validation_lib"],
+)
+
+py_binary(
+    name = "compare_ir",
+    srcs = [
+        "__init__.py",
+        "compare_ir.py",
+        "//:__init__.py",
+    ],
+    main = "compare_ir.py",
+    deps = [":validation_lib"],
+)
+
+py_binary(
+    name = "smithy_ast_to_ir",
+    srcs = [
+        "__init__.py",
+        "smithy_ast_to_ir.py",
+        "//:__init__.py",
+    ],
+    main = "smithy_ast_to_ir.py",
+    deps = [":validation_lib"],
+)
+
+py_binary(
+    name = "ovf_build",
+    srcs = [
+        "__init__.py",
+        "ovf_build.py",
+        "//:__init__.py",
+    ],
+    main = "ovf_build.py",
+    deps = [":build_lib"],
+)

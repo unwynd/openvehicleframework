@@ -1,0 +1,12 @@
+{
+  "profileVersion": 1,
+  "name": "iceoryx2",
+  "isolation": "independent",
+  "features": ["events", "loans", "reliable", "ordered"],
+  "limits": {
+    "maxPayloadSize": 16777216,
+    "maxHistoryDepth": 1024,
+    "maxOutstandingOperations": 1024,
+    "maxEndpoints": 1024
+  }
+}

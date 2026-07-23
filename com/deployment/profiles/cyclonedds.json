@@ -1,0 +1,12 @@
+{
+  "profileVersion": 1,
+  "name": "cyclonedds",
+  "isolation": "independent",
+  "features": ["discovery", "events", "methods", "scatterGather", "reliable", "ordered", "deadlines", "cancellation"],
+  "limits": {
+    "maxPayloadSize": 1048576,
+    "maxHistoryDepth": 128,
+    "maxOutstandingOperations": 128,
+    "maxEndpoints": 128
+  }
+}

@@ -1,0 +1,120 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+load("@rules_rust//rust:defs.bzl", "rust_static_library")
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "radar_generated",
+    srcs = ["//com/model/examples:radar_ir"],
+    outs = ["generated/radar.hpp"],
+    cmd = "$(execpath //codegen:ovf_codegen) $(execpath //com/model/examples:radar_ir) --output $@",
+    tools = ["//codegen:ovf_codegen"],
+)
+
+cc_library(
+    name = "radar_contract",
+    hdrs = [":radar_generated"],
+    includes = ["generated"],
+    deps = ["//com:generated_support"],
+)
+
+cc_test(
+    name = "runtime_test",
+    srcs = ["runtime_test.cpp"],
+    deps = [
+        "//com:inproc_transport",
+        "//com:runtime",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "c_abi_test",
+    srcs = ["c_abi_test.c"],
+    deps = ["//com:provider_abi"],
+)
+
+cc_test(
+    name = "provider_conformance_test",
+    srcs = ["provider_conformance_test.cpp"],
+    deps = ["//com:inproc_transport"],
+)
+
+cc_test(
+    name = "vsomeip_mapping_test",
+    srcs = ["vsomeip_mapping_test.cpp"],
+    deps = [
+        "//com:vsomeip_mapping",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "iceoryx2_mapping_test",
+    srcs = ["iceoryx2_mapping_test.cpp"],
+    deps = [
+        "//com/transports/iceoryx2:mapping",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "iceoryx2_native_peer_test",
+    timeout = "short",
+    srcs = ["iceoryx2_native_peer_test.cpp"],
+    deps = ["//com/transports/iceoryx2:transport"],
+)
+
+cc_test(
+    name = "vsomeip_native_peer_test",
+    srcs = ["vsomeip_native_peer_test.cpp"],
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        "//com:vsomeip_transport",
+        "@vsomeip_source//:vsomeip",
+    ],
+)
+
+cc_test(
+    name = "i1_vertical_slice_test",
+    srcs = ["i1_vertical_slice_test.cpp"],
+    deps = [
+        ":radar_contract",
+        "//com:inproc_transport",
+        "//com:runtime",
+    ],
+)
+
+rust_static_library(
+    name = "rust_provider",
+    srcs = ["rust_provider/lib.rs"],
+    edition = "2021",
+)
+
+cc_test(
+    name = "rust_provider_interop_test",
+    srcs = ["rust_provider_interop_test.c"],
+    deps = [
+        ":rust_provider",
+        "//com:provider_abi",
+    ],
+)
+
+test_suite(
+    name = "all_tests",
+    tests = [
+        ":c_abi_test",
+        ":i1_vertical_slice_test",
+        ":iceoryx2_mapping_test",
+        ":iceoryx2_native_peer_test",
+        ":provider_conformance_test",
+        ":runtime_test",
+        ":rust_provider_interop_test",
+        ":vsomeip_mapping_test",
+        "//bazel/tests:all_tests",
+    ],
+)

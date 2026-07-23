@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+
+module(
+    name = "separate_radar_application",
+    version = "1.0.0",
+)
+
+bazel_dep(name = "openvehicleframework", version = "0.0.1")
+local_path_override(
+    module_name = "openvehicleframework",
+    path = "../..",
+)

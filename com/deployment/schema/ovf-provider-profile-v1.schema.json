@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ovf:com:schema:provider-profile:v1",
+  "title": "OVF communication provider profile v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profileVersion", "name", "isolation", "features", "limits"],
+  "properties": {
+    "profileVersion": { "const": 1 },
+    "name": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$" },
+    "isolation": { "enum": ["independent", "sharedEngine", "processSingleton"] },
+    "features": {
+      "type": "array", "uniqueItems": true,
+      "items": { "enum": ["discovery", "events", "methods", "loans", "scatterGather", "reliable", "ordered", "deadlines", "cancellation"] }
+    },
+    "limits": {
+      "type": "object", "additionalProperties": false,
+      "required": ["maxPayloadSize", "maxHistoryDepth", "maxOutstandingOperations", "maxEndpoints"],
+      "properties": {
+        "maxPayloadSize": { "type": "integer", "minimum": 1 },
+        "maxHistoryDepth": { "type": "integer", "minimum": 1 },
+        "maxOutstandingOperations": { "type": "integer", "minimum": 1 },
+        "maxEndpoints": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

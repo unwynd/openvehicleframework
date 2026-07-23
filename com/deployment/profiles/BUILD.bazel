@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "cyclonedds.json",
+    "iceoryx2.json",
+    "inproc.json",
+    "vsomeip.json",
+])
+
+filegroup(
+    name = "all_profiles",
+    srcs = [
+        "cyclonedds.json",
+        "iceoryx2.json",
+        "inproc.json",
+        "vsomeip.json",
+    ],
+)

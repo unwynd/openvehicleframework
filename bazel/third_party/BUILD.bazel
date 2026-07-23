@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "boost.BUILD.bazel",
+    "iceoryx2-module.patch",
+    "vsomeip.BUILD.bazel",
+])

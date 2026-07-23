@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test", "rustfmt_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_binary(
+    name = "ovf_codegen",
+    srcs = ["src/main.rs"],
+    compile_data = [
+        "templates/cpp_deployment.hpp.j2",
+        "templates/cpp_contract.hpp.j2",
+        "tests/fixtures/empty.ovf-ir.json",
+        "tests/golden/empty.hpp",
+        "//com/model/examples:radar_ir",
+    ],
+    edition = "2024",
+    deps = [
+        "@crates//:minijinja",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "ovf_codegen_test",
+    crate = ":ovf_codegen",
+)
+
+rustfmt_test(
+    name = "rustfmt_test",
+    targets = [":ovf_codegen"],
+)

@@ -1,0 +1,32 @@
+{
+  "irVersion": 1,
+  "namespace": "example.radar",
+  "services": [{
+    "id": "42bd2fc5-8f32-4e57-8a33-94fb0a5cf71d", "name": "RadarService", "version": "1.0.0",
+    "events": [{ "id": "851b0fc7-d41f-4e4f-9673-4be1aeed6f62", "name": "RadarObjectsChanged", "tag": 1, "payload": "RadarFrame" }],
+    "methods": [{ "id": "89dfe84f-1ab7-416d-891c-f603bc1f4557", "name": "Calibrate", "tag": 2, "input": "CalibrateInput", "output": "CalibrateOutput", "errors": ["InvalidTarget"], "idempotent": false }],
+    "fields": [{ "id": "aac81bc6-8197-4b52-887c-c918630cbd2d", "name": "VehicleStateField", "tag": 3, "value": "VehicleState", "readable": true, "writable": false, "notifiable": true }]
+  }],
+  "types": [
+    { "kind": "integer", "name": "TimestampNs", "signed": false, "bits": 64 },
+    { "kind": "integer", "name": "ObjectId", "signed": false, "bits": 16 },
+    { "kind": "integer", "name": "ConfidencePercent", "signed": false, "bits": 8 },
+    { "kind": "string", "name": "DiagnosticText", "storage": "bounded", "capacity": 128 },
+    { "kind": "sequence", "name": "RadarObjects", "element": "RadarObject", "storage": "bounded", "capacity": 64 },
+    { "kind": "struct", "name": "RadarObject", "members": [
+      { "name": "id", "tag": 1, "type": "ObjectId", "required": true },
+      { "name": "longitudinalMeters", "tag": 2, "type": "f32", "required": true },
+      { "name": "lateralMeters", "tag": 3, "type": "f32", "required": true },
+      { "name": "confidence", "tag": 4, "type": "ConfidencePercent", "required": true },
+      { "name": "classification", "tag": 5, "type": "DiagnosticText", "required": false }
+    ]},
+    { "kind": "struct", "name": "RadarFrame", "members": [
+      { "name": "capturedAt", "tag": 1, "type": "TimestampNs", "required": true },
+      { "name": "objects", "tag": 2, "type": "RadarObjects", "required": true }
+    ]},
+    { "kind": "struct", "name": "VehicleState", "members": [{ "name": "speedMetersPerSecond", "tag": 1, "type": "f32", "required": true }] },
+    { "kind": "struct", "name": "CalibrateInput", "members": [{ "name": "targetDistanceMeters", "tag": 1, "type": "f32", "required": true }] },
+    { "kind": "struct", "name": "CalibrateOutput", "members": [{ "name": "acceptedAt", "tag": 1, "type": "TimestampNs", "required": true }] },
+    { "kind": "struct", "name": "InvalidTarget", "members": [{ "name": "reason", "tag": 1, "type": "DiagnosticText", "required": true }] }
+  ]
+}

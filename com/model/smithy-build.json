@@ -1,0 +1,13 @@
+{
+  "$schema": "https://smithy.io/2.0/_static/smithy-build-schema.json",
+  "version": "1.0",
+  "sources": ["../../contracts/radar/radar.smithy"],
+  "imports": ["ovf-profile.smithy"],
+  "projections": {
+    "ovf": {
+      "plugins": {
+        "model": { "includePreludeShapes": false }
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "profileVersion": 1,
+  "name": "inproc",
+  "isolation": "independent",
+  "features": ["discovery", "events", "methods", "loans", "reliable", "ordered", "deadlines", "cancellation"],
+  "limits": {
+    "maxPayloadSize": 16777216,
+    "maxHistoryDepth": 4096,
+    "maxOutstandingOperations": 256,
+    "maxEndpoints": 256
+  }
+}

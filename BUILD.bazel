@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "LICENSE",
+    "__init__.py",
+])
+
+alias(
+    name = "com",
+    actual = "//com:runtime",
+)
+
+test_suite(
+    name = "all_tests",
+    tests = [
+        "//codegen:rustfmt_test",
+        "//com/tests:all_tests",
+    ],
+)

@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_python//python:defs.bzl", "py_test")
+
+package(default_visibility = ["//visibility:public"])
+
+py_test(
+    name = "radar_two_process_test",
+    timeout = "short",
+    srcs = [
+        "__init__.py",
+        "radar_two_process_test.py",
+        "//tests:__init__.py",
+        "//tests/integration:__init__.py",
+    ],
+    data = [
+        "//com:vsomeip_plugin",
+        "//examples/radar:provider_configuration",
+        "//examples/radar:radar_client",
+        "//examples/radar:radar_service",
+    ],
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+)

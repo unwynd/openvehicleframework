@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_python//python:defs.bzl", "py_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["README.md"])
+
+py_binary(
+    name = "check",
+    srcs = ["check.py"],
+    args = [
+        "--buildifier=$(location @buildifier_prebuilt//:buildifier)",
+        "--clang-format=$(location @llvm_toolchain_llvm_llvm//:bin/clang-format)",
+    ],
+    data = [
+        "@buildifier_prebuilt//:buildifier",
+        "@llvm_toolchain_llvm_llvm//:bin/clang-format",
+    ],
+    main = "check.py",
+)
