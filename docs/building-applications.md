@@ -67,6 +67,7 @@ delivery is a separate artifact:
 @openvehicleframework//com:middleware_runtime
 @openvehicleframework//com:middleware_inproc
 @openvehicleframework//com:vsomeip_plugin
+@openvehicleframework//com:vsomeip_platform_bundle
 @openvehicleframework//com/transports/iceoryx2:plugin
 ```
 
@@ -90,3 +91,20 @@ Each target platform may replace the unicast address while retaining this
 transport-owned structure. Network-facing provider endpoints will be
 registered dynamically after the planned vSomeIP endpoint-registration
 extension is available.
+
+The vSomeIP platform bundle has a deterministic root-filesystem layout:
+
+```text
+etc/vsomeip.json
+usr/bin/routingmanagerd
+usr/lib/libovf_com.so
+usr/lib/libvsomeip3*.so*
+usr/lib/ovf/providers/libovf_com_provider_vsomeip.so
+usr/lib/systemd/system/ovf-vsomeip-routing.service
+usr/share/licenses/{openvehicleframework,vsomeip,boost}/...
+usr/share/ovf/platform/vsomeip/manifest.json
+```
+
+It contains no application executable or deployment plan. Application bundles
+can be installed, restarted, or replaced independently while the routing
+manager remains active.

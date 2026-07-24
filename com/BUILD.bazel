@@ -3,6 +3,7 @@
 load("@rules_cc//cc:cc_import.bzl", "cc_import")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_shared_library.bzl", "cc_shared_library")
+load("//bazel:platform.bzl", "ovf_vsomeip_platform_bundle")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -120,6 +121,22 @@ cc_library(
 filegroup(
     name = "vsomeip_platform_configuration",
     srcs = ["transports/vsomeip/config/platform.json"],
+)
+
+ovf_vsomeip_platform_bundle(
+    name = "vsomeip_platform_bundle",
+    boost_license = "@boost_source//:LICENSE_1_0.txt",
+    configuration = "transports/vsomeip/config/platform.json",
+    framework = [
+        ":shared",
+        ":vsomeip_plugin",
+    ],
+    framework_license = "//:LICENSE",
+    service_unit = "transports/vsomeip/config/ovf-vsomeip-routing.service",
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+    vsomeip = "@vsomeip_source//:vsomeip",
+    vsomeip_license = "@vsomeip_source//:LICENSE",
 )
 
 cc_library(

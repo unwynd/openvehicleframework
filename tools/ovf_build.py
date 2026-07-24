@@ -180,6 +180,88 @@ def package_application(args: argparse.Namespace) -> int:
     return 0
 
 
+def package_vsomeip_platform(args: argparse.Namespace) -> int:
+    runtime_targets = {
+        "routingmanagerd": ("usr/bin/routingmanagerd", 0o755),
+        "libovf_com.so": ("usr/lib/libovf_com.so", 0o755),
+        "libovf_com_provider_vsomeip.so": (
+            "usr/lib/ovf/providers/libovf_com_provider_vsomeip.so",
+            0o755,
+        ),
+        "libvsomeip3.so": ("usr/lib/libvsomeip3.so", 0o755),
+        "libvsomeip3.so.3": ("usr/lib/libvsomeip3.so.3", 0o755),
+        "libvsomeip3-cfg.so": ("usr/lib/libvsomeip3-cfg.so", 0o755),
+        "libvsomeip3-cfg.so.3": ("usr/lib/libvsomeip3-cfg.so.3", 0o755),
+        "libvsomeip3-e2e.so": ("usr/lib/libvsomeip3-e2e.so", 0o755),
+        "libvsomeip3-e2e.so.3": ("usr/lib/libvsomeip3-e2e.so.3", 0o755),
+        "libvsomeip3-sd.so": ("usr/lib/libvsomeip3-sd.so", 0o755),
+        "libvsomeip3-sd.so.3": ("usr/lib/libvsomeip3-sd.so.3", 0o755),
+    }
+    sources: dict[str, Path] = {}
+    for source in args.runtime:
+        if source.name in runtime_targets:
+            if source.name in sources:
+                raise ValueError(f"duplicate platform runtime artifact: {source.name}")
+            sources[source.name] = source
+    missing = sorted(set(runtime_targets) - set(sources))
+    if missing:
+        raise ValueError(f"missing platform runtime artifacts: {', '.join(missing)}")
+
+    entries = [
+        (target, sources[name], mode)
+        for name, (target, mode) in runtime_targets.items()
+    ]
+    entries.extend(
+        [
+            ("etc/vsomeip.json", args.configuration, 0o644),
+            (
+                "usr/lib/systemd/system/ovf-vsomeip-routing.service",
+                args.service_unit,
+                0o644,
+            ),
+            (
+                "usr/share/licenses/openvehicleframework/LICENSE",
+                args.framework_license,
+                0o644,
+            ),
+            ("usr/share/licenses/vsomeip/LICENSE", args.vsomeip_license, 0o644),
+            ("usr/share/licenses/boost/LICENSE_1_0.txt", args.boost_license, 0o644),
+        ]
+    )
+    files = {
+        target: {"sha256": digest(source), "mode": f"{mode:04o}"}
+        for target, source, mode in sorted(entries)
+    }
+    manifest = {
+        "platformBundleVersion": 1,
+        "name": "ovf-vsomeip",
+        "transport": "vsomeip",
+        "routingApplication": "routingmanagerd",
+        "configuration": "etc/vsomeip.json",
+        "serviceUnit": "usr/lib/systemd/system/ovf-vsomeip-routing.service",
+        "applicationsIncluded": False,
+        "files": files,
+    }
+    manifest_content = json.dumps(manifest, sort_keys=True, indent=2).encode() + b"\n"
+    entries.append(
+        (
+            "usr/share/ovf/platform/vsomeip/manifest.json",
+            None,
+            0o644,
+        )
+    )
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(args.output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        for target, source, mode in sorted(entries):
+            if source is None:
+                info = tar_bytes(manifest_content, mode)
+                info.name = target
+                archive.addfile(info, io.BytesIO(manifest_content))
+            else:
+                add_file(archive, source, target, mode)
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser()
     commands = result.add_subparsers(dest="command", required=True)
@@ -210,6 +292,16 @@ def parser() -> argparse.ArgumentParser:
     package.add_argument("--report", required=True, type=Path)
     package.add_argument("--output", required=True, type=Path)
     package.set_defaults(run=package_application)
+
+    platform = commands.add_parser("package-vsomeip-platform")
+    platform.add_argument("--runtime", required=True, action="append", type=Path)
+    platform.add_argument("--configuration", required=True, type=Path)
+    platform.add_argument("--service-unit", required=True, type=Path)
+    platform.add_argument("--framework-license", required=True, type=Path)
+    platform.add_argument("--vsomeip-license", required=True, type=Path)
+    platform.add_argument("--boost-license", required=True, type=Path)
+    platform.add_argument("--output", required=True, type=Path)
+    platform.set_defaults(run=package_vsomeip_platform)
     return result
 
 

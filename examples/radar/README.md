@@ -22,7 +22,10 @@ bazel test //tests/integration/vsomeip:radar_two_process_test
 ```
 
 The test starts `radar_service`, waits until it has offered the service, runs
-`radar_client`, verifies all expected exchanges, and terminates the service.
+`radar_client`, verifies all expected exchanges, replaces both application
+processes, and repeats the exchange without restarting the independently
+packaged routing middleware. Middleware and application logs are retained as
+separate test outputs.
 
 ## Run interactively
 

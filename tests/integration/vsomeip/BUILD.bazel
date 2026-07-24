@@ -5,6 +5,14 @@ load("@rules_python//python:defs.bzl", "py_test")
 package(default_visibility = ["//visibility:public"])
 
 py_test(
+    name = "platform_bundle_test",
+    srcs = ["platform_bundle_test.py"],
+    data = ["//com:vsomeip_platform_bundle"],
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
+py_test(
     name = "radar_two_process_test",
     timeout = "short",
     srcs = [
@@ -14,11 +22,9 @@ py_test(
         "//tests/integration:__init__.py",
     ],
     data = [
-        "//com:vsomeip_plugin",
-        "//com:vsomeip_platform_configuration",
-        "//examples/radar:radar_client",
-        "//examples/radar:radar_service",
-        "@vsomeip_source//:vsomeip_test_runtime",
+        "//com:vsomeip_platform_bundle",
+        "//examples/radar:radar_client_bundle",
+        "//examples/radar:radar_service_bundle",
     ],
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:linux"],
