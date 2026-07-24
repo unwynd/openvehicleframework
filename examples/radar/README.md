@@ -10,8 +10,10 @@ separate processes. It demonstrates:
 - a field read and field notification.
 
 The application sources use only the generated service API and the generated
-deployment facade. Provider loading, native identifiers, routes, and provider
-configuration are derived from the validated deployment files.
+deployment facade. Provider loading, native identifiers, and routes are
+derived from the validated deployment files. The vSomeIP routing and
+discovery bootstrap is a separate platform artifact and contains no
+application or service inventory.
 
 ## Automated two-process run
 
@@ -31,17 +33,11 @@ bazel build //examples/radar:radar_service \
   //examples/radar:radar_client
 ```
 
-Generate the shared provider configuration:
-
-```sh
-bazel build //examples/radar:provider_configuration
-```
-
 From the repository root, start the service:
 
 ```sh
 OVF_COM_PROVIDER_PATH="<directory-containing-libovf_com_provider_vsomeip.so>" \
-VSOMEIP_CONFIGURATION="$PWD/bazel-bin/examples/radar/provider_configuration.json" \
+VSOMEIP_CONFIGURATION="$PWD/com/transports/vsomeip/config/platform.json" \
   bazel-bin/examples/radar/radar_service
 ```
 
@@ -49,7 +45,7 @@ In a second terminal, start the client with the same configuration:
 
 ```sh
 OVF_COM_PROVIDER_PATH="<directory-containing-libovf_com_provider_vsomeip.so>" \
-VSOMEIP_CONFIGURATION="$PWD/bazel-bin/examples/radar/provider_configuration.json" \
+VSOMEIP_CONFIGURATION="$PWD/com/transports/vsomeip/config/platform.json" \
   bazel-bin/examples/radar/radar_client
 ```
 

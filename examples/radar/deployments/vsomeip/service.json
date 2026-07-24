@@ -4,15 +4,7 @@
   "providers": [{
     "id": "vehicle_network",
     "profile": "vsomeip",
-    "required": true,
-    "extensions": {
-      "org.openvehicleframework.vsomeip": {
-        "application": "ovf-radar-service",
-        "applicationId": 4727,
-        "routing": "ovf-radar-service",
-        "reliablePort": 30509
-      }
-    }
+    "required": true
   }],
   "instances": [{
     "serviceId": "42bd2fc5-8f32-4e57-8a33-94fb0a5cf71d",

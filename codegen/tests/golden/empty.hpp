@@ -14,8 +14,16 @@
 
 #include "ovf/com/generated.hpp"
 
-namespace test::empty {} // namespace test::empty
+namespace test::empty {
 
-namespace ovf::com {} // namespace ovf::com
 
-namespace test::empty {} // namespace test::empty
+} // namespace test::empty
+
+namespace ovf::com {
+
+} // namespace ovf::com
+
+namespace test::empty {
+
+
+} // namespace test::empty

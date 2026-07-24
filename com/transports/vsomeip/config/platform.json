@@ -1,0 +1,15 @@
+{
+  "unicast": "127.0.0.1",
+  "routing": "routingmanagerd",
+  "logging": {
+    "level": "warning",
+    "console": "true",
+    "dlt": "false"
+  },
+  "service-discovery": {
+    "enable": "true",
+    "multicast": "224.244.224.245",
+    "port": "30490",
+    "protocol": "udp"
+  }
+}

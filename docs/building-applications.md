@@ -82,7 +82,11 @@ stable build-graph boundaries; applications should prefer
 `ovf_cc_application` unless they need to integrate with another language or
 packaging system.
 
-Deployments that share a vSomeIP network use
-`ovf_vsomeip_configuration`. It combines their validated plans and generates
-the provider configuration; the application does not author or carry a second
-configuration model.
+The shared vSomeIP routing and service-discovery bootstrap is stored as the
+transport-specific platform configuration
+`com/transports/vsomeip/config/platform.json`. It is independent of
+application deployments and contains no application or service inventory.
+Each target platform may replace the unicast address while retaining this
+transport-owned structure. Network-facing provider endpoints will be
+registered dynamically after the planned vSomeIP endpoint-registration
+extension is available.

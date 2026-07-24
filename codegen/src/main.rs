@@ -173,10 +173,6 @@ fn generate_contract(input: PathBuf, output: PathBuf) -> Result<(), Box<dyn std:
     Ok(())
 }
 
-fn hex(value: u64, width: usize) -> String {
-    format!("0x{value:0width$x}")
-}
-
 fn native_mapping(service: u64, instance: u64, entry: &JsonValue) -> String {
     format!(
         "service={service};instance={instance};element={};eventGroup={};major={};minor={};kind={};reliable={}",
@@ -302,126 +298,6 @@ fn generate_cpp_deployment(
     Ok(())
 }
 
-fn generate_vsomeip_configuration(
-    plans: &[PathBuf],
-    output: PathBuf,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut applications = BTreeMap::<String, u64>::new();
-    let mut routing = None;
-    let mut services = BTreeMap::<(u64, u64), JsonValue>::new();
-
-    for path in plans {
-        let plan: JsonValue = serde_json::from_slice(&fs::read(path)?)?;
-        let provider = plan["providers"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|provider| provider["profile"] == "vsomeip")
-            .ok_or_else(|| format!("{} has no vsomeip provider", path.display()))?;
-        let extension = &provider["extensions"]["org.openvehicleframework.vsomeip"];
-        let application = extension["application"]
-            .as_str()
-            .ok_or("vsomeip application is missing")?;
-        let application_id = extension["applicationId"]
-            .as_u64()
-            .ok_or("vsomeip applicationId is missing")?;
-        applications.insert(application.into(), application_id);
-        if let Some(value) = extension["routing"].as_str() {
-            if routing.as_deref().is_some_and(|current| current != value) {
-                return Err("vsomeip routing application differs between plans".into());
-            }
-            routing = Some(value.to_owned());
-        }
-        let reliable_port = extension["reliablePort"].as_u64().unwrap_or(30509);
-
-        for instance in plan["instances"].as_array().into_iter().flatten() {
-            for route_group in ["consumerRoutes", "providerRoutes"] {
-                for route in instance[route_group].as_array().into_iter().flatten() {
-                    if route["provider"] != provider["id"] {
-                        continue;
-                    }
-                    let mapping = &route["mappings"];
-                    let service = mapping["service"]
-                        .as_u64()
-                        .ok_or("service mapping is missing")?;
-                    let instance_id = mapping["instance"]
-                        .as_u64()
-                        .ok_or("instance mapping is missing")?;
-                    let mut events = BTreeMap::<u64, bool>::new();
-                    let mut groups = BTreeMap::<u64, BTreeSet<u64>>::new();
-                    for element in mapping["elements"]
-                        .as_object()
-                        .into_iter()
-                        .flat_map(|v| v.values())
-                    {
-                        let entries: Vec<&JsonValue> = if element.get("id").is_some() {
-                            vec![element]
-                        } else {
-                            element
-                                .as_object()
-                                .into_iter()
-                                .flat_map(|v| v.values())
-                                .collect()
-                        };
-                        for entry in entries {
-                            let kind = entry["kind"].as_str().unwrap_or_default();
-                            if kind == "event" || kind == "fieldNotify" {
-                                let event = entry["id"].as_u64().ok_or("event id is missing")?;
-                                let group = entry["eventGroup"]
-                                    .as_u64()
-                                    .ok_or("event group is missing")?;
-                                events.insert(event, kind == "fieldNotify");
-                                groups.entry(group).or_default().insert(event);
-                            }
-                        }
-                    }
-                    let event_values = events
-                        .into_iter()
-                        .map(|(event, is_field)| {
-                            json!({"event": hex(event, 4), "is_field": is_field.to_string()})
-                        })
-                        .collect::<Vec<_>>();
-                    let group_values = groups
-                        .into_iter()
-                        .map(|(group, events)| {
-                            json!({
-                                "eventgroup": hex(group, 4),
-                                "events": events.into_iter().map(|event| hex(event, 4)).collect::<Vec<_>>()
-                            })
-                        })
-                        .collect::<Vec<_>>();
-                    services.insert(
-                        (service, instance_id),
-                        json!({
-                            "service": hex(service, 4),
-                            "instance": hex(instance_id, 4),
-                            "reliable": reliable_port.to_string(),
-                            "events": event_values,
-                            "eventgroups": group_values,
-                        }),
-                    );
-                }
-            }
-        }
-    }
-    let configuration = json!({
-        "unicast": "127.0.0.1",
-        "logging": {"level": "warning", "console": "true", "dlt": "false"},
-        "applications": applications.into_iter().map(|(name, id)| {
-            json!({"name": name, "id": hex(id, 4)})
-        }).collect::<Vec<_>>(),
-        "services": services.into_values().collect::<Vec<_>>(),
-        "routing": routing.ok_or("vsomeip routing application is missing")?,
-        "service-discovery": {"enable": "false"},
-    });
-    let rendered = serde_json::to_string_pretty(&configuration)? + "\n";
-    if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(output, rendered)?;
-    Ok(())
-}
-
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
     if arguments.first().map(String::as_str) == Some("deployment-cpp") {
@@ -438,30 +314,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             PathBuf::from(&arguments[6]),
         );
     }
-    if arguments.first().map(String::as_str) != Some("vsomeip-config") {
-        let (input, output) = parse_contract_arguments(&arguments)?;
-        return generate_contract(input, output);
-    }
-    let mut plans = Vec::new();
-    let mut output = None;
-    let mut index = 1;
-    while index < arguments.len() {
-        match arguments[index].as_str() {
-            "--plan" if index + 1 < arguments.len() => {
-                plans.push(PathBuf::from(&arguments[index + 1]));
-                index += 2;
-            }
-            "--output" if index + 1 < arguments.len() => {
-                output = Some(PathBuf::from(&arguments[index + 1]));
-                index += 2;
-            }
-            value => return Err(format!("unexpected argument: {value}").into()),
-        }
-    }
-    if plans.is_empty() {
-        return Err("at least one --plan is required".into());
-    }
-    generate_vsomeip_configuration(&plans, output.ok_or("missing --output")?)
+    let (input, output) = parse_contract_arguments(&arguments)?;
+    generate_contract(input, output)
 }
 
 fn main() {

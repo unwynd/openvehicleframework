@@ -139,8 +139,8 @@ Key transport-related dependencies are retrieved under their own licenses:
 
 | Dependency | Purpose | License |
 |---|---|---|
-| [vSomeIP](https://github.com/COVESA/vsomeip) | Experimental SOME/IP transport | [MPL-2.0](https://www.mozilla.org/MPL/2.0/) |
-| [iceoryx2](https://github.com/eclipse-iceoryx/iceoryx2) | Experimental shared-memory transport | Apache-2.0 OR MIT |
+| [vSomeIP](https://github.com/COVESA/vsomeip) | SOME/IP transport | [MPL-2.0](https://www.mozilla.org/MPL/2.0/) |
+| [iceoryx2](https://github.com/eclipse-iceoryx/iceoryx2) | shared-memory transport | Apache-2.0 OR MIT |
 | [Boost](https://www.boost.org/) | vSomeIP dependency | [Boost Software License 1.0](https://www.boost.org/LICENSE_1_0.txt) |
 | [Buildifier](https://github.com/bazelbuild/buildtools) | Starlark formatting and linting | Apache-2.0 |
 

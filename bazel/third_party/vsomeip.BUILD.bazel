@@ -14,10 +14,12 @@ cmake(
         "DISABLE_DLT": "ON",
         "ENABLE_SIGNAL_HANDLING": "OFF",
         "VSOMEIP_DISABLE_ENV_VARS": "ON",
+        "VSOMEIP_INSTALL_ROUTINGMANAGERD": "ON",
     },
     deps = ["@boost_source//:boost"],
     lib_source = ":source",
     out_include_dir = "include",
+    out_binaries = ["routingmanagerd"],
     out_shared_libs = [
         "libvsomeip3.so",
         "libvsomeip3.so.3",
@@ -30,4 +32,34 @@ cmake(
     ],
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:linux"],
+)
+
+# Test-only build: permits VSOMEIP_CONFIGURATION so hermetic tests can select
+# their runfiles-local platform configuration without writing to /etc.
+cmake(
+    name = "vsomeip_test_runtime",
+    cache_entries = {
+        "CMAKE_BUILD_TYPE": "Release",
+        "DISABLE_DLT": "ON",
+        "ENABLE_SIGNAL_HANDLING": "OFF",
+        "VSOMEIP_DISABLE_ENV_VARS": "OFF",
+        "VSOMEIP_INSTALL_ROUTINGMANAGERD": "ON",
+    },
+    deps = ["@boost_source//:boost"],
+    lib_source = ":source",
+    out_include_dir = "include",
+    out_binaries = ["routingmanagerd"],
+    out_shared_libs = [
+        "libvsomeip3.so",
+        "libvsomeip3.so.3",
+        "libvsomeip3-cfg.so",
+        "libvsomeip3-cfg.so.3",
+        "libvsomeip3-e2e.so",
+        "libvsomeip3-e2e.so.3",
+        "libvsomeip3-sd.so",
+        "libvsomeip3-sd.so.3",
+    ],
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+    testonly = True,
 )

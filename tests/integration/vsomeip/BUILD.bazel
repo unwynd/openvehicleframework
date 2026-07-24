@@ -15,9 +15,10 @@ py_test(
     ],
     data = [
         "//com:vsomeip_plugin",
-        "//examples/radar:provider_configuration",
+        "//com:vsomeip_platform_configuration",
         "//examples/radar:radar_client",
         "//examples/radar:radar_service",
+        "@vsomeip_source//:vsomeip_test_runtime",
     ],
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:linux"],

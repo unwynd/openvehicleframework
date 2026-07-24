@@ -26,14 +26,46 @@ def runfile(relative: str) -> Path:
 def main() -> int:
     service_path = runfile("examples/radar/radar_service")
     client_path = runfile("examples/radar/radar_client")
-    config_path = runfile("examples/radar/provider_configuration.json")
+    config_path = runfile("com/transports/vsomeip/config/platform.json")
+    routing_manager = next(
+        path
+        for path in Path(os.environ["RUNFILES_DIR"]).rglob("routingmanagerd")
+        if path.is_file() and "vsomeip_test_runtime" in path.parts
+    )
     provider = next(
         Path(os.environ["RUNFILES_DIR"]).rglob("libovf_com_provider_vsomeip.so")
     )
     environment = os.environ.copy()
     environment["OVF_COM_PROVIDER_PATH"] = str(provider.parent)
     environment["VSOMEIP_CONFIGURATION"] = str(config_path)
+    native_library_path = routing_manager.parent.parent / "lib"
+    existing_library_path = environment.get("LD_LIBRARY_PATH")
+    environment["LD_LIBRARY_PATH"] = (
+        f"{native_library_path}:{existing_library_path}"
+        if existing_library_path
+        else str(native_library_path)
+    )
 
+    routing = subprocess.Popen(
+        [routing_manager],
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    routing_socket = Path("/tmp/vsomeip-0")
+    routing_deadline = time.monotonic() + 5
+    while time.monotonic() < routing_deadline:
+        if routing_socket.exists():
+            break
+        if routing.poll() is not None:
+            output = routing.stdout.read() if routing.stdout else ""
+            raise RuntimeError(f"routingmanagerd exited before becoming ready:\n{output}")
+        time.sleep(0.05)
+    else:
+        routing.send_signal(signal.SIGTERM)
+        output = routing.communicate(timeout=5)[0]
+        raise RuntimeError(f"routingmanagerd did not become ready:\n{output}")
     service = subprocess.Popen(
         [service_path],
         env=environment,
@@ -90,6 +122,13 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 service.kill()
                 service.wait()
+        if routing.poll() is None:
+            routing.send_signal(signal.SIGTERM)
+            try:
+                routing.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                routing.kill()
+                routing.wait()
 
 
 if __name__ == "__main__":

@@ -202,42 +202,6 @@ ovf_deployment = rule(
     doc = "Validates deployment and emits the canonical target runtime plan.",
 )
 
-def _vsomeip_configuration_impl(ctx):
-    plans = [target[OvfDeploymentInfo].plan for target in ctx.attr.deployments]
-    arguments = ctx.actions.args()
-    arguments.add("vsomeip-config")
-    for plan in plans:
-        arguments.add("--plan")
-        arguments.add(plan)
-    arguments.add("--output")
-    arguments.add(ctx.outputs.configuration)
-    ctx.actions.run(
-        executable = ctx.executable._codegen,
-        arguments = [arguments],
-        inputs = plans,
-        outputs = [ctx.outputs.configuration],
-        mnemonic = "OvfVsomeipConfiguration",
-        progress_message = "Generating provider configuration %{label}",
-    )
-    return [DefaultInfo(files = depset([ctx.outputs.configuration]))]
-
-ovf_vsomeip_configuration = rule(
-    implementation = _vsomeip_configuration_impl,
-    attrs = {
-        "deployments": attr.label_list(
-            mandatory = True,
-            providers = [OvfDeploymentInfo],
-        ),
-        "_codegen": attr.label(
-            default = Label("//codegen:ovf_codegen"),
-            executable = True,
-            cfg = "exec",
-        ),
-    },
-    outputs = {"configuration": "%{name}.json"},
-    doc = "Generates a complete vSomeIP configuration from validated deployments.",
-)
-
 def _application_package_impl(ctx):
     deployment = ctx.attr.deployment[OvfDeploymentInfo]
     output = ctx.outputs.bundle
