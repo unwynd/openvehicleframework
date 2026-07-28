@@ -37,9 +37,9 @@ package ovf_deployment
 }
 
 deploymentValue=deployment: #Deployment
-platformValue=platform:     #Platform
+platformValues=platforms:   [#Platform, ...#Platform]
 
 model: {
 	deployment: deploymentValue
-	platform:   platformValue
+	platforms:  platformValues
 }

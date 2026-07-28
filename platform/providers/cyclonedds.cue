@@ -2,9 +2,9 @@
 
 package ovf_deployment
 
-platform: {
+platforms: [{
 	transport: "network"
 	profile:   "cyclonedds"
 	provider:  "dds"
 	required:  true
-}
+}]

@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_python//python:defs.bzl", "py_test")
+
+package(default_visibility = ["//visibility:public"])
+
+py_test(
+    name = "pipeline_test",
+    timeout = "long",
+    srcs = ["pipeline_test.py"],
+    data = [
+        "//com:vsomeip_platform_bundle",
+        "//com/transports/iceoryx2:plugin",
+        "//examples/camera",
+        "//examples/driving_policy",
+        "//examples/radar:radar_iceoryx2_service",
+        "//examples/sensor_fusion",
+    ],
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+)

@@ -99,9 +99,9 @@ ovf_cc_application(
     name = "radar_app",
     srcs = ["main.cpp"],
     hdrs = ["radar_logic.hpp"],
-    idl = ["radar.smithy"],
+    interfaces = ["//contracts/radar"],
     deployment = "radar.deployment.cue",
-    platform = "//platform:providers/iceoryx2.cue",
+    platform = "//platform:iceoryx2",
 )
 ```
 
@@ -113,6 +113,10 @@ bundle.
 
 See [Building applications with Bazel](docs/building-applications.md) for the
 generated targets and shipping boundary.
+
+The example applications include a camera provider, radar and camera consumers
+in one sensor-fusion process, and a fused environment-model stream delivered
+over SOME/IP to `driving_policy`.
 
 ## Repository layout
 

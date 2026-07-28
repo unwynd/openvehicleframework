@@ -32,6 +32,15 @@ cc_test(
 )
 
 cc_test(
+    name = "generated_codec_test",
+    srcs = ["generated_codec_test.cpp"],
+    deps = [
+        "//com:generated_support",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "c_abi_test",
     srcs = ["c_abi_test.c"],
     deps = ["//com:provider_abi"],
@@ -108,6 +117,7 @@ test_suite(
     name = "all_tests",
     tests = [
         ":c_abi_test",
+        ":generated_codec_test",
         ":i1_vertical_slice_test",
         ":iceoryx2_mapping_test",
         ":iceoryx2_native_peer_test",
@@ -117,5 +127,6 @@ test_suite(
         ":vsomeip_mapping_test",
         "//bazel/tests:all_tests",
         "//tests/integration/iceoryx2:radar_two_process_test",
+        "//tests/integration/pipeline:pipeline_test",
     ],
 )

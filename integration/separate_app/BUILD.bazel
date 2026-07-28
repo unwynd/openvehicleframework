@@ -6,6 +6,6 @@ ovf_cc_application(
     name = "separate_radar_app",
     srcs = ["main.cpp"],
     deployment = "@openvehicleframework//examples/radar:client/deployment.cue",
-    idl = ["@openvehicleframework//contracts/radar:radar.smithy"],
-    platform = "@openvehicleframework//platform:providers/inproc.cue",
+    interfaces = ["@openvehicleframework//contracts/radar"],
+    platform = "@openvehicleframework//platform:inproc",
 )

@@ -174,20 +174,27 @@ def _generated_mappings(service: dict, instance_name: str, profile: str) -> dict
 
 def resolve_deployment(contract: dict, model: dict) -> dict:
     """Generate a canonical deployment from app intent and platform policy."""
-    intent, platform = model["deployment"], model["platform"]
+    intent = model["deployment"]
+    platforms = {item["transport"]: item for item in model["platforms"]}
+    if len(platforms) != len(model["platforms"]):
+        raise ValueError("platform policy contains duplicate transport selections")
     namespace = contract["namespace"]
     services = {
         f"{namespace}#{service['name']}": service for service in contract["services"]
     }
     instances = []
-    if any(instance["transport"] != platform["transport"]
-           for instance in intent["instances"]):
-        raise ValueError("application transport does not match selected platform provider")
+    used_platforms = {}
     for instance in intent["instances"]:
         service_name = instance["interface"]
         service = services.get(service_name)
         if service is None:
-            raise ValueError(f"deployment references unknown service shape {service_name}")
+            continue
+        platform = platforms.get(instance["transport"])
+        if platform is None:
+            raise ValueError(
+                f"platform policy does not provide {instance['transport']} transport"
+            )
+        used_platforms[platform["provider"]] = platform
         requirements = instance.get("requirements", {})
         features = requirements.get(
             "features", _route_features(instance["role"], platform["profile"])
@@ -216,16 +223,25 @@ def resolve_deployment(contract: dict, model: dict) -> dict:
         resolved_instance["serviceId"] = service["id"]
         resolved_instance["routes"] = [route]
         instances.append(resolved_instance)
+    if not instances:
+        names = ", ".join(sorted(services))
+        raise ValueError(f"deployment does not declare an instance of {names}")
     return {
         "deploymentVersion": intent["deploymentVersion"],
         "contractFingerprint": fingerprint(contract),
-        "providers": [{
-            "id": platform["provider"],
-            "profile": platform["profile"],
-            "required": platform["required"],
-            **({"extensions": platform["extensions"]}
-               if "extensions" in platform else {}),
-        }],
+        "providers": [
+            {
+                "id": platform["provider"],
+                "profile": platform["profile"],
+                "required": platform["required"],
+                **(
+                    {"extensions": platform["extensions"]}
+                    if "extensions" in platform
+                    else {}
+                ),
+            }
+            for platform in used_platforms.values()
+        ],
         "instances": instances,
     }
 

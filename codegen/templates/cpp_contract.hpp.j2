@@ -239,7 +239,7 @@ private:
         return binding_->publish(element, ovf::com::encode(value));
     }
     std::shared_ptr<ovf::com::ServerBinding> binding_;
-    {{ service.name }}Skeleton* implementation_;
+    [[maybe_unused]] {{ service.name }}Skeleton* implementation_;
     bool valid_{};
 };
 

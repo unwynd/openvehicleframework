@@ -3,6 +3,6 @@
 package(default_visibility = ["//visibility:public"])
 
 filegroup(
-    name = "radar",
-    srcs = ["radar.smithy"],
+    name = "environment_model",
+    srcs = ["environment-model.smithy"],
 )

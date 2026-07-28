@@ -146,15 +146,31 @@ def add_file(archive: tarfile.TarFile, source: Path, target: str, mode: int) -> 
 
 
 def package_application(args: argparse.Namespace) -> int:
-    plan = read(args.plan)
-    required = sorted(
-        provider["profile"] for provider in plan["providers"] if provider["required"]
-    )
+    plans = [read(path) for path in args.plan]
+    required = sorted({
+        provider["profile"]
+        for plan in plans
+        for provider in plan["providers"]
+        if provider["required"]
+    })
+    interfaces = []
+    for index, (contract, deployment, plan, report) in enumerate(
+        zip(args.contract, args.deployment, args.plan, args.report, strict = True)
+    ):
+        resolved_plan = plans[index]
+        resolved_contract = read(contract)
+        interfaces.append({
+            "name": resolved_contract["services"][0]["name"],
+            "contractFingerprint": resolved_plan["contractFingerprint"],
+            "deploymentFingerprint": resolved_plan["deploymentFingerprint"],
+            "contract": contract,
+            "deployment": deployment,
+            "plan": plan,
+            "report": report,
+        })
     manifest = {
         "applicationBundleVersion": 1,
         "name": args.name,
-        "contractFingerprint": plan["contractFingerprint"],
-        "deploymentFingerprint": plan["deploymentFingerprint"],
         "requiredProviderProfiles": required,
         "frameworkIncluded": False,
         "files": {
@@ -162,47 +178,68 @@ def package_application(args: argparse.Namespace) -> int:
                 "path": f"bin/{args.name}",
                 "sha256": digest(args.executable),
             },
+        },
+        "interfaces": [],
+    }
+    if len(interfaces) == 1:
+        interface = interfaces[0]
+        manifest["contractFingerprint"] = interface["contractFingerprint"]
+        manifest["deploymentFingerprint"] = interface["deploymentFingerprint"]
+        manifest["files"].update({
             "contract": {
                 "path": f"share/ovf/{args.name}/contract.ovf-ir.json",
-                "sha256": digest(args.contract),
+                "sha256": digest(interface["contract"]),
             },
             "deployment": {
                 "path": f"etc/ovf/{args.name}/deployment.json",
-                "sha256": digest(args.deployment),
+                "sha256": digest(interface["deployment"]),
             },
             "plan": {
                 "path": f"etc/ovf/{args.name}/plan.json",
-                "sha256": digest(args.plan),
+                "sha256": digest(interface["plan"]),
             },
             "validationReport": {
                 "path": f"share/ovf/{args.name}/deployment-validation.json",
-                "sha256": digest(args.report),
+                "sha256": digest(interface["report"]),
             },
-        },
-    }
+        })
+    for index, interface in enumerate(interfaces):
+        stem = f"interface-{index}"
+        manifest["interfaces"].append({
+            "name": interface["name"],
+            "contractFingerprint": interface["contractFingerprint"],
+            "deploymentFingerprint": interface["deploymentFingerprint"],
+            "files": {
+                "contract": f"share/ovf/{args.name}/{stem}.ovf-ir.json",
+                "deployment": f"etc/ovf/{args.name}/{stem}.deployment.json",
+                "plan": f"etc/ovf/{args.name}/{stem}.plan.json",
+                "validationReport": f"share/ovf/{args.name}/{stem}.validation.json",
+            },
+        })
     manifest_content = json.dumps(manifest, sort_keys=True, indent=2).encode() + b"\n"
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(args.output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
         add_file(archive, args.executable, f"bin/{args.name}", 0o755)
-        add_file(
-            archive,
-            args.deployment,
-            f"etc/ovf/{args.name}/deployment.json",
-            0o644,
-        )
-        add_file(archive, args.plan, f"etc/ovf/{args.name}/plan.json", 0o644)
-        add_file(
-            archive,
-            args.contract,
-            f"share/ovf/{args.name}/contract.ovf-ir.json",
-            0o644,
-        )
-        add_file(
-            archive,
-            args.report,
-            f"share/ovf/{args.name}/deployment-validation.json",
-            0o644,
-        )
+        for index, interface in enumerate(interfaces):
+            if len(interfaces) == 1:
+                add_file(archive, interface["deployment"],
+                         f"etc/ovf/{args.name}/deployment.json", 0o644)
+                add_file(archive, interface["plan"],
+                         f"etc/ovf/{args.name}/plan.json", 0o644)
+                add_file(archive, interface["contract"],
+                         f"share/ovf/{args.name}/contract.ovf-ir.json", 0o644)
+                add_file(archive, interface["report"],
+                         f"share/ovf/{args.name}/deployment-validation.json", 0o644)
+            else:
+                stem = f"interface-{index}"
+                add_file(archive, interface["deployment"],
+                         f"etc/ovf/{args.name}/{stem}.deployment.json", 0o644)
+                add_file(archive, interface["plan"],
+                         f"etc/ovf/{args.name}/{stem}.plan.json", 0o644)
+                add_file(archive, interface["contract"],
+                         f"share/ovf/{args.name}/{stem}.ovf-ir.json", 0o644)
+                add_file(archive, interface["report"],
+                         f"share/ovf/{args.name}/{stem}.validation.json", 0o644)
         info = tar_bytes(manifest_content, 0o644)
         info.name = f"share/ovf/{args.name}/manifest.json"
         archive.addfile(info, io.BytesIO(manifest_content))
@@ -319,10 +356,10 @@ def parser() -> argparse.ArgumentParser:
     package = commands.add_parser("package")
     package.add_argument("--name", required=True)
     package.add_argument("--executable", required=True, type=Path)
-    package.add_argument("--contract", required=True, type=Path)
-    package.add_argument("--deployment", required=True, type=Path)
-    package.add_argument("--plan", required=True, type=Path)
-    package.add_argument("--report", required=True, type=Path)
+    package.add_argument("--contract", required=True, action="append", type=Path)
+    package.add_argument("--deployment", required=True, action="append", type=Path)
+    package.add_argument("--plan", required=True, action="append", type=Path)
+    package.add_argument("--report", required=True, action="append", type=Path)
     package.add_argument("--output", required=True, type=Path)
     package.set_defaults(run=package_application)
 

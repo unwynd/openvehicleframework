@@ -2,7 +2,7 @@
 
 package ovf_deployment
 
-platform: {
+platforms: [{
 	transport: "ipc"
 	profile:   "inproc"
 	provider:  "local"
@@ -10,4 +10,4 @@ platform: {
 	extensions: "org.openvehicleframework.inproc": {
 		queueCapacity: 64
 	}
-}
+}]

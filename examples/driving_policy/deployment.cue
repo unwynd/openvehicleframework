@@ -5,9 +5,9 @@ package ovf_deployment
 deployment: {
 	deploymentVersion: 1
 	instances: [{
-		interface: "example.radar#RadarService"
-		instance:  "front-radar"
+		interface: "example.environment#EnvironmentModelService"
+		instance:  "fused-environment"
 		role:      "consumer"
-		transport: platforms[0].transport
+		transport: "network"
 	}]
 }

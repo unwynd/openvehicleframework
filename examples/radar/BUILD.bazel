@@ -8,9 +8,8 @@ ovf_cc_application(
     name = "radar_inproc_client",
     srcs = ["client/main.cpp"],
     deployment = "client/deployment.cue",
-    deployment_namespace = "radar_client_deployment",
-    idl = ["//contracts/radar:radar.smithy"],
-    platform = "//platform:providers/inproc.cue",
+    interfaces = ["//contracts/radar"],
+    platform = "//platform:inproc",
     tags = ["manual"],
 )
 
@@ -18,8 +17,8 @@ ovf_cc_application(
     name = "radar_service",
     srcs = ["service/main.cpp"],
     deployment = "service/deployment.cue",
-    idl = ["//contracts/radar:radar.smithy"],
-    platform = "//platform:providers/vsomeip.cue",
+    interfaces = ["//contracts/radar"],
+    platform = "//platform:vsomeip",
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:linux"],
 )
@@ -28,9 +27,8 @@ ovf_cc_application(
     name = "radar_iceoryx2_service",
     srcs = ["service/main.cpp"],
     deployment = "service/deployment.cue",
-    deployment_namespace = "radar_service_deployment",
-    idl = ["//contracts/radar:radar.smithy"],
-    platform = "//platform:providers/iceoryx2.cue",
+    interfaces = ["//contracts/radar"],
+    platform = "//platform:iceoryx2",
     tags = ["manual"],
 )
 
@@ -38,9 +36,8 @@ ovf_cc_application(
     name = "radar_iceoryx2_client",
     srcs = ["client/main.cpp"],
     deployment = "client/deployment.cue",
-    deployment_namespace = "radar_client_deployment",
-    idl = ["//contracts/radar:radar.smithy"],
-    platform = "//platform:providers/iceoryx2.cue",
+    interfaces = ["//contracts/radar"],
+    platform = "//platform:iceoryx2",
     tags = ["manual"],
 )
 
@@ -48,8 +45,8 @@ ovf_cc_application(
     name = "radar_client",
     srcs = ["client/main.cpp"],
     deployment = "client/deployment.cue",
-    idl = ["//contracts/radar:radar.smithy"],
-    platform = "//platform:providers/vsomeip.cue",
+    interfaces = ["//contracts/radar"],
+    platform = "//platform:vsomeip",
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:linux"],
 )

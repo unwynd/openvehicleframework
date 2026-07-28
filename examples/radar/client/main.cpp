@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ovf_contract.hpp"
-#include "ovf_deployment.hpp"
+#include "radar/ovf_contract.hpp"
+#include "radar/ovf_deployment.hpp"
 
 #include <chrono>
 #include <condition_variable>
@@ -15,7 +15,7 @@ using namespace std::chrono_literals;
 
 int main() {
   ovf::com::Runtime runtime({.instance_name = "ovf-radar-client", .logger = {}, .dispatcher = {}});
-  if (radar_client_deployment::Configure(runtime) != ovf::com::RuntimeError::none ||
+  if (radar_deployment::Configure(runtime) != ovf::com::RuntimeError::none ||
       runtime.Start() != ovf::com::RuntimeError::none) {
     std::cerr << "failed to start the radar client runtime\n";
     return 1;
@@ -23,7 +23,7 @@ int main() {
 
   std::mutex mutex;
   std::condition_variable condition;
-  auto discovery = ovf::com::Discover(runtime, {radar_client_deployment::Route()});
+  auto discovery = ovf::com::Discover(runtime, {radar_deployment::Route()});
   if (!discovery) {
     std::cerr << "failed to start RadarService discovery\n";
     return 2;

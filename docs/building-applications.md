@@ -11,9 +11,9 @@ ovf_cc_application(
     name = "radar_app",
     srcs = ["main.cpp"],
     hdrs = ["radar_logic.hpp"],
-    idl = ["radar.smithy"],
+    interfaces = ["//contracts/radar"],
     deployment = "radar.deployment.cue",
-    platform = "//platform:providers/vsomeip.cue",
+    platform = "//platform:vsomeip",
 )
 ```
 
@@ -61,6 +61,12 @@ share/ovf/<application>/deployment-validation.json
 share/ovf/<application>/manifest.json
 ```
 
+The same `ovf_cc_application` API accepts one or many interface targets. Every
+application owns one deployment model containing all of its logical provider
+and consumer roles. Generated headers are namespaced by interface target name,
+and the application bundle carries contract, deployment, plan, and validation
+artifacts for every role.
+
 It intentionally contains no framework runtime or provider implementation.
 The manifest records required provider profiles and content digests. Framework
 delivery is a separate artifact:
@@ -86,7 +92,7 @@ examples/<application>/<role>/deployment.cue
 platform/providers/<provider>.cue
 ```
 
-Smithy defines the communication contract. Application-owned CUE names the
+Smithy interface targets define communication contracts. Application-owned CUE names the
 interface and logical instance and declares the provider or consumer role.
 Platform-owned CUE selects the communication implementation and supplies
 platform policy and extensions. The compiler generates provider-native names,

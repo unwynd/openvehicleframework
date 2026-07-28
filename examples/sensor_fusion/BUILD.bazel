@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("//bazel:application.bzl", "ovf_cc_application")
+
+ovf_cc_application(
+    name = "sensor_fusion",
+    srcs = ["main.cpp"],
+    deployment = "deployment.cue",
+    interfaces = [
+        "//contracts/camera",
+        "//contracts/environment_model",
+        "//contracts/radar",
+    ],
+    platform = "//platform:iceoryx2_vsomeip",
+    tags = ["manual"],
+    visibility = ["//visibility:public"],
+)

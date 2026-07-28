@@ -8,7 +8,7 @@ deployment: {
 		interface: "example.radar#RadarService"
 		instance:  "front-radar"
 		role:      "consumer"
-		transport: platform.transport
+		transport: platforms[0].transport
 		requirements: {
 			features: ["discovery", "events", "methods", "loans"]
 			limits: {

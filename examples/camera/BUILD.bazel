@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("//bazel:application.bzl", "ovf_cc_application")
+
+ovf_cc_application(
+    name = "camera",
+    srcs = ["main.cpp"],
+    deployment = "deployment.cue",
+    interfaces = ["//contracts/camera"],
+    platform = "//platform:iceoryx2",
+    tags = ["manual"],
+    visibility = ["//visibility:public"],
+)

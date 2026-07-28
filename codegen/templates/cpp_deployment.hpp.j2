@@ -11,7 +11,8 @@ namespace {{ deployment.namespace }} {
 inline auto Configure(ovf::com::Runtime& runtime) -> ovf::com::RuntimeError {
     return runtime.LoadTransport(
         "{{ deployment.provider }}",
-        {.max_endpoints = {{ deployment.max_endpoints }},
+        {.configuration = {},
+         .max_endpoints = {{ deployment.max_endpoints }},
          .max_outstanding_operations = {{ deployment.max_operations }}});
 }
 

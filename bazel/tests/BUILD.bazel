@@ -93,7 +93,7 @@ py_test(
         "//com/deployment/schema:deployment.cue",
         "//com/model/examples:radar_ir",
         "//examples/radar:client/deployment.cue",
-        "//platform:providers/inproc.cue",
+        "//platform:inproc",
         "//tools:validate_deployment",
     ],
     main = "b1_test.py",
@@ -118,7 +118,7 @@ py_test(
         "//bazel/host_tools:cue",
         "//com/deployment:all_inputs",
         "//com/model/examples:radar_ir",
-        "//platform:providers/vsomeip.cue",
+        "//platform:vsomeip",
         "//tools:validate_deployment",
     ],
     main = "b1_test.py",
@@ -145,7 +145,7 @@ py_test(
         "//com/deployment/schema:deployment.cue",
         "//com/model/examples:radar_ir",
         "//examples/radar:service/deployment.cue",
-        "//platform:providers/vsomeip.cue",
+        "//platform:vsomeip",
         "//tools:validate_deployment",
     ],
     main = "b1_test.py",
@@ -172,7 +172,7 @@ py_test(
         "//com/deployment/schema:deployment.cue",
         "//com/model/examples:radar_ir",
         "//examples/radar:service/deployment.cue",
-        "//platform:providers/iceoryx2.cue",
+        "//platform:iceoryx2",
         "//tools:validate_deployment",
     ],
     main = "b1_test.py",
@@ -197,7 +197,7 @@ py_test(
         "//bazel/host_tools:cue",
         "//com/deployment:all_inputs",
         "//com/model/examples:radar_ir",
-        "//platform:providers/cyclonedds.cue",
+        "//platform:cyclonedds",
         "//tools:validate_deployment",
     ],
     main = "b1_test.py",
@@ -224,7 +224,7 @@ py_test(
         "//com/deployment/schema:deployment.cue",
         "//com/model/examples:radar_ir",
         "//examples/radar:client/deployment.cue",
-        "//platform:providers/inproc.cue",
+        "//platform:inproc",
         "//tools:validate_deployment",
     ],
     main = "b1_test.py",
@@ -249,7 +249,7 @@ py_test(
         "//bazel/host_tools:cue",
         "//com/deployment:all_inputs",
         "//com/model/examples:radar_ir",
-        "//platform:providers/vsomeip.cue",
+        "//platform:vsomeip",
         "//tools:validate_deployment",
     ],
     main = "b1_test.py",
@@ -281,7 +281,7 @@ genrule(
     srcs = [
         "//com/model:ovf-profile.smithy",
         "//com/model:smithy-build.json",
-        "//contracts/radar:radar.smithy",
+        "//contracts/radar",
     ],
     outs = ["smithy/ovf/model/model.json"],
     cmd = "$(location //bazel/host_tools:smithy) build " +
@@ -336,6 +336,16 @@ py_test(
     main = "application_bundle_test.py",
 )
 
+py_test(
+    name = "multi_interface_bundle",
+    srcs = [
+        "__init__.py",
+        "multi_interface_bundle_test.py",
+    ],
+    data = ["//examples/sensor_fusion:sensor_fusion_bundle"],
+    main = "multi_interface_bundle_test.py",
+)
+
 test_suite(
     name = "all_tests",
     tests = [
@@ -349,6 +359,7 @@ test_suite(
         ":ir_additive_compatible",
         ":ir_breaking_rejected",
         ":ir_valid",
+        ":multi_interface_bundle",
         ":plan_generated_routes_reproducible",
         ":plan_inproc_reproducible",
         ":smithy_ir_equivalence",

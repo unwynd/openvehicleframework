@@ -128,7 +128,8 @@ private:
 
 template <class T, class Enable = void> struct Codec;
 
-template <class T> struct Codec<T, std::enable_if_t<std::is_integral_v<T>>> {
+template <class T>
+struct Codec<T, std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool>>> {
   static auto encode(Encoder& out, T value) -> bool {
     using UInt = std::make_unsigned_t<T>;
     out.unsigned_integer(static_cast<UInt>(value));
@@ -140,6 +141,19 @@ template <class T> struct Codec<T, std::enable_if_t<std::is_integral_v<T>>> {
     if (!in.unsigned_integer(raw))
       return false;
     value = static_cast<T>(raw);
+    return true;
+  }
+};
+
+template <> struct Codec<bool> {
+  static auto encode(Encoder& out, bool value) -> bool {
+    return Codec<std::uint8_t>::encode(out, value ? 1U : 0U);
+  }
+  static auto decode(Decoder& in, bool& value) -> bool {
+    std::uint8_t raw{};
+    if (!Codec<std::uint8_t>::decode(in, raw) || raw > 1U)
+      return false;
+    value = raw == 1U;
     return true;
   }
 };

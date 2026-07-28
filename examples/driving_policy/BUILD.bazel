@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("//bazel:application.bzl", "ovf_cc_application")
+
+ovf_cc_application(
+    name = "driving_policy",
+    srcs = ["main.cpp"],
+    deployment = "deployment.cue",
+    interfaces = ["//contracts/environment_model"],
+    platform = "//platform:vsomeip",
+    tags = ["manual"],
+    visibility = ["//visibility:public"],
+)

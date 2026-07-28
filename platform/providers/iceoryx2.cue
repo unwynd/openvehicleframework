@@ -2,9 +2,9 @@
 
 package ovf_deployment
 
-platform: {
+platforms: [{
 	transport: "ipc"
 	profile:   "iceoryx2"
 	provider:  "shared_memory"
 	required:  true
-}
+}]
