@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "radar_app.ovf.hpp"
+#include "ovf_contract.hpp"
 
 namespace radar_app {
 

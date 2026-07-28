@@ -14,6 +14,24 @@ ovf_cc_application(
 )
 
 ovf_cc_application(
+    name = "radar_iceoryx2_service",
+    srcs = ["service/main.cpp"],
+    deployment = "deployments/iceoryx2/service.json",
+    deployment_namespace = "radar_service_deployment",
+    idl = ["//contracts/radar:radar.smithy"],
+    tags = ["manual"],
+)
+
+ovf_cc_application(
+    name = "radar_iceoryx2_client",
+    srcs = ["client/main.cpp"],
+    deployment = "deployments/iceoryx2/client.json",
+    deployment_namespace = "radar_client_deployment",
+    idl = ["//contracts/radar:radar.smithy"],
+    tags = ["manual"],
+)
+
+ovf_cc_application(
     name = "radar_client",
     srcs = ["client/main.cpp"],
     deployment = "deployments/vsomeip/client.json",

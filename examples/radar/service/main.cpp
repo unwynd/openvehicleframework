@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#include "radar_service.ovf.hpp"
-#include "radar_service_deployment.hpp"
+#include "ovf_contract.hpp"
+#include "ovf_deployment.hpp"
 
 #include <atomic>
 #include <chrono>

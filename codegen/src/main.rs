@@ -185,6 +185,38 @@ fn native_mapping(service: u64, instance: u64, entry: &JsonValue) -> String {
     )
 }
 
+fn iceoryx2_event_mapping(base: &str, entry: &JsonValue) -> String {
+    format!(
+        "pattern=pubsub;service={base}/{};type={};payloadSize={};alignment={};history={};subscriberBuffer={};maxPublishers={};maxSubscribers={};safeOverflow={}",
+        entry["name"].as_str().unwrap_or_default(),
+        entry["type"].as_str().unwrap_or_default(),
+        entry["payloadSize"].as_u64().unwrap_or_default(),
+        entry["alignment"].as_u64().unwrap_or_default(),
+        entry["history"].as_u64().unwrap_or_default(),
+        entry["subscriberBuffer"].as_u64().unwrap_or_default(),
+        entry["maxPublishers"].as_u64().unwrap_or_default(),
+        entry["maxSubscribers"].as_u64().unwrap_or_default(),
+        entry["safeOverflow"].as_bool().unwrap_or_default(),
+    )
+}
+
+fn iceoryx2_method_mapping(base: &str, entry: &JsonValue) -> String {
+    format!(
+        "pattern=requestResponse;service={base}/{};requestType={};responseType={};requestPayloadSize={};responsePayloadSize={};alignment={};requestBuffer={};responseBuffer={};maxClients={};maxServers={};safeOverflow={}",
+        entry["name"].as_str().unwrap_or_default(),
+        entry["requestType"].as_str().unwrap_or_default(),
+        entry["responseType"].as_str().unwrap_or_default(),
+        entry["requestPayloadSize"].as_u64().unwrap_or_default(),
+        entry["responsePayloadSize"].as_u64().unwrap_or_default(),
+        entry["alignment"].as_u64().unwrap_or_default(),
+        entry["requestBuffer"].as_u64().unwrap_or_default(),
+        entry["responseBuffer"].as_u64().unwrap_or_default(),
+        entry["maxClients"].as_u64().unwrap_or_default(),
+        entry["maxServers"].as_u64().unwrap_or_default(),
+        entry["safeOverflow"].as_bool().unwrap_or_default(),
+    )
+}
+
 fn generate_cpp_deployment(
     plan_path: PathBuf,
     namespace: &str,
@@ -211,15 +243,44 @@ fn generate_cpp_deployment(
         .find(|value| value["id"] == provider_id)
         .ok_or("route provider is unknown")?;
     let mapping = &route["mappings"];
+    let provider_profile = provider["profile"].as_str().unwrap_or_default();
     let numeric_mapping = mapping["service"].is_u64();
     let service = mapping["service"].as_u64().unwrap_or_default();
     let instance_number = mapping["instance"].as_u64().unwrap_or_default();
     let mut elements = Vec::new();
+    let iceoryx2_base = format!(
+        "{}/{}",
+        mapping["service"].as_str().unwrap_or_default(),
+        mapping["instance"].as_str().unwrap_or_default()
+    );
     for (id, value) in mapping["elements"]
         .as_object()
         .ok_or("element mappings are missing")?
     {
-        let (event, method) = if let Some(name) = value.as_str() {
+        let (event, method) = if provider_profile == "iceoryx2" {
+            if value.get("unsupported").is_some() {
+                (String::new(), String::new())
+            } else if value.get("notify").is_some() || value.get("get").is_some() {
+                (
+                    value
+                        .get("notify")
+                        .map(|entry| iceoryx2_event_mapping(&iceoryx2_base, entry))
+                        .unwrap_or_default(),
+                    value
+                        .get("get")
+                        .or_else(|| value.get("set"))
+                        .map(|entry| iceoryx2_method_mapping(&iceoryx2_base, entry))
+                        .unwrap_or_default(),
+                )
+            } else if value.get("requestType").is_some() {
+                (
+                    String::new(),
+                    iceoryx2_method_mapping(&iceoryx2_base, value),
+                )
+            } else {
+                (iceoryx2_event_mapping(&iceoryx2_base, value), String::new())
+            }
+        } else if let Some(name) = value.as_str() {
             (name.to_owned(), name.to_owned())
         } else if value.get("id").is_some() {
             match value["kind"].as_str().unwrap_or_default() {

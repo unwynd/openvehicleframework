@@ -176,45 +176,70 @@ def validate_iceoryx2_route(route: dict, service_model: dict, where: str) -> lis
     for kind in ("events", "methods", "fields"):
         for element in service_model.get(kind, []): models[element["id"]] = kind
     native_names = set()
-    required = {"name", "type", "payloadSize", "alignment", "history",
-                "subscriberBuffer", "maxPublishers", "maxSubscribers", "safeOverflow"}
+    event_required = {"name", "type", "payloadSize", "alignment", "history",
+                      "subscriberBuffer", "maxPublishers", "maxSubscribers", "safeOverflow"}
+    method_required = {"name", "requestType", "responseType", "requestPayloadSize",
+                       "responsePayloadSize", "alignment", "requestBuffer", "responseBuffer",
+                       "maxClients", "maxServers", "safeOverflow"}
     for element_id, mapping in mappings.get("elements", {}).items():
         kind = models.get(element_id)
         element_where = f"{where}.element[{element_id}]"
-        if kind != "events":
-            if mapping != {"unsupported": True}:
-                errors.append(f"{element_where}: initial iceoryx2 route supports events only")
+        if mapping == {"unsupported": True}:
             continue
-        if not isinstance(mapping, dict) or set(mapping) != required:
-            errors.append(f"{element_where}: mapping has missing or unknown properties")
-            continue
-        name = mapping.get("name")
-        if not isinstance(name, str) or not name or len(name) > 64:
-            errors.append(f"{element_where}: name must be a nonempty bounded string")
-        elif name in native_names:
-            errors.append(f"{where}: duplicate native element name {name}")
-        else:
-            native_names.add(name)
-        if not isinstance(mapping.get("type"), str) or not mapping["type"]:
-            errors.append(f"{element_where}: type must be a nonempty string")
-        for key in ("payloadSize", "alignment", "subscriberBuffer",
-                    "maxPublishers", "maxSubscribers"):
-            value = mapping.get(key)
-            if not isinstance(value, int) or isinstance(value, bool) or value < 1:
-                errors.append(f"{element_where}: {key} must be a positive integer")
-        alignment = mapping.get("alignment")
-        if isinstance(alignment, int) and not isinstance(alignment, bool) \
-                and alignment > 0 and alignment & (alignment - 1):
-            errors.append(f"{element_where}: alignment must be a power of two")
-        history = mapping.get("history")
-        if not isinstance(history, int) or isinstance(history, bool) or history < 0:
-            errors.append(f"{element_where}: history must be a nonnegative integer")
-        if not isinstance(mapping.get("safeOverflow"), bool):
-            errors.append(f"{element_where}: safeOverflow must be boolean")
-        route_limit = route.get("limits", {}).get("maxPayloadSize")
-        if isinstance(mapping.get("payloadSize"), int) and isinstance(route_limit, int) \
-                and mapping["payloadSize"] > route_limit:
-            errors.append(f"{element_where}: payloadSize exceeds route maxPayloadSize")
+        entries = {"value": mapping}
+        if kind == "fields":
+            model = next((value for value in service_model.get("fields", [])
+                          if value["id"] == element_id), {})
+            expected = set()
+            if model.get("readable"): expected.add("get")
+            if model.get("writable"): expected.add("set")
+            if model.get("notifiable"): expected.add("notify")
+            if not isinstance(mapping, dict) or set(mapping) != expected:
+                errors.append(f"{element_where}: field mapping requires {', '.join(sorted(expected))}")
+                continue
+            entries = mapping
+        for operation, entry in entries.items():
+            is_event = kind == "events" or operation == "notify"
+            required = event_required if is_event else method_required
+            entry_where = f"{element_where}.{operation}"
+            if not isinstance(entry, dict) or set(entry) != required:
+                errors.append(f"{entry_where}: mapping has missing or unknown properties")
+                continue
+            name = entry.get("name")
+            if not isinstance(name, str) or not name or len(name) > 64:
+                errors.append(f"{entry_where}: name must be a nonempty bounded string")
+            elif name in native_names:
+                errors.append(f"{where}: duplicate native element name {name}")
+            else:
+                native_names.add(name)
+            type_keys = ("type",) if is_event else ("requestType", "responseType")
+            for key in type_keys:
+                if not isinstance(entry.get(key), str) or not entry[key]:
+                    errors.append(f"{entry_where}: {key} must be a nonempty string")
+            number_keys = (("payloadSize", "subscriberBuffer", "maxPublishers", "maxSubscribers")
+                           if is_event else
+                           ("requestPayloadSize", "responsePayloadSize", "requestBuffer",
+                            "responseBuffer", "maxClients", "maxServers"))
+            for key in (*number_keys, "alignment"):
+                value = entry.get(key)
+                if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+                    errors.append(f"{entry_where}: {key} must be a positive integer")
+            alignment = entry.get("alignment")
+            if isinstance(alignment, int) and not isinstance(alignment, bool) \
+                    and alignment > 0 and alignment & (alignment - 1):
+                errors.append(f"{entry_where}: alignment must be a power of two")
+            if is_event:
+                history = entry.get("history")
+                if not isinstance(history, int) or isinstance(history, bool) or history < 0:
+                    errors.append(f"{entry_where}: history must be a nonnegative integer")
+            if not isinstance(entry.get("safeOverflow"), bool):
+                errors.append(f"{entry_where}: safeOverflow must be boolean")
+            route_limit = route.get("limits", {}).get("maxPayloadSize")
+            sizes = (entry.get("payloadSize"),) if is_event else \
+                    (entry.get("requestPayloadSize"), entry.get("responsePayloadSize"))
+            if isinstance(route_limit, int) and any(
+                    isinstance(value, int) and value > route_limit for value in sizes):
+                errors.append(f"{entry_where}: payload size exceeds route maxPayloadSize")
     return errors
 
 

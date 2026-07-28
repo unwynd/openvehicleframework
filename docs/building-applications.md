@@ -20,8 +20,8 @@ Application code includes only the generated contract and public communication
 API:
 
 ```cpp
-#include "radar_app.ovf.hpp"
-#include "radar_app_deployment.hpp"
+#include "ovf_contract.hpp"
+#include "ovf_deployment.hpp"
 ```
 
 The generated deployment facade loads the selected provider plugin and exposes

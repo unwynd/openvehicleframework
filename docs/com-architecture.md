@@ -15,7 +15,7 @@ Discovery, route selection, and binding runtime
     │
 Versioned C transport ABI
     ├── in-process reference transport
-    ├── iceoryx2 event transport
+    ├── iceoryx2 shared-memory transport
     ├── vSomeIP transport (Linux)
     └── Cyclone DDS transport (planned)
 ```
@@ -79,16 +79,20 @@ file.
 
 - The in-process transport is the reference implementation for discovery,
   events, methods, deadlines, cancellation, and shutdown behavior.
-- The iceoryx2 transport supports native event exchange and provider loans.
-  It does not currently implement discovery or request/response methods.
+- The iceoryx2 transport supports discovery, variable-size events, native
+  publisher/subscriber loans, scatter/gather publication, request/response
+  methods, application errors, deadlines, cancellation, and ordered delivery.
+  Provider availability uses a binding-owned discovery service; application
+  payloads use iceoryx2's native publish/subscribe and request/response
+  messaging patterns.
 - The vSomeIP transport supports discovery, events, and request/response on
   Linux. Its native peer test is platform-gated.
 - A Cyclone DDS transport is planned but is not implemented.
 
-The generated lifecycle is exercised end to end with the in-process provider.
-Provider conformance tests cover lower-level cancellation and teardown
-semantics, while native peer tests cover the capabilities implemented by each
-external middleware.
+The generated lifecycle is exercised end to end with the in-process and
+iceoryx2 providers. The iceoryx2 two-process test uses the same transport-neutral
+radar service and client sources and verifies discovery, methods, application
+errors, field reads, event delivery, and field notifications.
 
 ## Stability boundary
 

@@ -116,5 +116,6 @@ test_suite(
         ":rust_provider_interop_test",
         ":vsomeip_mapping_test",
         "//bazel/tests:all_tests",
+        "//tests/integration/iceoryx2:radar_two_process_test",
     ],
 )

@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_python//python:defs.bzl", "py_test")
+
+package(default_visibility = ["//visibility:public"])
+
+py_test(
+    name = "radar_two_process_test",
+    timeout = "short",
+    srcs = ["radar_two_process_test.py"],
+    data = [
+        "//com/transports/iceoryx2:plugin",
+        "//examples/radar:radar_iceoryx2_client",
+        "//examples/radar:radar_iceoryx2_service",
+    ],
+)

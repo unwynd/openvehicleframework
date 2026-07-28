@@ -10,6 +10,9 @@
 namespace ovf::com::transports::iceoryx2 {
 
 struct Mapping final {
+  enum class Pattern { kPublishSubscribe, kRequestResponse };
+
+  Pattern pattern{Pattern::kPublishSubscribe};
   std::string service;
   std::string type_name;
   std::size_t payload_size{};
@@ -19,10 +22,18 @@ struct Mapping final {
   std::size_t max_publishers{};
   std::size_t max_subscribers{};
   bool safe_overflow{};
+  std::string request_type;
+  std::string response_type;
+  std::size_t request_payload_size{};
+  std::size_t response_payload_size{};
+  std::size_t request_buffer{};
+  std::size_t response_buffer{};
+  std::size_t max_clients{};
+  std::size_t max_servers{};
 };
 
 // Canonical deployment form:
-// service=vehicle/radar/front/objects;type=RadarObjects;payloadSize=4096;
+// pattern=pubsub;service=vehicle/radar/front/objects;type=RadarObjects;payloadSize=4096;
 // alignment=8;history=1;subscriberBuffer=8;maxPublishers=1;
 // maxSubscribers=8;safeOverflow=false
 [[nodiscard]] auto ParseMapping(std::string_view text, Mapping& out, std::string& error) -> bool;

@@ -27,7 +27,9 @@ OvfDeploymentInfo = provider(
 
 def _contract_impl(ctx):
     ir = ctx.actions.declare_file(ctx.attr.output_name + ".ovf-ir.json")
-    header = ctx.actions.declare_file("generated/" + ctx.attr.output_name + ".ovf.hpp")
+    header = ctx.actions.declare_file(
+        "generated/" + ctx.label.name + "/ovf_contract.hpp",
+    )
     metadata = ctx.actions.declare_file(ctx.attr.output_name + ".contract.json")
     arguments = ctx.actions.args()
     arguments.add("contract")
@@ -197,7 +199,7 @@ ovf_deployment = rule(
     outputs = {
         "plan": "%{name}.plan.json",
         "report": "%{name}.validation.json",
-        "header": "generated/%{name}.hpp",
+        "header": "generated/%{name}/ovf_deployment.hpp",
     },
     doc = "Validates deployment and emits the canonical target runtime plan.",
 )
@@ -251,6 +253,7 @@ def ovf_cc_application(
         srcs,
         idl,
         deployment,
+        deployment_namespace = "",
         hdrs = [],
         service = "",
         deps = [],
@@ -274,6 +277,7 @@ def ovf_cc_application(
       srcs: C++ sources owned by the application.
       idl: Smithy files defining the service contract.
       deployment: Deployment model selecting identifiers and profiles.
+      deployment_namespace: Optional stable C++ namespace for deployment functions.
       hdrs: Application-owned headers.
       service: Fully qualified service shape to generate.
       deps: Additional C++ dependencies.
@@ -318,7 +322,7 @@ def ovf_cc_application(
     cc_library(
         name = contract_library,
         hdrs = [":" + contract_header],
-        includes = ["generated"],
+        includes = ["generated/" + contract_rule],
         copts = ["-std=c++20"],
         deps = [Label("//com:api")],
         visibility = visibility,
@@ -326,7 +330,7 @@ def ovf_cc_application(
     deployment_arguments = {
         "name": deployment_rule,
         "contract": ":" + contract_rule,
-        "cpp_namespace": name + "_deployment",
+        "cpp_namespace": deployment_namespace or (name + "_deployment"),
         "deployment": deployment,
         "visibility": ["//visibility:private"],
     }
@@ -336,7 +340,7 @@ def ovf_cc_application(
     cc_library(
         name = name + "_deployment_api",
         hdrs = [":" + deployment_rule],
-        includes = ["generated"],
+        includes = ["generated/" + deployment_rule],
         deps = [Label("//com:api")],
         visibility = ["//visibility:private"],
     )
