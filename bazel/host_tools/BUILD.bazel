@@ -43,3 +43,12 @@ filegroup(
         ":linux_x86_64": ["@smithy_cli_linux_x86_64//:runtime"],
     }),
 )
+
+filegroup(
+    name = "cue",
+    srcs = select({
+        ":darwin_aarch64": ["@cue_cli_darwin_aarch64//:cue"],
+        ":linux_aarch64": ["@cue_cli_linux_aarch64//:cue"],
+        ":linux_x86_64": ["@cue_cli_linux_x86_64//:cue"],
+    }),
+)

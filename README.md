@@ -62,8 +62,8 @@ bazel run //quality:check
 Build the example application and its deterministic target bundle with:
 
 ```sh
-bazel build //examples/radar_app:radar_app
-bazel build //examples/radar_app:radar_app_bundle
+bazel build //examples/radar:radar_inproc_client
+bazel build //examples/radar:radar_inproc_client_bundle
 ```
 
 On Linux, run the generated service/client vSomeIP example as two processes:
@@ -90,7 +90,7 @@ network diagnostics, and exportable root filesystems.
 ## Building an application
 
 The public `ovf_cc_application` Bazel macro accepts application sources,
-headers, Smithy IDL, and deployment configuration:
+headers, Smithy service IDL, and typed CUE deployment intent:
 
 ```starlark
 load("@openvehicleframework//bazel:application.bzl", "ovf_cc_application")
@@ -100,13 +100,16 @@ ovf_cc_application(
     srcs = ["main.cpp"],
     hdrs = ["radar_logic.hpp"],
     idl = ["radar.smithy"],
-    deployment = "radar-deployment.json",
+    deployment = "radar.deployment.cue",
+    platform = "//platform:providers/iceoryx2.cue",
 )
 ```
 
-It creates the application executable, generated contract library, canonical
-IR, deployment plan, validation report, and target bundle. Middleware binaries
-are delivered separately from the application bundle.
+It compiles both authored languages into canonical IR, resolves deployment
+references against the Smithy contract, and creates the application executable,
+generated contract library, deployment plan, validation report, and target
+bundle. Middleware binaries are delivered separately from the application
+bundle.
 
 See [Building applications with Bazel](docs/building-applications.md) for the
 generated targets and shipping boundary.
@@ -122,6 +125,7 @@ docs/           public architecture and application documentation
 examples/       example applications
 integration/    independent consumer build fixture
 lab/            Linux validation image, rootfs export, and debug entry point
+platform/       target provider selection and platform deployment policy
 quality/        formatting, licensing, and repository hygiene gate
 tools/          model compilation, validation, and packaging tools
 ```
@@ -143,6 +147,7 @@ Key transport-related dependencies are retrieved under their own licenses:
 | [iceoryx2](https://github.com/eclipse-iceoryx/iceoryx2) | shared-memory transport | Apache-2.0 OR MIT |
 | [Boost](https://www.boost.org/) | vSomeIP dependency | [Boost Software License 1.0](https://www.boost.org/LICENSE_1_0.txt) |
 | [Buildifier](https://github.com/bazelbuild/buildtools) | Starlark formatting and linting | Apache-2.0 |
+| [CUE](https://cuelang.org/) | Deployment definition and validation | Apache-2.0 |
 
 These dependencies are not relicensed under the project's Apache-2.0 license.
 Future binary distributions must include the license and notice material

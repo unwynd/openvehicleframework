@@ -60,7 +60,10 @@ crate.spec(
     package = "serde_json",
     version = "1.0",
 )
-crate.from_specs()
+crate.from_specs(
+    cargo_lockfile = "//:Cargo.Bazel.lock",
+    lockfile = "//:cargo-bazel-lock.json",
+)
 use_repo(crate, "crates")
 
 llvm = use_extension(
@@ -76,6 +79,7 @@ use_repo(llvm, "llvm_toolchain_llvm", "llvm_toolchain_llvm_llvm")
 
 register_toolchains(
     "@llvm_toolchain_llvm//:all",
+    "@rust_toolchains//:all",
     "//bazel/bindgen:toolchain",
     dev_dependency = True,
 )
@@ -148,5 +152,41 @@ filegroup(name = "runtime", srcs = glob(["**"]))
     strip_prefix = "smithy-cli-linux-aarch64",
     urls = [
         "https://github.com/smithy-lang/smithy/releases/download/1.72.1/smithy-cli-linux-aarch64.zip",
+    ],
+)
+
+http_archive(
+    name = "cue_cli_darwin_aarch64",
+    build_file_content = """
+package(default_visibility = ["//visibility:public"])
+exports_files(["cue"])
+""",
+    sha256 = "a72b0cddb377c52d1b003bed9a335d893b70cd75a182cd5e3fee8bae30ddb6d6",
+    urls = [
+        "https://github.com/cue-lang/cue/releases/download/v0.16.1/cue_v0.16.1_darwin_arm64.tar.gz",
+    ],
+)
+
+http_archive(
+    name = "cue_cli_linux_x86_64",
+    build_file_content = """
+package(default_visibility = ["//visibility:public"])
+exports_files(["cue"])
+""",
+    sha256 = "5d644c1305a2b86504c8dcd2ec829cf5b4999efc2cf51ee375624e0455f774ae",
+    urls = [
+        "https://github.com/cue-lang/cue/releases/download/v0.16.1/cue_v0.16.1_linux_amd64.tar.gz",
+    ],
+)
+
+http_archive(
+    name = "cue_cli_linux_aarch64",
+    build_file_content = """
+package(default_visibility = ["//visibility:public"])
+exports_files(["cue"])
+""",
+    sha256 = "3cc715a9e969f87b93c4fa34cfaef5388b93e96efa20b248e8ad6826abd25a83",
+    urls = [
+        "https://github.com/cue-lang/cue/releases/download/v0.16.1/cue_v0.16.1_linux_arm64.tar.gz",
     ],
 )

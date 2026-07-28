@@ -58,22 +58,29 @@ delivery semantics.
 
 ## Contract and deployment separation
 
-Service models define types, events, methods, fields, errors, and stable UUID
-identities. The generator produces codecs and the typed C++ client/server
-surface. Deployment data separately maps service instances and elements to
-provider-native names, resource limits, and route priorities. Changing a
-deployment mapping does not change the generated application API.
+Smithy service models define types, events, methods, fields, errors, and stable
+UUID identities. The generator produces codecs and the typed C++ client/server
+surface. Application-owned CUE deployment intent defines instances, roles,
+and optional requirements without selecting native identities. Platform-owned
+CUE selects provider profiles and supplies platform policy and extensions. The
+compiler derives provider-native identities, resource mappings, and routes
+from the interface IR, instance declaration, and platform policy.
+
+The deployment compiler resolves shape names to stable IDs and adds the
+contract fingerprint. Application authors never copy those generated
+identities or duplicate deployment intent for each transport. Changing a
+platform policy does not change the generated application API.
 
 The model distinguishes bounded and unbounded data. Providers advertise
 capabilities and resource limits and may reject endpoints that cannot meet a
 deployment. Zero-copy loans remain owned by the provider that created them;
 the runtime does not assume that a loan can cross a transport boundary.
 
-Provider configuration is also a deployment artifact. For example, the
-vSomeIP generator combines validated application plans into its application,
-service, event, event-group, endpoint, routing, and discovery configuration.
-Application authors do not maintain a second provider-specific configuration
-file.
+Provider configuration is a platform artifact. The shared vSomeIP bootstrap
+contains routing and service-discovery settings but no application or service
+inventory. Validated application plans carry their provider mappings and are
+installed independently from middleware. Application authors do not maintain a
+second native middleware configuration.
 
 ## Transport coverage
 

@@ -5,10 +5,21 @@ load("//bazel:application.bzl", "ovf_cc_application")
 package(default_visibility = ["//visibility:public"])
 
 ovf_cc_application(
+    name = "radar_inproc_client",
+    srcs = ["client/main.cpp"],
+    deployment = "client/deployment.cue",
+    deployment_namespace = "radar_client_deployment",
+    idl = ["//contracts/radar:radar.smithy"],
+    platform = "//platform:providers/inproc.cue",
+    tags = ["manual"],
+)
+
+ovf_cc_application(
     name = "radar_service",
     srcs = ["service/main.cpp"],
-    deployment = "deployments/vsomeip/service.json",
+    deployment = "service/deployment.cue",
     idl = ["//contracts/radar:radar.smithy"],
+    platform = "//platform:providers/vsomeip.cue",
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:linux"],
 )
@@ -16,26 +27,29 @@ ovf_cc_application(
 ovf_cc_application(
     name = "radar_iceoryx2_service",
     srcs = ["service/main.cpp"],
-    deployment = "deployments/iceoryx2/service.json",
+    deployment = "service/deployment.cue",
     deployment_namespace = "radar_service_deployment",
     idl = ["//contracts/radar:radar.smithy"],
+    platform = "//platform:providers/iceoryx2.cue",
     tags = ["manual"],
 )
 
 ovf_cc_application(
     name = "radar_iceoryx2_client",
     srcs = ["client/main.cpp"],
-    deployment = "deployments/iceoryx2/client.json",
+    deployment = "client/deployment.cue",
     deployment_namespace = "radar_client_deployment",
     idl = ["//contracts/radar:radar.smithy"],
+    platform = "//platform:providers/iceoryx2.cue",
     tags = ["manual"],
 )
 
 ovf_cc_application(
     name = "radar_client",
     srcs = ["client/main.cpp"],
-    deployment = "deployments/vsomeip/client.json",
+    deployment = "client/deployment.cue",
     idl = ["//contracts/radar:radar.smithy"],
+    platform = "//platform:providers/vsomeip.cue",
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:linux"],
 )

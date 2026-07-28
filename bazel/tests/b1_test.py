@@ -5,9 +5,17 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
+
+from tools.validate_deployment import (
+    make_plan,
+    read,
+    resolve_deployment,
+    validate_deployment as validate_deployment_model,
+)
 
 
 def workspace() -> Path:
@@ -33,18 +41,55 @@ def validate_ir(root: Path, arguments: list[str]) -> None:
 
 def validate_deployment(root: Path, arguments: list[str]) -> None:
     expected = int(arguments[0])
-    deployment = arguments[1]
-    run(
+    deployment = compile_deployment(
+        root,
+        root / arguments[1],
+        root / arguments[2],
+    )
+    errors = validate_deployment_model(
+        read(root / "com/model/examples/radar.ovf-ir.json"),
+        deployment,
+        root / "com/deployment/profiles",
+    )
+    actual = 1 if errors else 0
+    if actual != expected:
+        raise SystemExit(
+            f"expected deployment validation exit {expected}, received {actual}: "
+            + "\n".join(errors)
+        )
+
+
+def compile_deployment(
+    root: Path, source: Path, platform: Path
+) -> dict:
+    cue_candidates = sorted(Path(os.environ["TEST_SRCDIR"]).glob("*cue_cli*/cue"))
+    if len(cue_candidates) != 1:
+        raise SystemExit(f"expected one hermetic CUE binary, found {cue_candidates}")
+    environment = dict(os.environ)
+    environment["CUE_CACHE_DIR"] = os.environ["TEST_TMPDIR"]
+    environment["CUE_CONFIG_DIR"] = os.environ["TEST_TMPDIR"]
+    completed = subprocess.run(
         [
-            str(root / "tools/validate_deployment"),
-            "--contract",
-            str(root / "com/model/examples/radar.ovf-ir.json"),
-            "--deployment",
-            str(root / "com/deployment/examples" / deployment),
-            "--profiles",
-            str(root / "com/deployment/profiles"),
+            str(cue_candidates[0]),
+            "export",
+            str(root / "com/deployment/schema/deployment.cue"),
+            str(source),
+            str(platform),
+            "--expression",
+            "model",
+            "--out",
+            "json",
         ],
-        expected,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    if completed.returncode:
+        raise SystemExit(f"CUE deployment compilation failed:\n{completed.stderr}")
+    return resolve_deployment(
+        read(root / "com/model/examples/radar.ovf-ir.json"),
+        json.loads(completed.stdout),
     )
 
 
@@ -58,20 +103,22 @@ def reproducible(root: Path, arguments: list[str]) -> None:
             "--output",
         ]
     elif arguments[0] == "plan":
-        base = [
-            str(root / "tools/validate_deployment"),
-            "--contract",
-            str(root / "com/model/examples/radar.ovf-ir.json"),
-            "--deployment",
-            str(root / "com/deployment/examples" / arguments[1]),
-            "--profiles",
-            str(root / "com/deployment/profiles"),
-            "--output-plan",
-        ]
+        source = root / arguments[1]
+        platform = root / arguments[2]
+        for output in (first, second):
+            deployment = compile_deployment(root, source, platform)
+            encoded = json.dumps(
+                make_plan(deployment, root / "com/deployment/profiles"),
+                sort_keys=True,
+                indent=2,
+            ) + "\n"
+            output.write_text(encoded, encoding="utf-8")
+        base = None
     else:
         raise SystemExit(f"unknown reproducibility mode: {arguments[0]}")
-    run([*base, str(first)])
-    run([*base, str(second)])
+    if base is not None:
+        run([*base, str(first)])
+        run([*base, str(second)])
     if first.read_bytes() != second.read_bytes():
         raise SystemExit("repeated generation produced different bytes")
 

@@ -22,6 +22,7 @@ py_test(
         "//tools:validate_ir",
     ],
     main = "b1_test.py",
+    deps = ["//tools:build_lib"],
 )
 
 py_test(
@@ -45,6 +46,7 @@ py_test(
         "//tools:validate_ir",
     ],
     main = "b1_test.py",
+    deps = ["//tools:build_lib"],
 )
 
 py_test(
@@ -68,6 +70,7 @@ py_test(
         "//tools:validate_ir",
     ],
     main = "b1_test.py",
+    deps = ["//tools:build_lib"],
 )
 
 py_test(
@@ -81,18 +84,24 @@ py_test(
     args = [
         "deployment",
         "0",
-        "radar-inproc.json",
+        "examples/radar/client/deployment.cue",
+        "platform/providers/inproc.cue",
     ],
     data = [
-        "//com/deployment:all_inputs",
+        "//bazel/host_tools:cue",
+        "//com/deployment/profiles:all_profiles",
+        "//com/deployment/schema:deployment.cue",
         "//com/model/examples:radar_ir",
+        "//examples/radar:client/deployment.cue",
+        "//platform:providers/inproc.cue",
         "//tools:validate_deployment",
     ],
     main = "b1_test.py",
+    deps = ["//tools:build_lib"],
 )
 
 py_test(
-    name = "deployment_multitransport",
+    name = "deployment_generated_routes",
     srcs = [
         "__init__.py",
         "b1_test.py",
@@ -102,14 +111,18 @@ py_test(
     args = [
         "deployment",
         "0",
-        "radar-multitransport.json",
+        "com/deployment/testdata/provider-consumer.cue",
+        "platform/providers/vsomeip.cue",
     ],
     data = [
+        "//bazel/host_tools:cue",
         "//com/deployment:all_inputs",
         "//com/model/examples:radar_ir",
+        "//platform:providers/vsomeip.cue",
         "//tools:validate_deployment",
     ],
     main = "b1_test.py",
+    deps = ["//tools:build_lib"],
 )
 
 py_test(
@@ -123,14 +136,20 @@ py_test(
     args = [
         "deployment",
         "0",
-        "radar-vsomeip.json",
+        "examples/radar/service/deployment.cue",
+        "platform/providers/vsomeip.cue",
     ],
     data = [
-        "//com/deployment:all_inputs",
+        "//bazel/host_tools:cue",
+        "//com/deployment/profiles:all_profiles",
+        "//com/deployment/schema:deployment.cue",
         "//com/model/examples:radar_ir",
+        "//examples/radar:service/deployment.cue",
+        "//platform:providers/vsomeip.cue",
         "//tools:validate_deployment",
     ],
     main = "b1_test.py",
+    deps = ["//tools:build_lib"],
 )
 
 py_test(
@@ -144,14 +163,20 @@ py_test(
     args = [
         "deployment",
         "0",
-        "radar-iceoryx2.json",
+        "examples/radar/service/deployment.cue",
+        "platform/providers/iceoryx2.cue",
     ],
     data = [
-        "//com/deployment:all_inputs",
+        "//bazel/host_tools:cue",
+        "//com/deployment/profiles:all_profiles",
+        "//com/deployment/schema:deployment.cue",
         "//com/model/examples:radar_ir",
+        "//examples/radar:service/deployment.cue",
+        "//platform:providers/iceoryx2.cue",
         "//tools:validate_deployment",
     ],
     main = "b1_test.py",
+    deps = ["//tools:build_lib"],
 )
 
 py_test(
@@ -165,14 +190,18 @@ py_test(
     args = [
         "deployment",
         "1",
-        "radar-invalid-capabilities.json",
+        "com/deployment/testdata/capability-mismatch.cue",
+        "platform/providers/cyclonedds.cue",
     ],
     data = [
+        "//bazel/host_tools:cue",
         "//com/deployment:all_inputs",
         "//com/model/examples:radar_ir",
+        "//platform:providers/cyclonedds.cue",
         "//tools:validate_deployment",
     ],
     main = "b1_test.py",
+    deps = ["//tools:build_lib"],
 )
 
 py_test(
@@ -186,18 +215,24 @@ py_test(
     args = [
         "reproducible",
         "plan",
-        "radar-inproc.json",
+        "examples/radar/client/deployment.cue",
+        "platform/providers/inproc.cue",
     ],
     data = [
-        "//com/deployment:all_inputs",
+        "//bazel/host_tools:cue",
+        "//com/deployment/profiles:all_profiles",
+        "//com/deployment/schema:deployment.cue",
         "//com/model/examples:radar_ir",
+        "//examples/radar:client/deployment.cue",
+        "//platform:providers/inproc.cue",
         "//tools:validate_deployment",
     ],
     main = "b1_test.py",
+    deps = ["//tools:build_lib"],
 )
 
 py_test(
-    name = "plan_multitransport_reproducible",
+    name = "plan_generated_routes_reproducible",
     srcs = [
         "__init__.py",
         "b1_test.py",
@@ -207,14 +242,18 @@ py_test(
     args = [
         "reproducible",
         "plan",
-        "radar-multitransport.json",
+        "com/deployment/testdata/provider-consumer.cue",
+        "platform/providers/vsomeip.cue",
     ],
     data = [
+        "//bazel/host_tools:cue",
         "//com/deployment:all_inputs",
         "//com/model/examples:radar_ir",
+        "//platform:providers/vsomeip.cue",
         "//tools:validate_deployment",
     ],
     main = "b1_test.py",
+    deps = ["//tools:build_lib"],
 )
 
 py_test(
@@ -234,6 +273,7 @@ py_test(
         "//com/model/examples:radar_ir",
     ],
     main = "b1_test.py",
+    deps = ["//tools:build_lib"],
 )
 
 genrule(
@@ -281,6 +321,7 @@ py_test(
         "//tools:compare_ir",
     ],
     main = "b1_test.py",
+    deps = ["//tools:build_lib"],
 )
 
 py_test(
@@ -291,7 +332,7 @@ py_test(
         "//:__init__.py",
         "//bazel:__init__.py",
     ],
-    data = ["//examples/radar_app:radar_app_bundle"],
+    data = ["//examples/radar:radar_inproc_client_bundle"],
     main = "application_bundle_test.py",
 )
 
@@ -299,17 +340,17 @@ test_suite(
     name = "all_tests",
     tests = [
         ":application_bundle",
+        ":deployment_generated_routes",
         ":deployment_iceoryx2",
         ":deployment_inproc",
         ":deployment_invalid_rejected",
-        ":deployment_multitransport",
         ":deployment_vsomeip",
         ":generation_reproducible",
         ":ir_additive_compatible",
         ":ir_breaking_rejected",
         ":ir_valid",
+        ":plan_generated_routes_reproducible",
         ":plan_inproc_reproducible",
-        ":plan_multitransport_reproducible",
         ":smithy_ir_equivalence",
     ],
 )

@@ -1,7 +1,7 @@
 # Building applications with Bazel
 
 Applications use the public `ovf_cc_application` macro. The application owns
-its source, private headers, contract IDL and deployment intent; the framework
+its source, private headers, Smithy contract IDL and CUE deployment intent; the framework
 owns the hermetic compilers and generated-artifact contract.
 
 ```starlark
@@ -12,7 +12,8 @@ ovf_cc_application(
     srcs = ["main.cpp"],
     hdrs = ["radar_logic.hpp"],
     idl = ["radar.smithy"],
-    deployment = "radar-deployment.json",
+    deployment = "radar.deployment.cue",
+    platform = "//platform:providers/vsomeip.cue",
 )
 ```
 
@@ -38,6 +39,7 @@ For an application named `radar_app`, the macro creates:
 | `:radar_app_contract` | Generated C++ contract library |
 | `:radar_app_contract_ir` | Canonical IR JSON |
 | `:radar_app_contract_metadata` | Contract fingerprint and generation metadata |
+| `:radar_app_deployment_ir` | Resolved canonical deployment JSON |
 | `:radar_app_deployment_api` | Generated transport-neutral runtime and route facade |
 | `:radar_app_artifacts` | IDL, headers, generated code, IR, deployment plan and validation report |
 | `:radar_app_bundle` | Deterministic target tar containing the application and target configuration |
@@ -74,6 +76,37 @@ delivery is a separate artifact:
 The application is linked against `libovf_com` dynamically. Transport
 implementations remain behind the versioned provider ABI and are selected by
 the validated deployment plan, not by application dependencies or includes.
+
+## Deployment source ownership
+
+Authored CUE deployment intent lives with the application that consumes it:
+
+```text
+examples/<application>/<role>/deployment.cue
+platform/providers/<provider>.cue
+```
+
+Smithy defines the communication contract. Application-owned CUE names the
+interface and logical instance and declares the provider or consumer role.
+Platform-owned CUE selects the communication implementation and supplies
+platform policy and extensions. The compiler generates provider-native names,
+identifiers, resource mappings, stable instance identity, and the canonical
+deployment plan. `contracts/` contains only interface definitions and
+associated interface build metadata.
+
+CUE sources reference qualified Smithy shape names. The compiler resolves
+stable service and element IDs and injects the contract fingerprint. Native
+transport mappings are generated and are never authored or duplicated by
+applications.
+
+These files are the canonical executable examples and are used directly by
+their Bazel application targets and deployment tests. `com/deployment` contains
+only provider profiles, schemas, and focused validator test data. It does not
+contain a second copy of application deployments.
+
+Resolved deployment JSON, canonical plan JSON, validation reports, generated
+C++ facades, and native mapping strings are build outputs. They are not authored
+or committed.
 
 ## Public lower-level rules
 

@@ -11,9 +11,11 @@ separate processes. It demonstrates:
 
 The application sources use only the generated service API and the generated
 deployment facade. Provider loading, native identifiers, and routes are
-derived from the validated deployment files. The vSomeIP routing and
-discovery bootstrap is a separate platform artifact and contains no
-application or service inventory.
+generated from the interface, the client or service instance declaration, and
+the platform-owned vSomeIP selection. The same declaration is used for
+iceoryx2; no native transport binding is authored by the application. The
+vSomeIP routing and discovery bootstrap is a separate platform artifact and
+contains no application or service inventory.
 
 ## Automated two-process run
 

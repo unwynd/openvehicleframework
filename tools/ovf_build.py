@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -20,6 +21,7 @@ from tools.validate_deployment import (
     deployment_fingerprint,
     make_plan,
     read,
+    resolve_deployment,
     validate_deployment,
 )
 from tools.validate_ir import fingerprint
@@ -74,7 +76,34 @@ def compile_contract(args: argparse.Namespace) -> int:
 
 def compile_deployment(args: argparse.Namespace) -> int:
     contract = read(args.contract)
-    deployment = read(args.deployment)
+    with tempfile.TemporaryDirectory(prefix="ovf-cue-") as cue_cache:
+        environment = dict(os.environ)
+        environment["CUE_CACHE_DIR"] = cue_cache
+        environment["CUE_CONFIG_DIR"] = cue_cache
+        cue_arguments = [
+            str(args.cue.resolve()),
+            "export",
+            str(args.schema.resolve()),
+            str(args.deployment.resolve()),
+            str(args.platform.resolve()),
+            "--expression",
+            "model",
+            "--out",
+            "json",
+        ]
+        completed = subprocess.run(
+            cue_arguments,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+    model = json.loads(completed.stdout)
+    deployment = resolve_deployment(contract, model)
+    write_if_changed(
+        args.deployment_ir,
+        json.dumps(deployment, sort_keys=True, indent=2) + "\n",
+    )
     with tempfile.TemporaryDirectory(prefix="ovf-profiles-") as temporary:
         profiles = Path(temporary)
         for profile in args.profile:
@@ -276,8 +305,12 @@ def parser() -> argparse.ArgumentParser:
     contract.set_defaults(run=compile_contract)
 
     deployment = commands.add_parser("deployment")
+    deployment.add_argument("--cue", required=True, type=Path)
+    deployment.add_argument("--schema", required=True, type=Path)
     deployment.add_argument("--contract", required=True, type=Path)
     deployment.add_argument("--deployment", required=True, type=Path)
+    deployment.add_argument("--platform", required=True, type=Path)
+    deployment.add_argument("--deployment-ir", required=True, type=Path)
     deployment.add_argument("--profile", required=True, action="append", type=Path)
     deployment.add_argument("--plan", required=True, type=Path)
     deployment.add_argument("--report", required=True, type=Path)

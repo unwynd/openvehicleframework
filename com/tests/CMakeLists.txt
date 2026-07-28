@@ -58,48 +58,6 @@ if(OVF_RUSTC)
 endif()
 
 set(OVF_RADAR_IR ${CMAKE_SOURCE_DIR}/com/model/examples/radar.ovf-ir.json)
-set(OVF_GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
-
-set(OVF_DEPLOYMENT_TOOL tools.validate_deployment)
-set(OVF_DEPLOYMENT_TOOL_SOURCE ${CMAKE_SOURCE_DIR}/tools/validate_deployment.py)
-set(OVF_DEPLOYMENT_PROFILES ${CMAKE_SOURCE_DIR}/com/deployment/profiles)
-foreach(OVF_VALID_DEPLOYMENT IN ITEMS radar-inproc radar-multitransport radar-iceoryx2)
-    string(REPLACE "-" "_" OVF_PLAN_TARGET ${OVF_VALID_DEPLOYMENT})
-    set(OVF_PLAN ${OVF_GENERATED_DIR}/${OVF_VALID_DEPLOYMENT}.plan.json)
-    set(OVF_PLAN_REPEAT ${OVF_GENERATED_DIR}/${OVF_VALID_DEPLOYMENT}.plan-repeat.json)
-    add_custom_command(OUTPUT ${OVF_PLAN} ${OVF_PLAN_REPEAT}
-        COMMAND ${Python3_EXECUTABLE} -m ${OVF_DEPLOYMENT_TOOL}
-            --contract ${OVF_RADAR_IR}
-            --deployment ${CMAKE_SOURCE_DIR}/com/deployment/examples/${OVF_VALID_DEPLOYMENT}.json
-            --profiles ${OVF_DEPLOYMENT_PROFILES} --output-plan ${OVF_PLAN}
-        COMMAND ${Python3_EXECUTABLE} -m ${OVF_DEPLOYMENT_TOOL}
-            --contract ${OVF_RADAR_IR}
-            --deployment ${CMAKE_SOURCE_DIR}/com/deployment/examples/${OVF_VALID_DEPLOYMENT}.json
-            --profiles ${OVF_DEPLOYMENT_PROFILES} --output-plan ${OVF_PLAN_REPEAT}
-        DEPENDS ${OVF_DEPLOYMENT_TOOL_SOURCE} ${OVF_RADAR_IR}
-            ${CMAKE_SOURCE_DIR}/com/deployment/examples/${OVF_VALID_DEPLOYMENT}.json
-            ${CMAKE_SOURCE_DIR}/com/deployment/profiles/inproc.json
-            ${CMAKE_SOURCE_DIR}/com/deployment/profiles/cyclonedds.json
-            ${CMAKE_SOURCE_DIR}/com/deployment/profiles/iceoryx2.json
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        VERBATIM)
-    add_custom_target(ovf_com_d3_plan_${OVF_PLAN_TARGET} ALL DEPENDS ${OVF_PLAN} ${OVF_PLAN_REPEAT})
-    add_test(NAME ovf_com_d3_deployment_${OVF_VALID_DEPLOYMENT}
-        COMMAND ${Python3_EXECUTABLE} -m ${OVF_DEPLOYMENT_TOOL}
-            --contract ${OVF_RADAR_IR}
-            --deployment ${CMAKE_SOURCE_DIR}/com/deployment/examples/${OVF_VALID_DEPLOYMENT}.json
-            --profiles ${OVF_DEPLOYMENT_PROFILES}
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-    add_test(NAME ovf_com_d3_plan_reproducible_${OVF_VALID_DEPLOYMENT}
-        COMMAND ${CMAKE_COMMAND} -E compare_files ${OVF_PLAN} ${OVF_PLAN_REPEAT})
-endforeach()
-add_test(NAME ovf_com_d3_invalid_capabilities_rejected
-    COMMAND ${Python3_EXECUTABLE} -m ${OVF_DEPLOYMENT_TOOL}
-        --contract ${OVF_RADAR_IR}
-        --deployment ${CMAKE_SOURCE_DIR}/com/deployment/examples/radar-invalid-capabilities.json
-        --profiles ${OVF_DEPLOYMENT_PROFILES}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-set_tests_properties(ovf_com_d3_invalid_capabilities_rejected PROPERTIES WILL_FAIL TRUE)
 set(OVF_SMITHY_EXECUTABLE "" CACHE FILEPATH "Path to the pinned Smithy CLI")
 if(NOT OVF_SMITHY_EXECUTABLE)
     find_program(OVF_SMITHY_EXECUTABLE smithy)

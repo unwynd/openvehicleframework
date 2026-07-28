@@ -17,7 +17,8 @@ OvfContractInfo = provider(
 OvfDeploymentInfo = provider(
     doc = "Validated target deployment artifacts.",
     fields = {
-        "source": "Authored deployment input.",
+        "source": "Authored CUE deployment input.",
+        "ir": "Resolved canonical deployment JSON.",
         "plan": "Canonical target runtime plan.",
         "report": "Validation report.",
         "header": "Generated transport-neutral deployment facade.",
@@ -115,8 +116,12 @@ def _deployment_impl(ctx):
     contract = ctx.attr.contract[OvfContractInfo]
     arguments = ctx.actions.args()
     arguments.add("deployment")
+    arguments.add("--cue", ctx.file._cue)
+    arguments.add("--schema", ctx.file._deployment_schema)
     arguments.add("--contract", contract.ir)
     arguments.add("--deployment", ctx.file.deployment)
+    arguments.add("--platform", ctx.file.platform)
+    arguments.add("--deployment-ir", ctx.outputs.deployment_ir)
     for profile in ctx.files.profiles:
         arguments.add("--profile", profile)
     arguments.add("--plan", ctx.outputs.plan)
@@ -125,9 +130,15 @@ def _deployment_impl(ctx):
         executable = ctx.executable._builder,
         arguments = [arguments],
         inputs = depset(
-            [contract.ir, ctx.file.deployment] + ctx.files.profiles,
+            [
+                contract.ir,
+                ctx.file.deployment,
+                ctx.file.platform,
+                ctx.file._deployment_schema,
+            ] + ctx.files.profiles,
         ),
-        outputs = [ctx.outputs.plan, ctx.outputs.report],
+        tools = [ctx.file._cue],
+        outputs = [ctx.outputs.deployment_ir, ctx.outputs.plan, ctx.outputs.report],
         mnemonic = "OvfDeploymentCompile",
         progress_message = "Validating OVF deployment %{label}",
     )
@@ -149,16 +160,23 @@ def _deployment_impl(ctx):
     )
     info = OvfDeploymentInfo(
         source = ctx.file.deployment,
+        ir = ctx.outputs.deployment_ir,
         plan = ctx.outputs.plan,
         report = ctx.outputs.report,
         header = ctx.outputs.header,
         contract = contract,
     )
     return [
-        DefaultInfo(files = depset([ctx.outputs.plan, ctx.outputs.report, ctx.outputs.header])),
+        DefaultInfo(files = depset([
+            ctx.outputs.deployment_ir,
+            ctx.outputs.plan,
+            ctx.outputs.report,
+            ctx.outputs.header,
+        ])),
         info,
         OutputGroupInfo(
             header = depset([ctx.outputs.header]),
+            ir = depset([ctx.outputs.deployment_ir]),
             plan = depset([ctx.outputs.plan]),
             report = depset([ctx.outputs.report]),
         ),
@@ -174,7 +192,12 @@ ovf_deployment = rule(
         "cpp_namespace": attr.string(mandatory = True),
         "deployment": attr.label(
             mandatory = True,
-            allow_single_file = [".json"],
+            allow_single_file = [".cue"],
+        ),
+        "platform": attr.label(
+            mandatory = True,
+            allow_single_file = [".cue"],
+            doc = "Platform provider policy composed with deployment intent.",
         ),
         "profiles": attr.label_list(
             allow_files = [".json"],
@@ -190,6 +213,15 @@ ovf_deployment = rule(
             executable = True,
             cfg = "exec",
         ),
+        "_cue": attr.label(
+            default = Label("//bazel/host_tools:cue"),
+            allow_single_file = True,
+            cfg = "exec",
+        ),
+        "_deployment_schema": attr.label(
+            default = Label("//com/deployment/schema:deployment.cue"),
+            allow_single_file = True,
+        ),
         "_codegen": attr.label(
             default = Label("//codegen:ovf_codegen"),
             executable = True,
@@ -197,6 +229,7 @@ ovf_deployment = rule(
         ),
     },
     outputs = {
+        "deployment_ir": "%{name}.ovf-deployment.json",
         "plan": "%{name}.plan.json",
         "report": "%{name}.validation.json",
         "header": "generated/%{name}/ovf_deployment.hpp",
@@ -212,7 +245,7 @@ def _application_package_impl(ctx):
     arguments.add("--name", ctx.attr.application_name)
     arguments.add("--executable", ctx.executable.application)
     arguments.add("--contract", deployment.contract.ir)
-    arguments.add("--deployment", deployment.source)
+    arguments.add("--deployment", deployment.ir)
     arguments.add("--plan", deployment.plan)
     arguments.add("--report", deployment.report)
     arguments.add("--output", output)
@@ -222,7 +255,7 @@ def _application_package_impl(ctx):
         inputs = depset([
             ctx.executable.application,
             deployment.contract.ir,
-            deployment.source,
+            deployment.ir,
             deployment.plan,
             deployment.report,
         ]),
@@ -253,6 +286,7 @@ def ovf_cc_application(
         srcs,
         idl,
         deployment,
+        platform,
         deployment_namespace = "",
         hdrs = [],
         service = "",
@@ -277,6 +311,7 @@ def ovf_cc_application(
       srcs: C++ sources owned by the application.
       idl: Smithy files defining the service contract.
       deployment: Deployment model selecting identifiers and profiles.
+      platform: Platform provider policy.
       deployment_namespace: Optional stable C++ namespace for deployment functions.
       hdrs: Application-owned headers.
       service: Fully qualified service shape to generate.
@@ -295,6 +330,7 @@ def ovf_cc_application(
     contract_metadata = name + "_contract_metadata"
     contract_library = name + "_contract"
     deployment_rule = name + "_deployment"
+    deployment_ir = name + "_deployment_ir"
 
     ovf_contract(
         name = contract_rule,
@@ -332,11 +368,18 @@ def ovf_cc_application(
         "contract": ":" + contract_rule,
         "cpp_namespace": deployment_namespace or (name + "_deployment"),
         "deployment": deployment,
+        "platform": platform,
         "visibility": ["//visibility:private"],
     }
     if profiles != None:
         deployment_arguments["profiles"] = profiles
     ovf_deployment(**deployment_arguments)
+    native.filegroup(
+        name = deployment_ir,
+        srcs = [":" + deployment_rule],
+        output_group = "ir",
+        visibility = visibility,
+    )
     cc_library(
         name = name + "_deployment_api",
         hdrs = [":" + deployment_rule],
@@ -362,6 +405,7 @@ def ovf_cc_application(
             ":" + contract_rule,
             ":" + deployment_rule,
             deployment,
+            platform,
         ] + idl + hdrs,
         visibility = visibility,
     )

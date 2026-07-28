@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#include "separate_radar_app.ovf.hpp"
+#include "ovf_contract.hpp"
 
 #include "ovf/com/runtime.hpp"
 

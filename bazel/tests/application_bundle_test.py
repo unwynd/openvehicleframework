@@ -13,22 +13,24 @@ import tarfile
 
 def main() -> None:
     root = Path(os.environ["TEST_SRCDIR"]) / "_main"
-    bundle = root / "examples/radar_app/radar_app_bundle.tar"
+    bundle = root / "examples/radar/radar_inproc_client_bundle.tar"
     with tarfile.open(bundle) as archive:
         expected = [
-            "bin/radar_app",
-            "etc/ovf/radar_app/deployment.json",
-            "etc/ovf/radar_app/plan.json",
-            "share/ovf/radar_app/contract.ovf-ir.json",
-            "share/ovf/radar_app/deployment-validation.json",
-            "share/ovf/radar_app/manifest.json",
+            "bin/radar_inproc_client",
+            "etc/ovf/radar_inproc_client/deployment.json",
+            "etc/ovf/radar_inproc_client/plan.json",
+            "share/ovf/radar_inproc_client/contract.ovf-ir.json",
+            "share/ovf/radar_inproc_client/deployment-validation.json",
+            "share/ovf/radar_inproc_client/manifest.json",
         ]
         if archive.getnames() != expected:
             raise SystemExit(f"unexpected application bundle: {archive.getnames()}")
         for member in archive.getmembers():
             if member.mtime != 0 or member.uid != 0 or member.gid != 0:
                 raise SystemExit(f"non-reproducible tar metadata: {member.name}")
-        manifest_source = archive.extractfile("share/ovf/radar_app/manifest.json")
+        manifest_source = archive.extractfile(
+            "share/ovf/radar_inproc_client/manifest.json"
+        )
         if manifest_source is None:
             raise SystemExit("application manifest is missing")
         manifest = json.load(manifest_source)

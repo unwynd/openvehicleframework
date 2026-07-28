@@ -3,10 +3,12 @@
 filegroup(
     name = "all_inputs",
     srcs = glob([
-        "examples/*.json",
-        "schema/*.json",
-    ]) + ["//com/deployment/profiles:all_profiles"],
+        "testdata/*.cue",
+    ]) + [
+        "//com/deployment/profiles:all_profiles",
+        "//com/deployment/schema:deployment.cue",
+    ],
     visibility = ["//visibility:public"],
 )
 
-exports_files(glob(["examples/*.json"]))
+exports_files(glob(["testdata/*.cue"]))

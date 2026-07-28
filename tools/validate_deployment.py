@@ -25,6 +25,211 @@ def deployment_fingerprint(value: dict) -> str:
     return hashlib.sha256(encoded.encode()).hexdigest()
 
 
+_INSTANCE_NAMESPACE = uuid.UUID("91ec7c75-b53f-4b0c-a51c-876eea485f71")
+
+
+def _wire_id(value: str, lower: int, upper: int) -> int:
+    digest = hashlib.sha256(value.encode()).digest()
+    return lower + int.from_bytes(digest[:8], "big") % (upper - lower + 1)
+
+
+def _route_features(role: str, profile: str) -> list[str]:
+    common = ["events", "methods", "reliable", "ordered", "deadlines", "cancellation"]
+    if role == "consumer":
+        common.insert(0, "discovery")
+    if profile == "iceoryx2":
+        common.extend(["loans", "scatterGather"])
+    return common
+
+
+def _route_limits(profile: str) -> dict:
+    return {
+        "maxPayloadSize": 4096 if profile == "iceoryx2" else 65536,
+        "maxHistoryDepth": 1 if profile in {"iceoryx2", "vsomeip"} else 8,
+        "maxOutstandingOperations": 16,
+        "maxEndpoints": 8,
+    }
+
+
+def _iceoryx2_event(element: dict) -> dict:
+    return {
+        "name": element["name"],
+        "type": element.get("payload", element.get("value")),
+        "payloadSize": 4096,
+        "alignment": 8,
+        "history": 1,
+        "subscriberBuffer": 8,
+        "maxPublishers": 2,
+        "maxSubscribers": 8,
+        "safeOverflow": False,
+    }
+
+
+def _iceoryx2_method(name: str, request_type: str, response_type: str) -> dict:
+    return {
+        "name": name,
+        "requestType": request_type,
+        "responseType": response_type,
+        "requestPayloadSize": 4096,
+        "responsePayloadSize": 4096,
+        "alignment": 8,
+        "requestBuffer": 16,
+        "responseBuffer": 8,
+        "maxClients": 8,
+        "maxServers": 1,
+        "safeOverflow": False,
+    }
+
+
+def _generated_mappings(service: dict, instance_name: str, profile: str) -> dict:
+    if profile in {"inproc", "cyclonedds"}:
+        elements = {
+            element["id"]: element["name"]
+            for kind in ("events", "methods", "fields")
+            for element in service[kind]
+        }
+        return {"service": service["name"], "instance": instance_name, "elements": elements}
+    if profile == "iceoryx2":
+        elements = {
+            element["id"]: _iceoryx2_event(element) for element in service["events"]
+        }
+        elements.update({
+            element["id"]: _iceoryx2_method(
+                element["name"], element["input"], element["output"]
+            )
+            for element in service["methods"]
+        })
+        for field in service["fields"]:
+            operations = {}
+            if field["readable"]:
+                operations["get"] = _iceoryx2_method(
+                    f"{field['name']}-get", "Empty", field["value"]
+                )
+            if field["writable"]:
+                operations["set"] = _iceoryx2_method(
+                    f"{field['name']}-set", field["value"], "Empty"
+                )
+            if field["notifiable"]:
+                operations["notify"] = _iceoryx2_event(field)
+            elements[field["id"]] = operations
+        return {
+            "service": service["name"],
+            "instance": instance_name,
+            "elements": elements,
+        }
+    if profile == "vsomeip":
+        elements = {}
+        for element in service["events"]:
+            elements[element["id"]] = {
+                "id": _wire_id(element["id"] + ":event", 0x8001, 0xFFFE),
+                "eventGroup": _wire_id(element["id"] + ":group", 1, 0xFFFE),
+                "major": 1,
+                "minor": 0,
+                "kind": "event",
+                "reliable": True,
+            }
+        for element in service["methods"]:
+            elements[element["id"]] = {
+                "id": _wire_id(element["id"] + ":method", 1, 0x7FFE),
+                "eventGroup": 0,
+                "major": 1,
+                "minor": 0,
+                "kind": "method",
+                "reliable": True,
+            }
+        for field in service["fields"]:
+            operations = {}
+            for operation, kind, notification in (
+                ("get", "fieldGet", False),
+                ("set", "fieldSet", False),
+                ("notify", "fieldNotify", True),
+            ):
+                enabled = field[{"get": "readable", "set": "writable",
+                                 "notify": "notifiable"}[operation]]
+                if not enabled:
+                    continue
+                operations[operation] = {
+                    "id": _wire_id(
+                        field["id"] + ":" + operation,
+                        0x8001 if notification else 1,
+                        0xFFFE if notification else 0x7FFE,
+                    ),
+                    "eventGroup": (
+                        _wire_id(field["id"] + ":group", 1, 0xFFFE)
+                        if notification else 0
+                    ),
+                    "major": 1,
+                    "minor": 0,
+                    "kind": kind,
+                    "reliable": True,
+                }
+            elements[field["id"]] = operations
+        return {
+            "service": _wire_id(service["id"], 1, 0xFFFE),
+            "instance": _wire_id(service["id"] + ":" + instance_name, 1, 0xFFFE),
+            "elements": elements,
+        }
+    raise ValueError(f"unsupported generated mapping profile {profile}")
+
+
+def resolve_deployment(contract: dict, model: dict) -> dict:
+    """Generate a canonical deployment from app intent and platform policy."""
+    intent, platform = model["deployment"], model["platform"]
+    namespace = contract["namespace"]
+    services = {
+        f"{namespace}#{service['name']}": service for service in contract["services"]
+    }
+    instances = []
+    if any(instance["transport"] != platform["transport"]
+           for instance in intent["instances"]):
+        raise ValueError("application transport does not match selected platform provider")
+    for instance in intent["instances"]:
+        service_name = instance["interface"]
+        service = services.get(service_name)
+        if service is None:
+            raise ValueError(f"deployment references unknown service shape {service_name}")
+        requirements = instance.get("requirements", {})
+        features = requirements.get(
+            "features", _route_features(instance["role"], platform["profile"])
+        )
+        limits = _route_limits(platform["profile"])
+        limits.update(requirements.get("limits", {}))
+        route = {
+            "provider": platform["provider"],
+            "role": instance["role"],
+            "required": platform["required"],
+            "requiredFeatures": features,
+            "limits": limits,
+            "mappings": _generated_mappings(
+                service, instance["instance"], platform["profile"]
+            ),
+        }
+        if instance["role"] == "consumer":
+            route["priority"] = 0
+        instance_id = str(uuid.uuid5(
+            _INSTANCE_NAMESPACE, f"{service_name}:{instance['instance']}"
+        ))
+        resolved_instance = {
+            "instanceId": instance_id,
+            "alias": instance["instance"],
+        }
+        resolved_instance["serviceId"] = service["id"]
+        resolved_instance["routes"] = [route]
+        instances.append(resolved_instance)
+    return {
+        "deploymentVersion": intent["deploymentVersion"],
+        "contractFingerprint": fingerprint(contract),
+        "providers": [{
+            "id": platform["provider"],
+            "profile": platform["profile"],
+            "required": platform["required"],
+            **({"extensions": platform["extensions"]}
+               if "extensions" in platform else {}),
+        }],
+        "instances": instances,
+    }
+
+
 def structural_errors(value: object) -> list[str]:
     errors: list[str] = []
     allowed_features = {"discovery", "events", "methods", "loans", "scatterGather",
@@ -56,8 +261,12 @@ def structural_errors(value: object) -> list[str]:
         for key in ("serviceId", "instanceId"):
             try:
                 parsed = uuid.UUID(str(instance.get(key)))
-                if parsed.version != 4 or str(parsed) != instance.get(key): raise ValueError
-            except ValueError: errors.append(f"{where}: {key} must be canonical UUIDv4")
+                if str(parsed) != instance.get(key): raise ValueError
+                if key == "serviceId" and parsed.version != 4: raise ValueError
+                if key == "instanceId" and parsed.version not in (4, 5): raise ValueError
+            except ValueError:
+                expected = "UUIDv4" if key == "serviceId" else "UUIDv4 or UUIDv5"
+                errors.append(f"{where}: {key} must be canonical {expected}")
         if not isinstance(instance.get("routes"), list) or not instance["routes"]: errors.append(f"{where}: routes must be a non-empty array"); continue
         for route_index, route in enumerate(instance["routes"]):
             route_where = f"{where}.route[{route_index}]"
