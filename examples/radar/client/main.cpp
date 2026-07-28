@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ovf_application.hpp"
 #include "radar/ovf_contract.hpp"
-#include "radar/ovf_deployment.hpp"
 
 #include <chrono>
 #include <condition_variable>
@@ -14,53 +14,27 @@ using namespace std::chrono_literals;
 } // namespace
 
 int main() {
-  ovf::com::Runtime runtime({.instance_name = "ovf-radar-client", .logger = {}, .dispatcher = {}});
-  if (radar_deployment::Configure(runtime) != ovf::com::RuntimeError::none ||
-      runtime.Start() != ovf::com::RuntimeError::none) {
+  auto application = ovf::app::CreateRuntime("ovf-radar-client");
+  if (!application) {
     std::cerr << "failed to start the radar client runtime\n";
     return 1;
   }
 
   std::mutex mutex;
   std::condition_variable condition;
-  auto discovery = ovf::com::Discover(runtime, {radar_deployment::Route()});
-  if (!discovery) {
-    std::cerr << "failed to start RadarService discovery\n";
+  auto proxy = RadarServiceProxy::Find(application.get(), ovf::app::radar(), 10s);
+  if (!proxy) {
+    std::cerr << "timed out discovering RadarService\n";
     return 2;
   }
-  discovery->on_change([&](std::span<ovf::com::ServiceRoute const> routes) {
-    if (!routes.empty()) {
-      std::lock_guard lock(mutex);
-      condition.notify_all();
-    }
-  });
-
-  std::optional<ovf::com::ServiceRoute> route;
-  {
-    std::unique_lock lock(mutex);
-    if (!condition.wait_for(lock, 10s, [&] {
-          route = discovery->select();
-          return route.has_value();
-        })) {
-      std::cerr << "timed out discovering RadarService\n";
-      return 3;
-    }
-  }
   std::cout << "DISCOVERED" << std::endl;
-
-  auto binding = ovf::com::Connect(runtime, *route);
-  if (!binding) {
-    std::cerr << "failed to connect to RadarService\n";
-    return 4;
-  }
-  RadarServiceProxy proxy(std::move(binding));
 
   bool radar_received{};
   bool field_received{};
   RadarFrame radar{};
   VehicleState state{};
-  auto radar_subscription = proxy.subscribeRadarObjectsChanged();
-  auto field_subscription = proxy.subscribeVehicleStateField();
+  auto radar_subscription = proxy->subscribeRadarObjectsChanged();
+  auto field_subscription = proxy->subscribeVehicleStateField();
   if (!radar_subscription.valid() || !field_subscription.valid()) {
     std::cerr << "failed to subscribe to RadarService events\n";
     return 5;
@@ -79,7 +53,7 @@ int main() {
   });
 
   auto options = ovf::com::CallOptions{std::chrono::steady_clock::now() + 5s};
-  auto calibration = proxy.Calibrate({2.0F}, options).get(options);
+  auto calibration = proxy->Calibrate({2.0F}, options).get(options);
   if (!std::holds_alternative<CalibrateOutput>(calibration) ||
       std::get<CalibrateOutput>(calibration).acceptedAt != 42) {
     std::cerr << "Calibrate did not return the expected response\n";
@@ -88,7 +62,7 @@ int main() {
   std::cout << "METHOD_OK" << std::endl;
 
   options.deadline = std::chrono::steady_clock::now() + 5s;
-  auto invalid = proxy.Calibrate({-1.0F}, options).get(options);
+  auto invalid = proxy->Calibrate({-1.0F}, options).get(options);
   if (invalid.index() != 1 || std::get<InvalidTarget>(std::get<1>(invalid)).reason.view() !=
                                   "target distance must be non-negative") {
     std::cerr << "Calibrate did not return the expected application error\n";
@@ -97,7 +71,7 @@ int main() {
   std::cout << "APPLICATION_ERROR_OK" << std::endl;
 
   options.deadline = std::chrono::steady_clock::now() + 5s;
-  auto field = proxy.getVehicleStateField(options).get(options);
+  auto field = proxy->getVehicleStateField(options).get(options);
   if (!std::holds_alternative<VehicleState>(field)) {
     std::cerr << "VehicleStateField read failed\n";
     return 8;
@@ -120,7 +94,5 @@ int main() {
 
   field_subscription.close();
   radar_subscription.close();
-  discovery->close();
-  runtime.Stop();
   return 0;
 }

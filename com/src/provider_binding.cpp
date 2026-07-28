@@ -425,6 +425,29 @@ auto Connect(Runtime& runtime, ServiceRoute route) -> std::shared_ptr<ClientBind
   return std::make_shared<ProviderClientBinding>(*provider, std::move(route.binding));
 }
 
+auto FindService(Runtime& runtime, RouteBinding candidate,
+                 std::chrono::steady_clock::duration timeout) -> std::shared_ptr<ClientBinding> {
+  auto discovery = Discover(runtime, {std::move(candidate)});
+  if (!discovery)
+    return {};
+  std::mutex mutex;
+  std::condition_variable condition;
+  discovery->on_change([&](std::span<ServiceRoute const> routes) {
+    if (!routes.empty())
+      condition.notify_all();
+  });
+  std::optional<ServiceRoute> selected;
+  {
+    std::unique_lock lock(mutex);
+    condition.wait_for(lock, timeout, [&] {
+      selected = discovery->select();
+      return selected.has_value();
+    });
+  }
+  discovery->close();
+  return selected ? Connect(runtime, std::move(*selected)) : nullptr;
+}
+
 struct ProviderServerBinding::Impl {
   struct Method {
     Impl* owner{};

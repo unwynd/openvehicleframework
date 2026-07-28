@@ -33,6 +33,11 @@ struct TransportConfig {
   std::uint32_t max_outstanding_operations{256};
 };
 
+struct TransportRegistration {
+  std::string provider;
+  TransportConfig config;
+};
+
 enum class RuntimeError {
   none,
   invalid_argument,
@@ -73,6 +78,22 @@ private:
   friend class detail::RuntimeAccess;
   class Impl;
   std::unique_ptr<Impl> impl_;
+};
+
+class ApplicationRuntime final {
+public:
+  ApplicationRuntime(RuntimeConfig config, std::vector<TransportRegistration> transports);
+  ~ApplicationRuntime() = default;
+  ApplicationRuntime(ApplicationRuntime const&) = delete;
+  ApplicationRuntime& operator=(ApplicationRuntime const&) = delete;
+
+  [[nodiscard]] explicit operator bool() const noexcept { return error_ == RuntimeError::none; }
+  [[nodiscard]] auto error() const noexcept -> RuntimeError { return error_; }
+  [[nodiscard]] auto get() noexcept -> Runtime& { return runtime_; }
+
+private:
+  Runtime runtime_;
+  RuntimeError error_{RuntimeError::none};
 };
 
 } // namespace ovf::com

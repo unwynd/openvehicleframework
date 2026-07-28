@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "camera/ovf_contract.hpp"
-#include "camera/ovf_deployment.hpp"
+#include "ovf_application.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -22,15 +22,13 @@ class CameraImplementation final : public CameraServiceSkeleton {};
 int main() {
   std::signal(SIGINT, Stop);
   std::signal(SIGTERM, Stop);
-  ovf::com::Runtime runtime({.instance_name = "ovf-camera", .logger = {}, .dispatcher = {}});
-  if (camera_deployment::Configure(runtime) != ovf::com::RuntimeError::none ||
-      runtime.Start() != ovf::com::RuntimeError::none) {
+  auto application = ovf::app::CreateRuntime("ovf-camera");
+  if (!application) {
     std::cerr << "failed to start camera runtime\n";
     return 1;
   }
-  auto binding = ovf::com::Offer(runtime, camera_deployment::Route());
   CameraImplementation implementation;
-  CameraServiceOffer service(std::move(binding), implementation);
+  auto service = implementation.OfferService(application.get(), ovf::app::camera());
   if (!service.valid()) {
     std::cerr << "failed to offer CameraService\n";
     return 2;
@@ -49,6 +47,5 @@ int main() {
     std::this_thread::sleep_for(100ms);
   }
   service.close();
-  runtime.Stop();
   return 0;
 }

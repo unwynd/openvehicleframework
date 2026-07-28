@@ -35,22 +35,18 @@ registration and dynamically loaded plugins converge on the same versioned
 factory interface, and neither requires a global registry or static
 constructor.
 
-Service use follows an explicit lifecycle:
+Generated APIs provide the normal application lifecycle:
 
 ```text
-Discover(candidate routes)
-    │
-    ├── receive availability changes
-    └── select the deterministic preferred route
-             │
-             └── Connect(route) ── generated proxy
-
-Offer(route)
-    │
-    └── generated service offer ── application skeleton
+Application facade ── load transports once and own runtime lifetime
+        │
+        ├── Proxy::Find(instance, timeout) ── discover, select, connect
+        └── Skeleton::OfferService(instance) ── offer and own server binding
 ```
 
-Discovery combines provider observations into service routes. Route priority,
+The lower-level discovery, connection, offer, and route APIs remain available
+for infrastructure and asynchronous integrations. Discovery combines provider
+observations into service routes. Route priority,
 provider name, instance identifier, and route epoch give selection a stable
 order. A proxy retains the selected binding for its lifetime. Availability
 changes do not silently move an existing proxy, retry a request, or alter its

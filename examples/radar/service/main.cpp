@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ovf_application.hpp"
 #include "radar/ovf_contract.hpp"
-#include "radar/ovf_deployment.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -48,16 +48,14 @@ int main() {
   std::signal(SIGINT, Stop);
   std::signal(SIGTERM, Stop);
 
-  ovf::com::Runtime runtime({.instance_name = "ovf-radar-service", .logger = {}, .dispatcher = {}});
-  if (radar_deployment::Configure(runtime) != ovf::com::RuntimeError::none ||
-      runtime.Start() != ovf::com::RuntimeError::none) {
+  auto application = ovf::app::CreateRuntime("ovf-radar-service");
+  if (!application) {
     std::cerr << "failed to start the radar service runtime\n";
     return 1;
   }
 
-  auto binding = ovf::com::Offer(runtime, radar_deployment::Route());
   RadarService implementation;
-  RadarServiceOffer service(std::move(binding), implementation);
+  auto service = implementation.OfferService(application.get(), ovf::app::radar());
   if (!service.valid()) {
     std::cerr << "failed to offer RadarService\n";
     return 2;
@@ -82,6 +80,5 @@ int main() {
   }
 
   service.close();
-  runtime.Stop();
   return 0;
 }

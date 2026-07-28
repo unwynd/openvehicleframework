@@ -147,6 +147,21 @@ Runtime::~Runtime() { Stop(); }
 Runtime::Runtime(Runtime&&) noexcept = default;
 Runtime& Runtime::operator=(Runtime&&) noexcept = default;
 
+ApplicationRuntime::ApplicationRuntime(RuntimeConfig config,
+                                       std::vector<TransportRegistration> transports)
+    : runtime_(std::move(config)) {
+  std::vector<std::string> loaded;
+  for (auto& transport : transports) {
+    if (std::find(loaded.begin(), loaded.end(), transport.provider) != loaded.end())
+      continue;
+    error_ = runtime_.LoadTransport(transport.provider, std::move(transport.config));
+    if (error_ != RuntimeError::none)
+      return;
+    loaded.push_back(std::move(transport.provider));
+  }
+  error_ = runtime_.Start();
+}
+
 RuntimeError Runtime::AddTransport(const ovf_com_transport_factory_v1& factory,
                                    TransportConfig config) {
   if (impl_->running) {

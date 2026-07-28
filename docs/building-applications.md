@@ -1,8 +1,9 @@
 # Building applications with Bazel
 
 Applications use the public `ovf_cc_application` macro. The application owns
-its source, private headers, Smithy contract IDL and CUE deployment intent; the framework
-owns the hermetic compilers and generated-artifact contract.
+its source, private headers, and CUE deployment intent. Interface packages
+export Smithy contracts as Bazel targets; the framework owns the hermetic
+compilers and generated-artifact contract.
 
 ```starlark
 load("@openvehicleframework//bazel:application.bzl", "ovf_cc_application")
@@ -17,17 +18,21 @@ ovf_cc_application(
 )
 ```
 
-Application code includes only the generated contract and public communication
-API:
+Application code includes generated contract types and one application facade:
 
 ```cpp
-#include "ovf_contract.hpp"
-#include "ovf_deployment.hpp"
+#include "radar/ovf_contract.hpp"
+#include "ovf_application.hpp"
+
+auto application = ovf::app::CreateRuntime("radar-app");
+auto proxy = RadarServiceProxy::Find(
+    application.get(), ovf::app::radar(), std::chrono::seconds(10));
 ```
 
-The generated deployment facade loads the selected provider plugin and exposes
-the service route without placing provider names or native identifiers in
-application source.
+The application facade loads each selected provider once, owns runtime
+start/stop through RAII, and exposes named instance routes. Generated proxies
+perform bounded discovery and connection. Generated skeletons offer services
+without exposing raw bindings.
 
 ## Generated targets
 
@@ -36,11 +41,7 @@ For an application named `radar_app`, the macro creates:
 | Target | Purpose |
 |---|---|
 | `:radar_app` | C++ executable, dynamically linked to the framework API |
-| `:radar_app_contract` | Generated C++ contract library |
-| `:radar_app_contract_ir` | Canonical IR JSON |
-| `:radar_app_contract_metadata` | Contract fingerprint and generation metadata |
-| `:radar_app_deployment_ir` | Resolved canonical deployment JSON |
-| `:radar_app_deployment_api` | Generated transport-neutral runtime and route facade |
+| `:radar_app_application_api` | Generated runtime and named-instance facade |
 | `:radar_app_artifacts` | IDL, headers, generated code, IR, deployment plan and validation report |
 | `:radar_app_bundle` | Deterministic target tar containing the application and target configuration |
 

@@ -8,12 +8,18 @@
 
 namespace {{ deployment.namespace }} {
 
-inline auto Configure(ovf::com::Runtime& runtime) -> ovf::com::RuntimeError {
-    return runtime.LoadTransport(
+inline auto Transport() -> ovf::com::TransportRegistration {
+    return {
         "{{ deployment.provider }}",
         {.configuration = {},
          .max_endpoints = {{ deployment.max_endpoints }},
-         .max_outstanding_operations = {{ deployment.max_operations }}});
+         .max_outstanding_operations = {{ deployment.max_operations }}}};
+}
+
+inline auto Configure(ovf::com::Runtime& runtime) -> ovf::com::RuntimeError {
+    auto const transport = Transport();
+    return runtime.LoadTransport(
+        transport.provider, transport.config);
 }
 
 inline auto Route() -> ovf::com::RouteBinding {

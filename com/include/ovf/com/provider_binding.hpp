@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -80,6 +81,10 @@ private:
 };
 
 [[nodiscard]] auto Connect(Runtime& runtime, ServiceRoute route) -> std::shared_ptr<ClientBinding>;
+
+[[nodiscard]] auto FindService(Runtime& runtime, RouteBinding candidate,
+                               std::chrono::steady_clock::duration timeout)
+    -> std::shared_ptr<ClientBinding>;
 
 class ProviderServerBinding final : public ServerBinding {
 public:

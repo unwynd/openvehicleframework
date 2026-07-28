@@ -12,7 +12,7 @@
 #include <variant>
 #include <vector>
 
-#include "ovf/com/generated.hpp"
+#include "ovf/com/provider_binding.hpp"
 
 namespace {{ model.cpp_namespace }} {
 
@@ -80,6 +80,13 @@ class {{ service.name }}Proxy final {
 public:
     explicit {{ service.name }}Proxy(std::shared_ptr<ovf::com::ClientBinding> binding) noexcept
         : binding_(std::move(binding)) {}
+    static auto Find(ovf::com::Runtime& runtime, ovf::com::RouteBinding route,
+                     std::chrono::steady_clock::duration timeout)
+        -> std::optional<{{ service.name }}Proxy> {
+        auto binding = ovf::com::FindService(runtime, std::move(route), timeout);
+        if (!binding) return std::nullopt;
+        return {{ service.name }}Proxy(std::move(binding));
+    }
 {% for event in service.events|sort(attribute="tag") %}
     auto subscribe{{ event.name }}() -> ovf::com::EventSubscription<{{ event.payload|cpp_type }}> {
         return {binding_->subscribe({{ service.name }}Contract::{{ event.name }}Descriptor),
@@ -145,9 +152,13 @@ private:
     std::shared_ptr<ovf::com::ClientBinding> binding_;
 };
 
+class {{ service.name }}Offer;
+
 class {{ service.name }}Skeleton {
 public:
     virtual ~{{ service.name }}Skeleton() = default;
+    auto OfferService(ovf::com::Runtime& runtime, ovf::com::RouteBinding route)
+        -> {{ service.name }}Offer;
 {% for method in service.methods|sort(attribute="tag") %}
     virtual auto {{ method.name }}({{ method.input|cpp_type }} const& request)
         -> ovf::com::MethodResult<{{ method.output|cpp_type }}, {{ method.application_error }}> = 0;
@@ -160,6 +171,9 @@ public:
 
 class {{ service.name }}Offer final {
 public:
+    {{ service.name }}Offer(ovf::com::Runtime& runtime, ovf::com::RouteBinding route,
+                           {{ service.name }}Skeleton& implementation)
+        : {{ service.name }}Offer(ovf::com::Offer(runtime, std::move(route)), implementation) {}
     {{ service.name }}Offer(std::shared_ptr<ovf::com::ServerBinding> binding,
                            {{ service.name }}Skeleton& implementation)
         : binding_(std::move(binding)), implementation_(&implementation) {
@@ -242,6 +256,11 @@ private:
     [[maybe_unused]] {{ service.name }}Skeleton* implementation_;
     bool valid_{};
 };
+
+inline auto {{ service.name }}Skeleton::OfferService(
+    ovf::com::Runtime& runtime, ovf::com::RouteBinding route) -> {{ service.name }}Offer {
+    return {{ service.name }}Offer(runtime, std::move(route), *this);
+}
 
 {% endfor %}
 } // namespace {{ model.cpp_namespace }}

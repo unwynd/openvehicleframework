@@ -1,19 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "camera/ovf_contract.hpp"
-#include "camera/ovf_deployment.hpp"
 #include "environment_model/ovf_contract.hpp"
-#include "environment_model/ovf_deployment.hpp"
+#include "ovf_application.hpp"
 #include "radar/ovf_contract.hpp"
-#include "radar/ovf_deployment.hpp"
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <csignal>
 #include <iostream>
 #include <mutex>
-#include <optional>
 #include <thread>
 
 namespace {
@@ -22,17 +18,6 @@ using namespace std::chrono_literals;
 std::atomic_bool running{true};
 void Stop(int) { running.store(false); }
 
-auto WaitForRoute(ovf::com::DiscoveryWatch& discovery, std::condition_variable& condition,
-                  std::mutex& mutex) -> std::optional<ovf::com::ServiceRoute> {
-  std::optional<ovf::com::ServiceRoute> route;
-  std::unique_lock lock(mutex);
-  condition.wait_for(lock, 10s, [&] {
-    route = discovery.select();
-    return route.has_value();
-  });
-  return route;
-}
-
 class EnvironmentImplementation final
     : public example::environment::EnvironmentModelServiceSkeleton {};
 } // namespace
@@ -40,18 +25,14 @@ class EnvironmentImplementation final
 int main() {
   std::signal(SIGINT, Stop);
   std::signal(SIGTERM, Stop);
-  ovf::com::Runtime runtime({.instance_name = "ovf-sensor-fusion", .logger = {}, .dispatcher = {}});
-  if (camera_deployment::Configure(runtime) != ovf::com::RuntimeError::none ||
-      environment_model_deployment::Configure(runtime) != ovf::com::RuntimeError::none ||
-      runtime.Start() != ovf::com::RuntimeError::none) {
+  auto application = ovf::app::CreateRuntime("ovf-sensor-fusion");
+  if (!application) {
     std::cerr << "failed to start sensor fusion runtime\n";
     return 1;
   }
 
   EnvironmentImplementation implementation;
-  auto offer_binding = ovf::com::Offer(runtime, environment_model_deployment::Route());
-  example::environment::EnvironmentModelServiceOffer output(std::move(offer_binding),
-                                                            implementation);
+  auto output = implementation.OfferService(application.get(), ovf::app::environment_model());
   if (!output.valid()) {
     std::cerr << "failed to offer EnvironmentModelService\n";
     return 2;
@@ -59,39 +40,18 @@ int main() {
 
   std::mutex mutex;
   std::condition_variable condition;
-  auto camera_discovery = ovf::com::Discover(runtime, {camera_deployment::Route()});
-  auto radar_discovery = ovf::com::Discover(runtime, {radar_deployment::Route()});
-  if (!camera_discovery || !radar_discovery) {
-    std::cerr << "failed to start input discovery\n";
+  auto camera =
+      example::camera::CameraServiceProxy::Find(application.get(), ovf::app::camera(), 10s);
+  auto radar = example::radar::RadarServiceProxy::Find(application.get(), ovf::app::radar(), 10s);
+  if (!camera || !radar) {
+    std::cerr << "timed out discovering sensor inputs\n";
     return 3;
   }
-  auto notify = [&](std::span<ovf::com::ServiceRoute const> routes) {
-    if (!routes.empty()) {
-      condition.notify_all();
-    }
-  };
-  camera_discovery->on_change(notify);
-  radar_discovery->on_change(notify);
-  auto camera_route = WaitForRoute(*camera_discovery, condition, mutex);
-  auto radar_route = WaitForRoute(*radar_discovery, condition, mutex);
-  if (!camera_route || !radar_route) {
-    std::cerr << "timed out discovering sensor inputs\n";
-    return 4;
-  }
-
-  auto camera_binding = ovf::com::Connect(runtime, *camera_route);
-  auto radar_binding = ovf::com::Connect(runtime, *radar_route);
-  if (!camera_binding || !radar_binding) {
-    std::cerr << "failed to connect to sensor inputs\n";
-    return 5;
-  }
-  example::camera::CameraServiceProxy camera(std::move(camera_binding));
-  example::radar::RadarServiceProxy radar(std::move(radar_binding));
-  auto camera_subscription = camera.subscribeCameraObjectsChanged();
-  auto radar_subscription = radar.subscribeRadarObjectsChanged();
+  auto camera_subscription = camera->subscribeCameraObjectsChanged();
+  auto radar_subscription = radar->subscribeRadarObjectsChanged();
   if (!camera_subscription.valid() || !radar_subscription.valid()) {
     std::cerr << "failed to subscribe to sensor inputs\n";
-    return 6;
+    return 4;
   }
 
   example::camera::CameraFrame latest_camera{};
@@ -147,9 +107,6 @@ int main() {
   }
   radar_subscription.close();
   camera_subscription.close();
-  radar_discovery->close();
-  camera_discovery->close();
   output.close();
-  runtime.Stop();
   return 0;
 }
