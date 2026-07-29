@@ -13,6 +13,7 @@ add_library(ovf_exec
     exec/src/coordinator.cpp
     exec/src/dinit_lifecycle.cpp
     exec/src/engine.cpp
+    exec/src/file_journal.cpp
     exec/src/model.cpp
     exec/src/planner.cpp
     exec/src/scheduler.cpp

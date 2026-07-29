@@ -53,17 +53,20 @@ struct TransitionSnapshot final {
 struct JournalEvent final {
   TransitionSnapshot transition;
   ModelGeneration generation;
+  std::optional<TransitionPlan> plan;
 };
 
 class TransitionJournal {
 public:
   virtual ~TransitionJournal() = default;
   [[nodiscard]] virtual Result<void> Append(const JournalEvent& event) noexcept = 0;
+  [[nodiscard]] virtual Result<std::vector<JournalEvent>> Replay() noexcept = 0;
 };
 
 class MemoryTransitionJournal final : public TransitionJournal {
 public:
   [[nodiscard]] Result<void> Append(const JournalEvent& event) noexcept override;
+  [[nodiscard]] Result<std::vector<JournalEvent>> Replay() noexcept override;
   [[nodiscard]] std::vector<JournalEvent> Events() const;
 
 private:
@@ -123,6 +126,7 @@ private:
   mutable std::mutex mutex_;
   SystemConfiguration configuration_;
   std::unordered_map<TransitionId, TransitionSnapshot> transitions_;
+  std::unordered_map<TransitionId, TransitionPlan> plans_;
   std::unordered_map<TransitionId, bool> cancellation_;
   std::atomic<std::uint64_t> next_transition_{1U};
 };

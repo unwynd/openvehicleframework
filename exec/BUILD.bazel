@@ -38,6 +38,20 @@ cc_library(
 )
 
 cc_library(
+    name = "file_journal",
+    srcs = ["src/file_journal.cpp"],
+    hdrs = ["include/ovf/exec/internal/file_journal.hpp"],
+    copts = ["-std=c++20"],
+    includes = ["include"],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:osx": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [":engine"],
+)
+
+cc_library(
     name = "planner",
     srcs = ["src/planner.cpp"],
     hdrs = ["include/ovf/exec/internal/planner.hpp"],

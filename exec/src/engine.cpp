@@ -17,6 +17,14 @@ Result<void> MemoryTransitionJournal::Append(const JournalEvent& event) noexcept
   }
 }
 
+Result<std::vector<JournalEvent>> MemoryTransitionJournal::Replay() noexcept {
+  try {
+    return Events();
+  } catch (...) {
+    return MakeError(ErrorCode::resource_exhausted, "cannot copy memory journal");
+  }
+}
+
 std::vector<JournalEvent> MemoryTransitionJournal::Events() const {
   std::lock_guard lock(mutex_);
   return events_;
@@ -34,18 +42,161 @@ ExecutionEngine::Create(ValidatedModel model, std::unique_ptr<ProcessBackend> ba
     return initial.error();
   }
 
-  for (const auto application : initial.value().running_applications) {
-    auto observation = backend->Inspect(application);
+  auto replayed = journal->Replay();
+  if (!replayed) {
+    return MakeError(ErrorCode::persistence_error, "transition journal cannot be replayed",
+                     static_cast<std::uint64_t>(replayed.error().code));
+  }
+  std::unordered_map<TransitionId, TransitionSnapshot> transitions;
+  std::unordered_map<TransitionId, TransitionPlan> plans;
+  std::uint64_t next_transition{1U};
+  for (const auto& event : replayed.value()) {
+    if (event.generation != model.value().generation) {
+      return MakeError(ErrorCode::configuration_error,
+                       "journal model generation does not match active model",
+                       event.generation.value);
+    }
+    if (!event.transition.id || !event.transition.domain || !event.transition.source_mode ||
+        !event.transition.target_mode ||
+        model.FindMode({event.transition.domain, event.transition.source_mode}) == nullptr ||
+        model.FindMode({event.transition.domain, event.transition.target_mode}) == nullptr) {
+      return MakeError(ErrorCode::persistence_error,
+                       "journal transition identity is not valid for the active model",
+                       event.transition.id.value());
+    }
+    const auto previous = transitions.find(event.transition.id);
+    if (previous != transitions.end() &&
+        (previous->second.domain != event.transition.domain ||
+         previous->second.source_mode != event.transition.source_mode ||
+         previous->second.target_mode != event.transition.target_mode ||
+         static_cast<std::uint8_t>(previous->second.phase) >
+             static_cast<std::uint8_t>(event.transition.phase))) {
+      return MakeError(ErrorCode::persistence_error, "journal transition history is inconsistent",
+                       event.transition.id.value());
+    }
+    transitions[event.transition.id] = event.transition;
+    next_transition = std::max(next_transition, event.transition.id.value() + 1U);
+    if (event.plan) {
+      if (event.plan->generation != event.generation ||
+          event.plan->domain != event.transition.domain ||
+          event.plan->source_mode != event.transition.source_mode ||
+          event.plan->target_mode != event.transition.target_mode) {
+        return MakeError(ErrorCode::persistence_error, "journal plan does not match its transition",
+                         event.transition.id.value());
+      }
+      const auto valid_applications = [&model](const std::vector<ApplicationId>& applications) {
+        return std::all_of(applications.begin(), applications.end(), [&model](ApplicationId id) {
+          return model.FindApplication(id) != nullptr;
+        });
+      };
+      const auto valid_domains = [&model](const std::vector<DomainId>& domains) {
+        return std::all_of(domains.begin(), domains.end(),
+                           [&model](DomainId id) { return model.FindDomain(id) != nullptr; });
+      };
+      if (!valid_applications(event.plan->retain) || !valid_applications(event.plan->stop) ||
+          !valid_applications(event.plan->start) || !valid_domains(event.plan->guarded_domains)) {
+        return MakeError(ErrorCode::persistence_error,
+                         "journal plan references an unknown model object",
+                         event.transition.id.value());
+      }
+      plans[event.transition.id] = *event.plan;
+    }
+    if (event.transition.phase == TransitionPhase::succeeded) {
+      const auto plan = plans.find(event.transition.id);
+      if (plan == plans.end()) {
+        return MakeError(ErrorCode::persistence_error,
+                         "successful transition has no persisted plan",
+                         event.transition.id.value());
+      }
+      initial.value().committed_modes[plan->second.domain] = plan->second.target_mode;
+      for (const auto application : plan->second.stop) {
+        initial.value().running_applications.erase(application);
+      }
+      for (const auto application : plan->second.start) {
+        initial.value().running_applications.insert(application);
+      }
+    }
+  }
+
+  std::unordered_set<ApplicationId> observed_running;
+  const bool recovering = !replayed.value().empty();
+  for (const auto& application : model.value().applications) {
+    auto observation = backend->Inspect(application.id);
     if (!observation) {
       return observation.error();
     }
-    if (observation.value().state != ApplicationState::ready) {
-      return MakeError(ErrorCode::backend_unavailable,
-                       "initially required application is not ready", application.value());
+    if (observation.value().state == ApplicationState::ready) {
+      observed_running.insert(application.id);
     }
   }
-  return std::unique_ptr<ExecutionEngine>(new ExecutionEngine(
+  const auto is_terminal = [](TransitionPhase phase) {
+    return phase == TransitionPhase::succeeded || phase == TransitionPhase::rejected ||
+           phase == TransitionPhase::failed || phase == TransitionPhase::cancelled ||
+           phase == TransitionPhase::superseded || phase == TransitionPhase::deadline_exceeded ||
+           phase == TransitionPhase::recovery_failed;
+  };
+  std::vector<TransitionId> interrupted;
+  for (const auto& [id, transition] : transitions) {
+    if (!is_terminal(transition.phase)) {
+      interrupted.push_back(id);
+    }
+  }
+
+  if (!recovering) {
+    for (const auto application : initial.value().running_applications) {
+      if (!observed_running.contains(application)) {
+        return MakeError(ErrorCode::backend_unavailable,
+                         "initially required application is not ready", application.value());
+      }
+    }
+  } else if (interrupted.empty()) {
+    for (const auto& application : model.value().applications) {
+      const bool expected = initial.value().running_applications.contains(application.id);
+      const bool observed = observed_running.contains(application.id);
+      if (expected == observed) {
+        continue;
+      }
+      if (expected) {
+        auto started = backend->Start(application.id,
+                                      std::chrono::steady_clock::now() + application.start_timeout);
+        if (!started || started.value().state != ApplicationState::ready) {
+          return MakeError(ErrorCode::backend_unavailable,
+                           "cannot restore required application during recovery",
+                           application.id.value());
+        }
+      } else {
+        auto stopped = backend->Stop(application.id, StopReason::recovery,
+                                     std::chrono::steady_clock::now() + application.stop_timeout);
+        if (!stopped || stopped.value().state != ApplicationState::stopped) {
+          return MakeError(ErrorCode::backend_unavailable,
+                           "cannot stop unexpected application during recovery",
+                           application.id.value());
+        }
+      }
+    }
+  } else {
+    initial.value().running_applications = observed_running;
+  }
+  auto engine = std::unique_ptr<ExecutionEngine>(new ExecutionEngine(
       std::move(model), std::move(backend), std::move(journal), std::move(initial).value()));
+  engine->transitions_ = std::move(transitions);
+  engine->plans_ = std::move(plans);
+  engine->next_transition_.store(next_transition, std::memory_order_relaxed);
+  for (const auto& [id, transition] : engine->transitions_) {
+    static_cast<void>(transition);
+    engine->cancellation_[id] = false;
+  }
+  for (const auto id : interrupted) {
+    auto transition = engine->transitions_.at(id);
+    auto failed = engine->Fail(
+        transition, MakeError(ErrorCode::backend_unavailable,
+                              "transition was interrupted by execution coordinator restart"));
+    if (!failed || !failed.value().failure) {
+      return MakeError(ErrorCode::persistence_error,
+                       "interrupted transition could not be finalized", id.value());
+    }
+  }
+  return engine;
 }
 
 ExecutionEngine::ExecutionEngine(ValidatedModel model, std::unique_ptr<ProcessBackend> backend,
@@ -91,6 +242,7 @@ Result<AcceptedTransition> ExecutionEngine::AcceptModeFrom(const SystemConfigura
       planning_error = planned.error();
     } else {
       plan = std::move(planned).value();
+      plans_[transition.id] = plan;
     }
   }
   if (planning_error) {
@@ -264,7 +416,15 @@ Result<void> ExecutionEngine::Record(TransitionSnapshot& transition,
                                      TransitionPhase phase) noexcept {
   transition.phase = phase;
   transition.updated_at = std::chrono::steady_clock::now();
-  auto persisted = journal_->Append({transition, model_.value().generation});
+  std::optional<TransitionPlan> plan;
+  {
+    std::lock_guard lock(mutex_);
+    const auto found = plans_.find(transition.id);
+    if (found != plans_.end()) {
+      plan = found->second;
+    }
+  }
+  auto persisted = journal_->Append({transition, model_.value().generation, std::move(plan)});
   if (!persisted) {
     return MakeError(ErrorCode::persistence_error, "transition phase could not be persisted",
                      static_cast<std::uint64_t>(persisted.error().code));

@@ -102,12 +102,18 @@ public:
 
     result.transitions.reserve(engine_snapshot.transitions.size());
     std::unordered_map<DomainId, const detail::TransitionSnapshot*> active;
+    std::unordered_map<DomainId, const detail::TransitionSnapshot*> failed;
     for (const auto& transition : engine_snapshot.transitions) {
       result.transitions.push_back(PublicSnapshot(transition));
       if (!IsTerminal(transition.phase)) {
         const auto found = active.find(transition.domain);
         if (found == active.end() || found->second->id < transition.id) {
           active[transition.domain] = &transition;
+        }
+      } else if (transition.failure) {
+        const auto found = failed.find(transition.domain);
+        if (found == failed.end() || found->second->id < transition.id) {
+          failed[transition.domain] = &transition;
         }
       }
     }
@@ -127,7 +133,9 @@ public:
         snapshot.active_transition = transition->second->id;
         snapshot.status = DomainStatus::transitioning;
       } else {
-        snapshot.status = result.recovering ? DomainStatus::recovering : DomainStatus::stable;
+        snapshot.status = result.recovering            ? DomainStatus::recovering
+                          : failed.contains(domain.id) ? DomainStatus::degraded
+                                                       : DomainStatus::stable;
       }
       result.domains.push_back(std::move(snapshot));
     }
