@@ -31,11 +31,21 @@ cc_test(
     ],
 )
 
+cc_test(
+    name = "scheduler_test",
+    srcs = ["scheduler_test.cpp"],
+    deps = [
+        "//exec:scheduler",
+        "@googletest//:gtest_main",
+    ],
+)
+
 test_suite(
     name = "all_tests",
     tests = [
         ":application_test",
         ":model_test",
         ":planner_test",
+        ":scheduler_test",
     ],
 )

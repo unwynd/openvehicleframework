@@ -12,6 +12,7 @@ add_library(ovf_exec
     exec/src/dinit_lifecycle.cpp
     exec/src/model.cpp
     exec/src/planner.cpp
+    exec/src/scheduler.cpp
 )
 add_library(ovf::exec ALIAS ovf_exec)
 
