@@ -51,9 +51,7 @@ private:
 class TemporaryDirectory final {
 public:
   TemporaryDirectory() {
-    const auto* test_directory = std::getenv("TEST_TMPDIR");
-    std::string pattern =
-        std::string{test_directory == nullptr ? "/tmp" : test_directory} + "/ovf-exec-dinit-XXXXXX";
+    std::string pattern = "/tmp/ovf-exec-dinit-XXXXXX";
     storage_.assign(pattern.begin(), pattern.end());
     storage_.push_back('\0');
     const auto* created = ::mkdtemp(storage_.data());

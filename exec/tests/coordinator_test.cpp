@@ -164,6 +164,9 @@ TEST(CoordinatorTest, ReturnsAcceptedHandleBeforeAsynchronousExecutionCompletes)
   ASSERT_EQ(snapshot.value().domains.size(), 1U);
   EXPECT_EQ(snapshot.value().domains.front().committed_mode, ModeId{2});
   EXPECT_EQ(snapshot.value().domains.front().status, DomainStatus::stable);
+  for (int attempt = 0; attempt < 100 && events.load(std::memory_order_relaxed) < 2U; ++attempt) {
+    std::this_thread::sleep_for(10ms);
+  }
   EXPECT_GE(events.load(std::memory_order_relaxed), 2U);
 }
 
@@ -287,16 +290,13 @@ TEST(CoordinatorTest, DeliversRecoveryEvidenceAndEventsAcrossUnixSocket) {
   ASSERT_TRUE(connected);
   auto coordinator = std::move(connected).value();
   std::atomic_uint recovery_events{};
-  auto subscription =
-      coordinator.Subscribe({.transitions = false,
-                             .configuration = false,
-                             .recovery = true,
-                             .domain = std::nullopt},
-                            [&recovery_events](const CoordinatorEvent& event) {
-                              if (event.kind == CoordinatorEventKind::recovery_changed) {
-                                recovery_events.fetch_add(1U, std::memory_order_relaxed);
-                              }
-                            });
+  auto subscription = coordinator.Subscribe(
+      {.transitions = false, .configuration = false, .recovery = true, .domain = std::nullopt},
+      [&recovery_events](const CoordinatorEvent& event) {
+        if (event.kind == CoordinatorEventKind::recovery_changed) {
+          recovery_events.fetch_add(1U, std::memory_order_relaxed);
+        }
+      });
   ASSERT_TRUE(subscription);
   backend->FailStart();
   auto transition = coordinator.RequestMode(DomainId{1}, ModeId{2}, {.timeout = 2s});

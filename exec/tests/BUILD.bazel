@@ -3,12 +3,81 @@
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load("@rules_python//python:defs.bzl", "py_test")
+load("//bazel:execution.bzl", "ovf_exec_deployment")
 
 package(default_visibility = ["//visibility:public"])
 
 cc_binary(
     name = "dinit_test_service",
     srcs = ["dinit_test_service.cpp"],
+)
+
+ovf_exec_deployment(
+    name = "daemon_deployment",
+    deployment = "deployment/daemon.cue",
+    platform = "deployment/platform.cue",
+)
+
+filegroup(
+    name = "daemon_backend_config",
+    srcs = [":daemon_deployment"],
+    output_group = "backend_config",
+)
+
+filegroup(
+    name = "daemon_execution_model",
+    srcs = [":daemon_deployment"],
+    output_group = "ir",
+)
+
+filegroup(
+    name = "daemon_manifest",
+    srcs = [":daemon_deployment"],
+    output_group = "manifest",
+)
+
+filegroup(
+    name = "daemon_services",
+    srcs = [":daemon_deployment"],
+    output_group = "services",
+)
+
+cc_test(
+    name = "daemon_integration_test",
+    srcs = ["daemon_integration_test.cpp"],
+    data = [
+        ":daemon_backend_config",
+        ":daemon_execution_model",
+        ":daemon_manifest",
+        ":daemon_services",
+        ":dinit_test_service",
+        "//exec:dinit_plugin",
+        "//exec:ovf-execd",
+        "@dinit_source//:dinit",
+    ],
+    env = {
+        "OVF_TEST_DINIT": "$(rootpath @dinit_source//:dinit)",
+        "OVF_TEST_DINIT_PLUGIN": "$(rootpath //exec:dinit_plugin)",
+        "OVF_TEST_EXEC_DAEMON": "$(rootpath //exec:ovf-execd)",
+        "OVF_TEST_EXECUTION_BACKEND": "$(rootpath :daemon_backend_config)",
+        "OVF_TEST_EXECUTION_MANIFEST": "$(rootpath :daemon_manifest)",
+        "OVF_TEST_EXECUTION_MODEL": "$(rootpath :daemon_execution_model)",
+        "OVF_TEST_EXECUTION_SERVICES": "$(rootpath :daemon_services)",
+        "OVF_TEST_MANAGED_SERVICE": "$(rootpath :dinit_test_service)",
+    },
+    tags = [
+        "exclusive",
+        "integration",
+        "no-sandbox",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//exec:coordinator",
+        "@googletest//:gtest_main",
+    ],
 )
 
 cc_test(
@@ -246,6 +315,7 @@ test_suite(
         ":backend_binding_test",
         ":backend_loader_test",
         ":coordinator_test",
+        ":daemon_integration_test",
         ":deployment_test",
         ":dinit_backend_test",
         ":dinit_client_compile_test",
