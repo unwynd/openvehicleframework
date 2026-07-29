@@ -71,6 +71,22 @@ cc_library(
 )
 
 cc_library(
+    name = "coordinator",
+    srcs = ["src/coordinator.cpp"],
+    hdrs = [
+        "include/ovf/exec/coordinator.hpp",
+        "include/ovf/exec/internal/coordinator_service.hpp",
+    ],
+    copts = ["-std=c++20"],
+    includes = ["include"],
+    deps = [
+        ":application",
+        ":engine",
+        ":model",
+    ],
+)
+
+cc_library(
     name = "backend_binding",
     srcs = ["src/backend_binding.cpp"],
     hdrs = ["include/ovf/exec/internal/backend_binding.hpp"],

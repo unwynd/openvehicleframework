@@ -76,6 +76,12 @@ struct EngineSnapshot final {
   std::vector<TransitionSnapshot> transitions;
 };
 
+struct AcceptedTransition final {
+  TransitionId id;
+  TransitionPlan plan;
+  Deadline deadline;
+};
+
 class ExecutionEngine final {
 public:
   static Result<std::unique_ptr<ExecutionEngine>>
@@ -86,10 +92,18 @@ public:
   ExecutionEngine(const ExecutionEngine&) = delete;
   ExecutionEngine& operator=(const ExecutionEngine&) = delete;
 
+  [[nodiscard]] Result<AcceptedTransition> AcceptMode(DomainId domain, ModeId target,
+                                                      Deadline deadline) noexcept;
+  [[nodiscard]] Result<AcceptedTransition> AcceptModeFrom(const SystemConfiguration& baseline,
+                                                          DomainId domain, ModeId target,
+                                                          Deadline deadline) noexcept;
+  [[nodiscard]] Result<TransitionSnapshot> Execute(AcceptedTransition accepted) noexcept;
   [[nodiscard]] Result<TransitionSnapshot> RequestMode(DomainId domain, ModeId target,
                                                        Deadline deadline) noexcept;
   [[nodiscard]] Result<void> Cancel(TransitionId transition) noexcept;
+  [[nodiscard]] Result<TransitionSnapshot> GetTransition(TransitionId transition) const noexcept;
   [[nodiscard]] EngineSnapshot Snapshot() const;
+  [[nodiscard]] const ValidatedModel& Model() const noexcept { return model_; }
 
 private:
   ExecutionEngine(ValidatedModel model, std::unique_ptr<ProcessBackend> backend,

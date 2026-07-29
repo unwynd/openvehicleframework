@@ -73,6 +73,15 @@ cc_test(
 )
 
 cc_test(
+    name = "coordinator_test",
+    srcs = ["coordinator_test.cpp"],
+    deps = [
+        "//exec:coordinator",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "dinit_backend_test",
     srcs = ["dinit_backend_test.cpp"],
     target_compatible_with = select({
@@ -124,6 +133,7 @@ test_suite(
         ":application_test",
         ":backend_abi_test",
         ":backend_binding_test",
+        ":coordinator_test",
         ":dinit_backend_test",
         ":dinit_client_compile_test",
         ":dinit_integration_test",

@@ -1,0 +1,186 @@
+// SPDX-License-Identifier: Apache-2.0
+
+#include "ovf/exec/internal/coordinator_service.hpp"
+
+#include <gtest/gtest.h>
+
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <unordered_map>
+
+namespace {
+
+using namespace std::chrono_literals;
+using namespace ovf::exec;
+using namespace ovf::exec::detail;
+
+ValidatedModel Model(ReplacementPolicy replacement = ReplacementPolicy::supersede_if_safe) {
+  ExecutionModel model{
+      ModelGeneration{8},
+      {{ApplicationId{1}, "base", ReadinessPolicy::required, 1s, 1s, {}, {}, {}},
+       {ApplicationId{2}, "feature", ReadinessPolicy::required, 1s, 1s, {}, {}, {}}},
+      {{DomainId{1},
+        "machine",
+        ModeId{1},
+        replacement,
+        {},
+        {{ModeId{1}, "idle", {ApplicationId{1}}, {}},
+         {ModeId{2}, "active", {ApplicationId{1}, ApplicationId{2}}, {}}}}}};
+  auto validated = ValidateModel(std::move(model));
+  EXPECT_TRUE(validated);
+  return std::move(validated).value();
+}
+
+class BlockingBackend final : public ProcessBackend {
+public:
+  Result<BackendEvidence> Inspect(ApplicationId application) noexcept override {
+    std::lock_guard lock(mutex_);
+    return BackendEvidence{states_[application], 0, 0, 0, {}};
+  }
+
+  Result<BackendEvidence> Start(ApplicationId application, Deadline deadline) noexcept override {
+    std::unique_lock lock(mutex_);
+    start_entered_ = true;
+    entered_.notify_all();
+    if (!released_.wait_until(lock, deadline, [this] { return release_; })) {
+      return MakeError(ErrorCode::deadline_exceeded, "injected start deadline");
+    }
+    states_[application] = ApplicationState::ready;
+    return BackendEvidence{ApplicationState::ready, 0, 0, 0, {}};
+  }
+
+  Result<BackendEvidence> Stop(ApplicationId application, StopReason, Deadline) noexcept override {
+    std::lock_guard lock(mutex_);
+    states_[application] = ApplicationState::stopped;
+    return BackendEvidence{ApplicationState::stopped, 0, 0, 0, {}};
+  }
+
+  bool WaitUntilStart(Deadline deadline) {
+    std::unique_lock lock(mutex_);
+    return entered_.wait_until(lock, deadline, [this] { return start_entered_; });
+  }
+
+  void Release() {
+    std::lock_guard lock(mutex_);
+    release_ = true;
+    released_.notify_all();
+  }
+
+private:
+  std::mutex mutex_;
+  std::condition_variable entered_;
+  std::condition_variable released_;
+  std::unordered_map<ApplicationId, ApplicationState> states_{
+      {ApplicationId{1}, ApplicationState::ready},
+      {ApplicationId{2}, ApplicationState::stopped},
+  };
+  bool start_entered_{};
+  bool release_{};
+};
+
+std::unique_ptr<ExecutionEngine> Engine(ValidatedModel model,
+                                        BlockingBackend** observer = nullptr) {
+  auto backend = std::make_unique<BlockingBackend>();
+  if (observer != nullptr) {
+    *observer = backend.get();
+  }
+  auto created = ExecutionEngine::Create(std::move(model), std::move(backend),
+                                         std::make_unique<MemoryTransitionJournal>());
+  EXPECT_TRUE(created);
+  return std::move(created).value();
+}
+
+TEST(CoordinatorTest, ReturnsAcceptedHandleBeforeAsynchronousExecutionCompletes) {
+  BlockingBackend* backend{};
+  auto created = detail_CoordinatorFactory::Create(Engine(Model(), &backend),
+                                                   {.observe = true, .mutate = true});
+  ASSERT_TRUE(created);
+  auto coordinator = std::move(created).value();
+
+  std::atomic_uint events{};
+  auto subscription = coordinator.Subscribe(
+      {}, [&events](const CoordinatorEvent&) { events.fetch_add(1U, std::memory_order_relaxed); });
+  ASSERT_TRUE(subscription);
+
+  auto requested = coordinator.RequestMode(DomainId{1}, ModeId{2}, {.timeout = 2s});
+  ASSERT_TRUE(requested);
+  auto transition = std::move(requested).value();
+  EXPECT_TRUE(transition);
+  ASSERT_TRUE(backend->WaitUntilStart(std::chrono::steady_clock::now() + 1s));
+
+  auto in_flight = transition.Get();
+  ASSERT_TRUE(in_flight);
+  EXPECT_FALSE(in_flight.value().phase == TransitionPhase::succeeded);
+
+  backend->Release();
+  auto completed = transition.Wait(std::chrono::steady_clock::now() + 1s);
+  ASSERT_TRUE(completed);
+  EXPECT_EQ(completed.value().phase, TransitionPhase::succeeded);
+
+  auto snapshot = coordinator.GetSnapshot();
+  ASSERT_TRUE(snapshot);
+  EXPECT_EQ(snapshot.value().model_generation, ModelGeneration{8});
+  ASSERT_EQ(snapshot.value().domains.size(), 1U);
+  EXPECT_EQ(snapshot.value().domains.front().committed_mode, ModeId{2});
+  EXPECT_EQ(snapshot.value().domains.front().status, DomainStatus::stable);
+  EXPECT_GE(events.load(std::memory_order_relaxed), 2U);
+}
+
+TEST(CoordinatorTest, EnforcesPermissionsAssignedToTheSession) {
+  auto created =
+      detail_CoordinatorFactory::Create(Engine(Model()), {.observe = true, .mutate = false});
+  ASSERT_TRUE(created);
+  auto coordinator = std::move(created).value();
+
+  EXPECT_TRUE(coordinator.GetSnapshot());
+  auto requested = coordinator.RequestMode(DomainId{1}, ModeId{2});
+  ASSERT_FALSE(requested);
+  EXPECT_EQ(requested.error().code, ErrorCode::permission_denied);
+}
+
+TEST(CoordinatorTest, RejectsReplacementWhenDomainPolicyRequiresSerialization) {
+  BlockingBackend* backend{};
+  auto created = detail_CoordinatorFactory::Create(
+      Engine(Model(ReplacementPolicy::reject_while_busy), &backend),
+      {.observe = true, .mutate = true});
+  ASSERT_TRUE(created);
+  auto coordinator = std::move(created).value();
+
+  auto first = coordinator.RequestMode(DomainId{1}, ModeId{2}, {.timeout = 2s});
+  ASSERT_TRUE(first);
+  ASSERT_TRUE(backend->WaitUntilStart(std::chrono::steady_clock::now() + 1s));
+  auto second = coordinator.RequestMode(DomainId{1}, ModeId{1}, {.timeout = 2s});
+  ASSERT_FALSE(second);
+  EXPECT_EQ(second.error().code, ErrorCode::busy);
+  backend->Release();
+  EXPECT_TRUE(first.value().Wait(std::chrono::steady_clock::now() + 1s));
+}
+
+TEST(CoordinatorTest, PlansQueuedRequestAgainstEarlierAcceptedTarget) {
+  BlockingBackend* backend{};
+  auto created = detail_CoordinatorFactory::Create(
+      Engine(Model(ReplacementPolicy::queue), &backend), {.observe = true, .mutate = true});
+  ASSERT_TRUE(created);
+  auto coordinator = std::move(created).value();
+
+  auto enter_active = coordinator.RequestMode(DomainId{1}, ModeId{2}, {.timeout = 2s});
+  ASSERT_TRUE(enter_active);
+  ASSERT_TRUE(backend->WaitUntilStart(std::chrono::steady_clock::now() + 1s));
+  auto return_idle = coordinator.RequestMode(DomainId{1}, ModeId{1}, {.timeout = 2s});
+  ASSERT_TRUE(return_idle);
+
+  backend->Release();
+  auto first = enter_active.value().Wait(std::chrono::steady_clock::now() + 1s);
+  auto second = return_idle.value().Wait(std::chrono::steady_clock::now() + 1s);
+  ASSERT_TRUE(first);
+  ASSERT_TRUE(second);
+  EXPECT_EQ(first.value().phase, TransitionPhase::succeeded);
+  EXPECT_EQ(second.value().phase, TransitionPhase::succeeded);
+
+  auto domain = coordinator.ResolveDomain(DomainId{1});
+  ASSERT_TRUE(domain);
+  EXPECT_EQ(domain.value().committed_mode, ModeId{1});
+}
+
+} // namespace

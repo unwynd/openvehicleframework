@@ -54,8 +54,22 @@ ExecutionEngine::ExecutionEngine(ValidatedModel model, std::unique_ptr<ProcessBa
     : model_(std::move(model)), planner_(model_), backend_(std::move(backend)),
       journal_(std::move(journal)), configuration_(std::move(configuration)) {}
 
-Result<TransitionSnapshot> ExecutionEngine::RequestMode(DomainId domain, ModeId target,
-                                                        Deadline deadline) noexcept {
+Result<AcceptedTransition> ExecutionEngine::AcceptMode(DomainId domain, ModeId target,
+                                                       Deadline deadline) noexcept {
+  SystemConfiguration baseline;
+  {
+    std::lock_guard lock(mutex_);
+    baseline = configuration_;
+  }
+  return AcceptModeFrom(baseline, domain, target, deadline);
+}
+
+Result<AcceptedTransition> ExecutionEngine::AcceptModeFrom(const SystemConfiguration& baseline,
+                                                           DomainId domain, ModeId target,
+                                                           Deadline deadline) noexcept {
+  if (deadline <= std::chrono::steady_clock::now()) {
+    return MakeError(ErrorCode::deadline_exceeded, "transition deadline has expired");
+  }
   TransitionSnapshot transition;
   transition.id = TransitionId{next_transition_.fetch_add(1U, std::memory_order_relaxed)};
   transition.domain = domain;
@@ -66,13 +80,13 @@ Result<TransitionSnapshot> ExecutionEngine::RequestMode(DomainId domain, ModeId 
   std::optional<Error> planning_error;
   {
     std::lock_guard lock(mutex_);
-    const auto source = configuration_.committed_modes.find(domain);
-    if (source != configuration_.committed_modes.end()) {
+    const auto source = baseline.committed_modes.find(domain);
+    if (source != baseline.committed_modes.end()) {
       transition.source_mode = source->second;
     }
     transitions_.emplace(transition.id, transition);
     cancellation_.emplace(transition.id, false);
-    auto planned = planner_.Plan(configuration_, domain, target);
+    auto planned = planner_.Plan(baseline, domain, target);
     if (!planned) {
       planning_error = planned.error();
     } else {
@@ -80,18 +94,34 @@ Result<TransitionSnapshot> ExecutionEngine::RequestMode(DomainId domain, ModeId 
     }
   }
   if (planning_error) {
-    return Fail(transition, std::move(*planning_error));
+    auto failed = Fail(transition, std::move(*planning_error));
+    return failed ? failed.value().failure->error : failed.error();
   }
 
   auto recorded = Record(transition, TransitionPhase::validated);
   if (!recorded) {
-    return Fail(transition, recorded.error());
+    auto failed = Fail(transition, recorded.error());
+    return failed ? failed.value().failure->error : failed.error();
   }
   recorded = Record(transition, TransitionPhase::planned);
   if (!recorded) {
-    return Fail(transition, recorded.error());
+    auto failed = Fail(transition, recorded.error());
+    return failed ? failed.value().failure->error : failed.error();
   }
+  return AcceptedTransition{transition.id, std::move(plan), deadline};
+}
 
+Result<TransitionSnapshot> ExecutionEngine::Execute(AcceptedTransition accepted) noexcept {
+  auto current = GetTransition(accepted.id);
+  if (!current) {
+    return current.error();
+  }
+  auto transition = std::move(current).value();
+  auto& plan = accepted.plan;
+  const auto deadline = accepted.deadline;
+  const auto domain = transition.domain;
+  const auto target = transition.target_mode;
+  Result<void> recorded;
   TransitionResources resources;
   resources.domains = plan.guarded_domains;
   resources.applications = plan.stop;
@@ -180,6 +210,15 @@ Result<TransitionSnapshot> ExecutionEngine::RequestMode(DomainId domain, ModeId 
   return transition;
 }
 
+Result<TransitionSnapshot> ExecutionEngine::RequestMode(DomainId domain, ModeId target,
+                                                        Deadline deadline) noexcept {
+  auto accepted = AcceptMode(domain, target, deadline);
+  if (!accepted) {
+    return accepted.error();
+  }
+  return Execute(std::move(accepted).value());
+}
+
 Result<void> ExecutionEngine::Cancel(TransitionId transition) noexcept {
   std::lock_guard lock(mutex_);
   const auto found = cancellation_.find(transition);
@@ -188,12 +227,23 @@ Result<void> ExecutionEngine::Cancel(TransitionId transition) noexcept {
   }
   const auto phase = transitions_.at(transition).phase;
   if (phase == TransitionPhase::committing || phase == TransitionPhase::succeeded ||
-      phase == TransitionPhase::failed || phase == TransitionPhase::cancelled) {
+      phase == TransitionPhase::rejected || phase == TransitionPhase::failed ||
+      phase == TransitionPhase::cancelled || phase == TransitionPhase::superseded ||
+      phase == TransitionPhase::deadline_exceeded || phase == TransitionPhase::recovery_failed) {
     return MakeError(ErrorCode::invalid_transition,
                      "transition is no longer at a cancellation point");
   }
   found->second = true;
   return {};
+}
+
+Result<TransitionSnapshot> ExecutionEngine::GetTransition(TransitionId transition) const noexcept {
+  std::lock_guard lock(mutex_);
+  const auto found = transitions_.find(transition);
+  if (found == transitions_.end()) {
+    return MakeError(ErrorCode::not_found, "transition is not known");
+  }
+  return found->second;
 }
 
 EngineSnapshot ExecutionEngine::Snapshot() const {

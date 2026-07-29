@@ -124,10 +124,8 @@ TEST(ExecutionEngineTest, RejectsInvalidRequestsWithoutBackendEffects) {
 
   auto transition =
       engine->RequestMode(DomainId{99}, ModeId{2}, std::chrono::steady_clock::now() + 1s);
-  ASSERT_TRUE(transition);
-  EXPECT_EQ(transition.value().phase, TransitionPhase::failed);
-  ASSERT_TRUE(transition.value().failure);
-  EXPECT_EQ(transition.value().failure->error.code, ErrorCode::not_found);
+  ASSERT_FALSE(transition);
+  EXPECT_EQ(transition.error().code, ErrorCode::not_found);
   EXPECT_TRUE(observer->operations.empty());
 }
 
