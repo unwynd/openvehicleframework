@@ -14,10 +14,16 @@ alias(
     actual = "//com:runtime",
 )
 
+alias(
+    name = "exec",
+    actual = "//exec:model",
+)
+
 test_suite(
     name = "all_tests",
     tests = [
         "//codegen:rustfmt_test",
         "//com/tests:all_tests",
+        "//exec/tests:all_tests",
     ],
 )

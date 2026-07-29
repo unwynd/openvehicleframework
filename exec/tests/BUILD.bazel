@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_test(
+    name = "model_test",
+    srcs = ["model_test.cpp"],
+    deps = [
+        "//exec:model",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "application_test",
+    srcs = ["application_test.cpp"],
+    deps = [
+        "//exec:application",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "planner_test",
+    srcs = ["planner_test.cpp"],
+    deps = [
+        "//exec:planner",
+        "@googletest//:gtest_main",
+    ],
+)
+
+test_suite(
+    name = "all_tests",
+    tests = [
+        ":application_test",
+        ":model_test",
+        ":planner_test",
+    ],
+)

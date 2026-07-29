@@ -7,6 +7,26 @@ project(OpenVehicleFramework VERSION 0.0.1 LANGUAGES C CXX)
 option(OVF_BUILD_TESTS "Build OpenVehicleFramework tests" ON)
 option(OVF_BUILD_INPROC_TRANSPORT "Build the reference in-process transport" ON)
 
+add_library(ovf_exec
+    exec/src/application.cpp
+    exec/src/dinit_lifecycle.cpp
+    exec/src/model.cpp
+    exec/src/planner.cpp
+)
+add_library(ovf::exec ALIAS ovf_exec)
+
+target_compile_features(ovf_exec PUBLIC cxx_std_20)
+target_include_directories(ovf_exec
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/exec/include>
+        $<INSTALL_INTERFACE:include>
+)
+set_target_properties(ovf_exec PROPERTIES
+    CXX_EXTENSIONS OFF
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR}
+)
+
 add_library(ovf_com
     com/src/runtime.cpp
     com/src/provider_binding.cpp
