@@ -75,9 +75,6 @@ bazel test //tests/integration/vsomeip:radar_two_process_test
 See the [radar vSomeIP example](examples/radar/README.md) for the
 interactive service and client commands.
 
-CMake is available as a compatibility build for the transport-neutral runtime,
-the in-process transport, and their tests.
-
 The [repository quality gate](quality/README.md) checks source formatting,
 Starlark build files, SPDX headers, syntax, repository hygiene, and strict
 compiler warnings using Bazel-managed tools.
