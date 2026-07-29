@@ -3,6 +3,8 @@
 
 type = process
 command = {{ application.command }}
+env-file = ovf-app-{{ application.id }}.env
+load-options = export-service-name
 {% if application.readiness == "required" %}ready-notification = pipevar:OVF_EXEC_READY_FD
 {% endif %}restart = false
 start-timeout = {{ application.start_timeout_seconds }}

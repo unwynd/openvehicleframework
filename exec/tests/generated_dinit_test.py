@@ -13,10 +13,21 @@ def main() -> int:
     checker = Path(os.environ["OVF_TEST_DINIT_CHECK"])
     services = Path(os.environ["OVF_TEST_DINIT_SERVICES"])
     names = sorted(path.name for path in services.iterdir() if path.is_file())
-    if names != ["boot", "ovf-app-1", "ovf-app-2", "ovf-app-3", "ovf-app-4"]:
+    service_names = ["boot", "ovf-app-1", "ovf-app-2", "ovf-app-3", "ovf-app-4"]
+    expected_names = service_names + [
+        "ovf-app-1.env",
+        "ovf-app-2.env",
+        "ovf-app-3.env",
+        "ovf-app-4.env",
+    ]
+    if names != sorted(expected_names):
         raise RuntimeError(f"unexpected generated services: {names}")
+    for identifier in range(1, 5):
+        environment = (services / f"ovf-app-{identifier}.env").read_text(encoding="utf-8")
+        if environment != f"OVF_EXEC_APPLICATION_ID={identifier}\n":
+            raise RuntimeError(f"invalid lifecycle identity for application {identifier}")
     completed = subprocess.run(
-        [str(checker), "--user", "--services-dir", str(services), *names],
+        [str(checker), "--user", "--services-dir", str(services), *service_names],
         check=False,
         capture_output=True,
         text=True,

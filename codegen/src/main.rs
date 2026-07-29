@@ -428,6 +428,10 @@ fn generate_dinit_services(
             output.join(format!("ovf-app-{identifier}")),
             rendered.trim_start(),
         )?;
+        fs::write(
+            output.join(format!("ovf-app-{identifier}.env")),
+            format!("OVF_EXEC_APPLICATION_ID={identifier}\n"),
+        )?;
     }
     Ok(())
 }

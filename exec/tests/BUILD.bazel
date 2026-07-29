@@ -12,6 +12,12 @@ cc_binary(
     srcs = ["dinit_test_service.cpp"],
 )
 
+cc_binary(
+    name = "managed_application_test_service",
+    srcs = ["managed_application_test_service.cpp"],
+    deps = ["//exec:application"],
+)
+
 ovf_exec_deployment(
     name = "daemon_deployment",
     deployment = "deployment/daemon.cue",
@@ -50,7 +56,7 @@ cc_test(
         ":daemon_execution_model",
         ":daemon_manifest",
         ":daemon_services",
-        ":dinit_test_service",
+        ":managed_application_test_service",
         "//exec:dinit_plugin",
         "//exec:ovf-execd",
         "@dinit_source//:dinit",
@@ -63,7 +69,7 @@ cc_test(
         "OVF_TEST_EXECUTION_MANIFEST": "$(rootpath :daemon_manifest)",
         "OVF_TEST_EXECUTION_MODEL": "$(rootpath :daemon_execution_model)",
         "OVF_TEST_EXECUTION_SERVICES": "$(rootpath :daemon_services)",
-        "OVF_TEST_MANAGED_SERVICE": "$(rootpath :dinit_test_service)",
+        "OVF_TEST_MANAGED_SERVICE": "$(rootpath :managed_application_test_service)",
     },
     tags = [
         "exclusive",
