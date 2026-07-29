@@ -9,6 +9,7 @@
 #include "ovf/exec/internal/engine.hpp"
 #include "ovf/exec/internal/file_journal.hpp"
 
+#include <algorithm>
 #include <csignal>
 #include <cstdint>
 #include <iostream>
@@ -95,11 +96,17 @@ Result<void> Run(const Arguments& arguments, const sigset_t& signals) {
   if (!library) {
     return library.error();
   }
+  const bool requires_system_recovery = std::any_of(
+      deployment.value().model.value().domains.begin(),
+      deployment.value().model.value().domains.end(), [](const DomainDefinition& domain) {
+        return domain.recovery.action == FailureAction::request_system_recovery;
+      });
   auto backend =
       BindBackend(library.value().Factory(),
                   {.configuration = deployment.value().backend_configuration,
                    .required_parallel_operations = static_cast<std::uint32_t>(
                        deployment.value().coordinator.limits.worker_count),
+                   .require_system_recovery = requires_system_recovery,
                    .logger = [](BackendLogLevel level, std::string_view message) {
                      if (level == BackendLogLevel::warning || level == BackendLogLevel::error) {
                        std::cerr << "ovf-execd backend: " << message << '\n';

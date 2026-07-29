@@ -129,7 +129,7 @@ TEST(DinitIntegrationTest, StartsObservesAndStopsReadinessReportingService) {
   }
   ASSERT_EQ(::access(socket.c_str(), F_OK), 0) << "dinit control socket was not created";
 
-  auto created = CreateDinitBackend({socket, {{ApplicationId{1}, "camera"}}});
+  auto created = CreateDinitBackend({socket, "camera", {{ApplicationId{1}, "camera"}}});
   ASSERT_TRUE(created);
   auto backend = std::move(created).value();
   auto started = backend->Start(ApplicationId{1}, std::chrono::steady_clock::now() + 2s);
@@ -144,6 +144,12 @@ TEST(DinitIntegrationTest, StartsObservesAndStopsReadinessReportingService) {
                                std::chrono::steady_clock::now() + 2s);
   ASSERT_TRUE(stopped) << stopped.error().message;
   EXPECT_EQ(stopped.value().state, ApplicationState::stopped);
+
+  auto recovery = backend->RequestSystemRecovery(std::chrono::steady_clock::now() + 2s);
+  ASSERT_TRUE(recovery) << recovery.error().message;
+  auto recovery_observed = backend->Inspect(ApplicationId{1});
+  ASSERT_TRUE(recovery_observed);
+  EXPECT_NE(recovery_observed.value().state, ApplicationState::stopped);
 }
 
 } // namespace

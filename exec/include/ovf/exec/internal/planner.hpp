@@ -35,8 +35,15 @@ public:
   [[nodiscard]] Result<SystemConfiguration> InitialConfiguration() const;
   [[nodiscard]] Result<TransitionPlan> Plan(const SystemConfiguration& current, DomainId domain,
                                             ModeId target) const;
+  [[nodiscard]] Result<TransitionPlan> Reconcile(const SystemConfiguration& current,
+                                                 DomainId domain, ModeId target) const;
+  [[nodiscard]] Result<std::vector<ApplicationId>>
+  StopDomainApplications(const SystemConfiguration& current, DomainId domain) const;
 
 private:
+  [[nodiscard]] Result<TransitionPlan> BuildPlan(const SystemConfiguration& current,
+                                                 DomainId domain, ModeId target,
+                                                 bool allow_current_mode) const;
   [[nodiscard]] Result<std::unordered_set<ApplicationId>>
   RequiredApplications(const std::unordered_map<DomainId, ModeId>& modes) const;
   [[nodiscard]] Result<void>

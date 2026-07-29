@@ -24,7 +24,8 @@ namespace ovf::exec::detail {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x4A46564FU;
-constexpr std::uint16_t kFormatVersion = 1U;
+constexpr std::uint16_t kMinimumFormatVersion = 1U;
+constexpr std::uint16_t kFormatVersion = 2U;
 constexpr std::size_t kHeaderSize = 16U;
 constexpr std::size_t kMinimumMaximumRecordSize = 4096U;
 
@@ -172,6 +173,26 @@ Result<std::vector<std::uint8_t>> Encode(const JournalEvent& event, std::size_t 
       if (!encoder.String(failure.evidence.message)) {
         return MakeError(ErrorCode::resource_exhausted, "journal evidence is too large");
       }
+      encoder.Integer(static_cast<std::uint8_t>(failure.recovery_action));
+      encoder.Integer(static_cast<std::uint8_t>(failure.recovery_attempted));
+      encoder.Integer(static_cast<std::uint8_t>(failure.recovery_succeeded));
+      encoder.Integer(static_cast<std::uint8_t>(failure.recovery_error.has_value()));
+      if (failure.recovery_error) {
+        encoder.Integer(static_cast<std::uint16_t>(failure.recovery_error->code));
+        encoder.Integer(failure.recovery_error->support_data);
+        if (!encoder.String(failure.recovery_error->message)) {
+          return MakeError(ErrorCode::resource_exhausted, "journal recovery error is too large");
+        }
+      }
+      encoder.Integer(static_cast<std::uint8_t>(failure.recovered_mode.has_value()));
+      if (failure.recovered_mode) {
+        encoder.Id(*failure.recovered_mode);
+      }
+      if (!EncodeIds(encoder, failure.recovery_stopped_applications) ||
+          !EncodeIds(encoder, failure.recovery_started_applications)) {
+        return MakeError(ErrorCode::resource_exhausted,
+                         "journal recovery application evidence is too large");
+      }
     }
     encoder.Integer(static_cast<std::uint8_t>(event.plan.has_value()));
     if (event.plan) {
@@ -195,7 +216,7 @@ Result<std::vector<std::uint8_t>> Encode(const JournalEvent& event, std::size_t 
   }
 }
 
-Result<JournalEvent> Decode(std::span<const std::uint8_t> bytes) {
+Result<JournalEvent> Decode(std::span<const std::uint8_t> bytes, std::uint16_t format_version) {
   try {
     Decoder decoder(bytes);
     JournalEvent event;
@@ -208,7 +229,7 @@ Result<JournalEvent> Decode(std::span<const std::uint8_t> bytes) {
         !decoder.Integer(updated) || !decoder.Integer(has_failure)) {
       return MakeError(ErrorCode::persistence_error, "journal transition record is truncated");
     }
-    if (phase > static_cast<std::uint8_t>(TransitionPhase::recovery_failed) || has_failure > 1U) {
+    if (phase > static_cast<std::uint8_t>(TransitionPhase::recovering) || has_failure > 1U) {
       return MakeError(ErrorCode::persistence_error, "journal transition record is invalid");
     }
     event.transition.phase = static_cast<TransitionPhase>(phase);
@@ -238,6 +259,48 @@ Result<JournalEvent> Decode(std::span<const std::uint8_t> bytes) {
           !decoder.Integer(failure.evidence.native_code) ||
           !decoder.String(failure.evidence.message)) {
         return MakeError(ErrorCode::persistence_error, "journal backend evidence is truncated");
+      }
+      if (format_version >= 2U) {
+        std::uint8_t recovery_action{};
+        std::uint8_t recovery_attempted{};
+        std::uint8_t recovery_succeeded{};
+        std::uint8_t has_recovery_error{};
+        std::uint8_t has_recovered_mode{};
+        if (!decoder.Integer(recovery_action) || !decoder.Integer(recovery_attempted) ||
+            !decoder.Integer(recovery_succeeded) || !decoder.Integer(has_recovery_error) ||
+            recovery_action > static_cast<std::uint8_t>(FailureAction::request_system_recovery) ||
+            recovery_attempted > 1U || recovery_succeeded > 1U || has_recovery_error > 1U) {
+          return MakeError(ErrorCode::persistence_error, "journal recovery evidence is invalid");
+        }
+        failure.recovery_action = static_cast<FailureAction>(recovery_action);
+        failure.recovery_attempted = recovery_attempted != 0U;
+        failure.recovery_succeeded = recovery_succeeded != 0U;
+        if (has_recovery_error != 0U) {
+          Error recovery_error;
+          std::uint16_t error_code{};
+          if (!decoder.Integer(error_code) || !decoder.Integer(recovery_error.support_data) ||
+              !decoder.String(recovery_error.message) ||
+              error_code > static_cast<std::uint16_t>(ErrorCode::internal_error)) {
+            return MakeError(ErrorCode::persistence_error, "journal recovery error is invalid");
+          }
+          recovery_error.code = static_cast<ErrorCode>(error_code);
+          failure.recovery_error = std::move(recovery_error);
+        }
+        if (!decoder.Integer(has_recovered_mode) || has_recovered_mode > 1U) {
+          return MakeError(ErrorCode::persistence_error, "journal recovered mode is invalid");
+        }
+        if (has_recovered_mode != 0U) {
+          ModeId mode;
+          if (!decoder.Id(mode)) {
+            return MakeError(ErrorCode::persistence_error, "journal recovered mode is truncated");
+          }
+          failure.recovered_mode = mode;
+        }
+        if (!DecodeIds(decoder, failure.recovery_stopped_applications) ||
+            !DecodeIds(decoder, failure.recovery_started_applications)) {
+          return MakeError(ErrorCode::persistence_error,
+                           "journal recovery application evidence is invalid");
+        }
       }
       event.transition.failure = std::move(failure);
     }
@@ -373,8 +436,8 @@ public:
         const auto reserved = Get16(header.data() + 6U);
         const auto size = Get32(header.data() + 8U);
         const auto checksum = Get32(header.data() + 12U);
-        if (magic != kMagic || version != kFormatVersion || reserved != 0U ||
-            size > options_.maximum_record_size) {
+        if (magic != kMagic || version < kMinimumFormatVersion || version > kFormatVersion ||
+            reserved != 0U || size > options_.maximum_record_size) {
           return MakeError(ErrorCode::persistence_error, "journal frame header is invalid");
         }
         std::vector<std::uint8_t> payload(size);
@@ -393,7 +456,7 @@ public:
         if (Crc32(payload) != checksum) {
           return MakeError(ErrorCode::persistence_error, "journal frame checksum mismatch");
         }
-        auto decoded = Decode(payload);
+        auto decoded = Decode(payload, version);
         if (!decoded) {
           return decoded.error();
         }

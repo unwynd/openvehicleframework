@@ -3,6 +3,7 @@
 #include "ovf/exec/internal/backend_binding.hpp"
 
 #include <chrono>
+#include <cstddef>
 #include <utility>
 
 namespace ovf::exec::detail {
@@ -136,6 +137,18 @@ public:
     });
   }
 
+  Result<void> RequestSystemRecovery(Deadline deadline) noexcept override {
+    if (backend_->struct_size < offsetof(ovf_exec_backend_v1, request_system_recovery) +
+                                    sizeof(backend_->request_system_recovery) ||
+        backend_->request_system_recovery == nullptr) {
+      return MakeError(ErrorCode::unsupported, "backend does not support system recovery requests");
+    }
+    const auto status = backend_->request_system_recovery(backend_, DeadlineNanoseconds(deadline));
+    return status == OVF_EXEC_STATUS_OK
+               ? Result<void>{}
+               : Result<void>{StatusError(status, "system recovery request")};
+  }
+
 private:
   template <typename Operation>
   Result<BackendEvidence> Invoke(std::string operation, Operation invoke) noexcept {
@@ -218,7 +231,8 @@ Result<std::unique_ptr<ProcessBackend>> BindBackend(const ovf_exec_backend_facto
   if (created != OVF_EXEC_STATUS_OK) {
     return StatusError(created, "backend creation");
   }
-  if (backend == nullptr || backend->struct_size < sizeof(ovf_exec_backend_v1) ||
+  constexpr auto minimum_backend_size = offsetof(ovf_exec_backend_v1, request_system_recovery);
+  if (backend == nullptr || backend->struct_size < minimum_backend_size ||
       backend->abi_version != OVF_EXEC_BACKEND_ABI_VERSION_1 ||
       backend->get_capabilities == nullptr || backend->inspect == nullptr ||
       backend->start == nullptr || backend->stop == nullptr) {
@@ -231,7 +245,9 @@ Result<std::unique_ptr<ProcessBackend>> BindBackend(const ovf_exec_backend_facto
   ovf_exec_capabilities_v1 capabilities{};
   capabilities.struct_size = sizeof(capabilities);
   const auto queried = backend->get_capabilities(backend, &capabilities);
-  if (queried != OVF_EXEC_STATUS_OK || capabilities.struct_size < sizeof(capabilities)) {
+  constexpr auto minimum_capabilities_size =
+      offsetof(ovf_exec_capabilities_v1, supports_system_recovery);
+  if (queried != OVF_EXEC_STATUS_OK || capabilities.struct_size < minimum_capabilities_size) {
     factory.destroy(backend);
     return queried == OVF_EXEC_STATUS_OK
                ? MakeError(ErrorCode::incompatible_abi, "backend returned truncated capabilities")
@@ -242,6 +258,16 @@ Result<std::unique_ptr<ProcessBackend>> BindBackend(const ovf_exec_backend_facto
     factory.destroy(backend);
     return MakeError(ErrorCode::unsupported,
                      "backend does not satisfy required execution capabilities");
+  }
+  const bool supports_system_recovery =
+      capabilities.struct_size >= offsetof(ovf_exec_capabilities_v1, reserved) &&
+      capabilities.supports_system_recovery != 0U &&
+      backend->struct_size >= sizeof(ovf_exec_backend_v1) &&
+      backend->request_system_recovery != nullptr;
+  if (config.require_system_recovery && !supports_system_recovery) {
+    factory.destroy(backend);
+    return MakeError(ErrorCode::unsupported,
+                     "backend does not satisfy the system recovery capability");
   }
 
   try {

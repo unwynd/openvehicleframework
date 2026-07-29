@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ovf/exec/internal/coordinator_service.hpp"
 #include "ovf/exec/internal/coordinator_server.hpp"
+#include "ovf/exec/internal/coordinator_service.hpp"
 
 #include <gtest/gtest.h>
 
@@ -21,7 +21,8 @@ using namespace std::chrono_literals;
 using namespace ovf::exec;
 using namespace ovf::exec::detail;
 
-ValidatedModel Model(ReplacementPolicy replacement = ReplacementPolicy::supersede_if_safe) {
+ValidatedModel Model(ReplacementPolicy replacement = ReplacementPolicy::supersede_if_safe,
+                     RecoveryPolicy recovery = {}) {
   ExecutionModel model{
       ModelGeneration{8},
       {{ApplicationId{1}, "base", ReadinessPolicy::required, 1s, 1s, {}, {}, {}},
@@ -30,7 +31,7 @@ ValidatedModel Model(ReplacementPolicy replacement = ReplacementPolicy::supersed
         "machine",
         ModeId{1},
         replacement,
-        {},
+        recovery,
         {{ModeId{1}, "idle", {ApplicationId{1}}, {}},
          {ModeId{2}, "active", {ApplicationId{1}, ApplicationId{2}}, {}}}}}};
   auto validated = ValidateModel(std::move(model));
@@ -51,6 +52,10 @@ public:
     entered_.notify_all();
     if (!released_.wait_until(lock, deadline, [this] { return release_; })) {
       return MakeError(ErrorCode::deadline_exceeded, "injected start deadline");
+    }
+    if (fail_start_) {
+      states_[application] = ApplicationState::failed;
+      return BackendEvidence{ApplicationState::failed, 31, 0, 71, "injected failure"};
     }
     states_[application] = ApplicationState::ready;
     return BackendEvidence{ApplicationState::ready, 0, 0, 0, {}};
@@ -73,6 +78,11 @@ public:
     released_.notify_all();
   }
 
+  void FailStart() {
+    std::lock_guard lock(mutex_);
+    fail_start_ = true;
+  }
+
 private:
   std::mutex mutex_;
   std::condition_variable entered_;
@@ -83,6 +93,7 @@ private:
   };
   bool start_entered_{};
   bool release_{};
+  bool fail_start_{};
 };
 
 class TemporaryDirectory final {
@@ -214,20 +225,18 @@ TEST(CoordinatorTest, PlansQueuedRequestAgainstEarlierAcceptedTarget) {
 
 TEST(CoordinatorTest, ServesAuthenticatedCoordinatorApiAcrossUnixSocket) {
   BlockingBackend* backend{};
-  auto local = detail_CoordinatorFactory::Create(
-      Engine(Model(), &backend), {.observe = true, .mutate = true});
+  auto local = detail_CoordinatorFactory::Create(Engine(Model(), &backend),
+                                                 {.observe = true, .mutate = true});
   ASSERT_TRUE(local);
   TemporaryDirectory temporary;
   const auto endpoint = temporary.Socket();
   const auto uid = static_cast<std::uint32_t>(::getuid());
-  auto server = StartCoordinatorServer(
-      std::move(local).value(),
-      {.endpoint = endpoint,
-       .observation_uids = {uid},
-       .mutation_uids = {uid},
-       .connection_capacity = 16U,
-       .worker_count = 2U,
-       .maximum_message_size = 65536U});
+  auto server = StartCoordinatorServer(std::move(local).value(), {.endpoint = endpoint,
+                                                                  .observation_uids = {uid},
+                                                                  .mutation_uids = {uid},
+                                                                  .connection_capacity = 16U,
+                                                                  .worker_count = 2U,
+                                                                  .maximum_message_size = 65536U});
   ASSERT_TRUE(server) << server.error().message;
 
   auto connected = SystemCoordinator::Connect({endpoint, 1s});
@@ -240,9 +249,8 @@ TEST(CoordinatorTest, ServesAuthenticatedCoordinatorApiAcrossUnixSocket) {
   EXPECT_EQ(mode.value().name, "active");
 
   std::atomic_uint events{};
-  auto subscription = coordinator.Subscribe({}, [&events](const CoordinatorEvent&) {
-    events.fetch_add(1U, std::memory_order_relaxed);
-  });
+  auto subscription = coordinator.Subscribe(
+      {}, [&events](const CoordinatorEvent&) { events.fetch_add(1U, std::memory_order_relaxed); });
   ASSERT_TRUE(subscription);
   auto transition = coordinator.RequestMode(DomainId{1}, ModeId{2}, {.timeout = 2s});
   ASSERT_TRUE(transition);
@@ -251,28 +259,78 @@ TEST(CoordinatorTest, ServesAuthenticatedCoordinatorApiAcrossUnixSocket) {
   auto completed = transition.value().Wait(std::chrono::steady_clock::now() + 1s);
   ASSERT_TRUE(completed);
   EXPECT_EQ(completed.value().phase, TransitionPhase::succeeded);
-  for (int attempt = 0;
-       attempt < 100 && events.load(std::memory_order_relaxed) == 0U; ++attempt) {
+  for (int attempt = 0; attempt < 100 && events.load(std::memory_order_relaxed) == 0U; ++attempt) {
     std::this_thread::sleep_for(10ms);
   }
   EXPECT_GT(events.load(std::memory_order_relaxed), 0U);
 }
 
-TEST(CoordinatorTest, RejectsPeerWithoutGeneratedObservationAuthority) {
+TEST(CoordinatorTest, DeliversRecoveryEvidenceAndEventsAcrossUnixSocket) {
+  BlockingBackend* backend{};
   auto local = detail_CoordinatorFactory::Create(
-      Engine(Model()), {.observe = true, .mutate = true});
+      Engine(Model(ReplacementPolicy::supersede_if_safe,
+                   {FailureAction::enter_fallback_mode, ModeId{1}, 1s}),
+             &backend),
+      {.observe = true, .mutate = true});
+  ASSERT_TRUE(local);
+  TemporaryDirectory temporary;
+  const auto endpoint = temporary.Socket();
+  const auto uid = static_cast<std::uint32_t>(::getuid());
+  auto server = StartCoordinatorServer(std::move(local).value(), {.endpoint = endpoint,
+                                                                  .observation_uids = {uid},
+                                                                  .mutation_uids = {uid},
+                                                                  .connection_capacity = 16U,
+                                                                  .worker_count = 2U,
+                                                                  .maximum_message_size = 65536U});
+  ASSERT_TRUE(server);
+  auto connected = SystemCoordinator::Connect({endpoint, 1s});
+  ASSERT_TRUE(connected);
+  auto coordinator = std::move(connected).value();
+  std::atomic_uint recovery_events{};
+  auto subscription =
+      coordinator.Subscribe({.transitions = false,
+                             .configuration = false,
+                             .recovery = true,
+                             .domain = std::nullopt},
+                            [&recovery_events](const CoordinatorEvent& event) {
+                              if (event.kind == CoordinatorEventKind::recovery_changed) {
+                                recovery_events.fetch_add(1U, std::memory_order_relaxed);
+                              }
+                            });
+  ASSERT_TRUE(subscription);
+  backend->FailStart();
+  auto transition = coordinator.RequestMode(DomainId{1}, ModeId{2}, {.timeout = 2s});
+  ASSERT_TRUE(transition);
+  ASSERT_TRUE(backend->WaitUntilStart(std::chrono::steady_clock::now() + 1s));
+  backend->Release();
+  auto completed = transition.value().Wait(std::chrono::steady_clock::now() + 1s);
+  ASSERT_TRUE(completed);
+  ASSERT_TRUE(completed.value().failure);
+  EXPECT_EQ(completed.value().phase, TransitionPhase::failed);
+  EXPECT_EQ(completed.value().failure->recovery_action, FailureAction::enter_fallback_mode);
+  EXPECT_TRUE(completed.value().failure->recovery_attempted);
+  EXPECT_TRUE(completed.value().failure->recovery_succeeded);
+  EXPECT_EQ(completed.value().failure->recovered_mode, ModeId{1});
+  for (int attempt = 0; attempt < 100 && recovery_events.load(std::memory_order_relaxed) == 0U;
+       ++attempt) {
+    std::this_thread::sleep_for(10ms);
+  }
+  EXPECT_GT(recovery_events.load(std::memory_order_relaxed), 0U);
+}
+
+TEST(CoordinatorTest, RejectsPeerWithoutGeneratedObservationAuthority) {
+  auto local =
+      detail_CoordinatorFactory::Create(Engine(Model()), {.observe = true, .mutate = true});
   ASSERT_TRUE(local);
   TemporaryDirectory temporary;
   const auto endpoint = temporary.Socket();
   const auto other_uid = static_cast<std::uint32_t>(::getuid()) + 1U;
-  auto server = StartCoordinatorServer(
-      std::move(local).value(),
-      {.endpoint = endpoint,
-       .observation_uids = {other_uid},
-       .mutation_uids = {other_uid},
-       .connection_capacity = 4U,
-       .worker_count = 1U,
-       .maximum_message_size = 65536U});
+  auto server = StartCoordinatorServer(std::move(local).value(), {.endpoint = endpoint,
+                                                                  .observation_uids = {other_uid},
+                                                                  .mutation_uids = {other_uid},
+                                                                  .connection_capacity = 4U,
+                                                                  .worker_count = 1U,
+                                                                  .maximum_message_size = 65536U});
   ASSERT_TRUE(server);
 
   auto connected = SystemCoordinator::Connect({endpoint, 1s});

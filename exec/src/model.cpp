@@ -164,6 +164,8 @@ std::string_view ToString(TransitionPhase value) noexcept {
     return "deadline_exceeded";
   case TransitionPhase::recovery_failed:
     return "recovery_failed";
+  case TransitionPhase::recovering:
+    return "recovering";
   }
   return "unknown";
 }

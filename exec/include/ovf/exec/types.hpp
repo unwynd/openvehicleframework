@@ -80,7 +80,8 @@ enum class TransitionPhase : std::uint8_t {
   cancelled,
   superseded,
   deadline_exceeded,
-  recovery_failed
+  recovery_failed,
+  recovering
 };
 
 enum class StopReason : std::uint8_t {

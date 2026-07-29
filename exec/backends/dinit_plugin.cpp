@@ -126,7 +126,7 @@ ovf_exec_status_v1 Capabilities(ovf_exec_backend_v1* self, ovf_exec_capabilities
     return OVF_EXEC_STATUS_INVALID_ARGUMENT;
   }
   *output = {
-      sizeof(ovf_exec_capabilities_v1), 64U, 1U, 1U, 1U, 0U, 0U, {0U, 0U, 0U},
+      sizeof(ovf_exec_capabilities_v1), 64U, 1U, 1U, 1U, 0U, 0U, 1U, {0U, 0U},
   };
   return OVF_EXEC_STATUS_OK;
 }
@@ -156,6 +156,15 @@ ovf_exec_status_v1 Stop(ovf_exec_backend_v1* self, std::uint64_t application,
              : Evidence(plugin->backend->Stop(ApplicationId{application}, Reason(reason),
                                               Time(deadline)),
                         output);
+}
+
+ovf_exec_status_v1 SystemRecovery(ovf_exec_backend_v1* self, std::uint64_t deadline) {
+  auto* plugin = Implementation(self);
+  if (plugin == nullptr || deadline == 0U) {
+    return OVF_EXEC_STATUS_INVALID_ARGUMENT;
+  }
+  auto requested = plugin->backend->RequestSystemRecovery(Time(deadline));
+  return requested ? OVF_EXEC_STATUS_OK : Status(requested.error());
 }
 
 ovf_exec_status_v1 Create(const ovf_exec_host_api_v1* host,
@@ -188,6 +197,7 @@ ovf_exec_status_v1 Create(const ovf_exec_host_api_v1* host,
       Inspect,
       Start,
       Stop,
+      SystemRecovery,
   };
   *output = &plugin->api;
   return OVF_EXEC_STATUS_OK;

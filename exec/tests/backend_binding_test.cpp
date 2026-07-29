@@ -25,6 +25,7 @@ ovf_exec_status_v1 Capabilities(ovf_exec_backend_v1*, ovf_exec_capabilities_v1* 
   value->supports_readiness = 1;
   value->supports_graceful_stop = 1;
   value->supports_exit_evidence = 1;
+  value->supports_system_recovery = 1;
   return OVF_EXEC_STATUS_OK;
 }
 
@@ -54,6 +55,12 @@ ovf_exec_status_v1 Stop(ovf_exec_backend_v1* self, std::uint64_t application,
   return OVF_EXEC_STATUS_OK;
 }
 
+ovf_exec_status_v1 SystemRecovery(ovf_exec_backend_v1* self, std::uint64_t) {
+  auto& backend = *static_cast<FakeBackend*>(self->implementation);
+  backend.started.push_back(999U);
+  return OVF_EXEC_STATUS_OK;
+}
+
 ovf_exec_status_v1 Create(const ovf_exec_host_api_v1* host, const ovf_exec_backend_config_v1*,
                           ovf_exec_backend_v1** result) {
   auto* backend = new FakeBackend;
@@ -64,7 +71,8 @@ ovf_exec_status_v1 Create(const ovf_exec_host_api_v1* host, const ovf_exec_backe
                   Capabilities,
                   Inspect,
                   Start,
-                  Stop};
+                  Stop,
+                  SystemRecovery};
   *result = &backend->abi;
   return OVF_EXEC_STATUS_OK;
 }
@@ -84,7 +92,9 @@ ovf_exec_backend_factory_v1 Factory() {
 TEST(BackendBindingTest, ValidatesAndCopiesBackendEvidence) {
   std::vector<std::string> logs;
   auto factory = Factory();
-  auto bound = BindBackend(factory, {"{}", 2, [&](BackendLogLevel, std::string_view message) {
+  auto bound = BindBackend(factory, {.configuration = "{}",
+                                     .required_parallel_operations = 2,
+                                     .logger = [&](BackendLogLevel, std::string_view message) {
                                        logs.emplace_back(message);
                                      }});
   ASSERT_TRUE(bound);
@@ -100,13 +110,26 @@ TEST(BackendBindingTest, ValidatesAndCopiesBackendEvidence) {
       backend->Stop(ApplicationId{9}, StopReason::mode_change, std::chrono::steady_clock::now());
   ASSERT_TRUE(stopped);
   EXPECT_EQ(stopped.value().state, ApplicationState::stopped);
+
+  auto recovery = backend->RequestSystemRecovery(std::chrono::steady_clock::now());
+  ASSERT_TRUE(recovery);
 }
 
 TEST(BackendBindingTest, RejectsInsufficientCapabilities) {
   auto factory = Factory();
-  auto result = BindBackend(factory, {"", 8, {}});
+  auto result =
+      BindBackend(factory, {.configuration = "", .required_parallel_operations = 8, .logger = {}});
   ASSERT_FALSE(result);
   EXPECT_EQ(result.error().code, ErrorCode::unsupported);
+}
+
+TEST(BackendBindingTest, NegotiatesSystemRecoveryCapability) {
+  auto factory = Factory();
+  auto result = BindBackend(factory, {.configuration = "",
+                                      .required_parallel_operations = 1,
+                                      .require_system_recovery = true,
+                                      .logger = {}});
+  ASSERT_TRUE(result) << result.error().message;
 }
 
 } // namespace

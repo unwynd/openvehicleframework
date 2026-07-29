@@ -5,6 +5,7 @@ package ovf_exec_deployment
 platform: {
 	dinit: {
 		backendLibrary:    "/usr/lib/libovf_exec_backend_dinit.so"
+		systemRecoveryService: "ovf-system-recovery"
 		controlSocket:     "/run/ovf/exec/dinit.sock"
 		servicesDirectory: "/etc/dinit.d"
 		logBufferSize:     65536

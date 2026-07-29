@@ -58,9 +58,16 @@ JournalEvent Event(TransitionPhase phase) {
       phase,
       std::chrono::steady_clock::now(),
       TransitionFailure{
-          MakeError(ErrorCode::backend_error, "backend failed", 42),
-          ApplicationId{3},
-          {ApplicationState::failed, 17, 9, 88, "native evidence"},
+          .error = MakeError(ErrorCode::backend_error, "backend failed", 42),
+          .application = ApplicationId{3},
+          .evidence = {ApplicationState::failed, 17, 9, 88, "native evidence"},
+          .recovery_action = FailureAction::enter_fallback_mode,
+          .recovery_attempted = true,
+          .recovery_succeeded = true,
+          .recovery_error = std::nullopt,
+          .recovered_mode = ModeId{4},
+          .recovery_stopped_applications = {ApplicationId{2}},
+          .recovery_started_applications = {ApplicationId{3}},
       },
   };
   return {std::move(transition), ModelGeneration{7}, std::move(plan)};
@@ -96,10 +103,22 @@ ValidatedModel Model() {
   return std::move(validated).value();
 }
 
+ValidatedModel RecoveryModel() {
+  ExecutionModel model = Model().value();
+  model.domains[0].recovery = {FailureAction::enter_fallback_mode, ModeId{3},
+                               std::chrono::seconds{1}};
+  model.domains[0].modes.push_back({ModeId{3}, "fallback", {}, {}});
+  auto validated = ValidateModel(std::move(model));
+  EXPECT_TRUE(validated);
+  return std::move(validated).value();
+}
+
 class ReplayBackend final : public ProcessBackend {
 public:
-  explicit ReplayBackend(bool feature_ready) {
-    states_[ApplicationId{1}] = ApplicationState::ready;
+  explicit ReplayBackend(bool feature_ready, bool base_ready = true,
+                         bool fail_feature_start = false)
+      : fail_feature_start_(fail_feature_start) {
+    states_[ApplicationId{1}] = base_ready ? ApplicationState::ready : ApplicationState::stopped;
     states_[ApplicationId{2}] = feature_ready ? ApplicationState::ready : ApplicationState::stopped;
   }
 
@@ -108,6 +127,10 @@ public:
   }
   Result<BackendEvidence> Start(ApplicationId application, Deadline) noexcept override {
     operations.push_back("start:" + std::to_string(application.value()));
+    if (fail_feature_start_ && application == ApplicationId{2}) {
+      states_[application] = ApplicationState::failed;
+      return BackendEvidence{ApplicationState::failed, 41, 0, 82, "recovery test failure"};
+    }
     states_[application] = ApplicationState::ready;
     return BackendEvidence{ApplicationState::ready, 0, 0, 0, {}};
   }
@@ -121,6 +144,7 @@ public:
 
 private:
   std::unordered_map<ApplicationId, ApplicationState> states_;
+  bool fail_feature_start_{};
 };
 
 TEST(FileJournalTest, RoundTripsCompleteTransitionEvidenceAndPlan) {
@@ -139,6 +163,10 @@ TEST(FileJournalTest, RoundTripsCompleteTransitionEvidenceAndPlan) {
   EXPECT_EQ(event.transition.id, TransitionId{11});
   EXPECT_EQ(event.transition.failure->error.message, "backend failed");
   EXPECT_EQ(event.transition.failure->evidence.exit_code, 17);
+  EXPECT_TRUE(event.transition.failure->recovery_succeeded);
+  EXPECT_EQ(event.transition.failure->recovered_mode, ModeId{4});
+  EXPECT_EQ(event.transition.failure->recovery_stopped_applications,
+            (std::vector<ApplicationId>{ApplicationId{2}}));
   ASSERT_TRUE(event.plan);
   EXPECT_EQ(event.plan->start, std::vector<ApplicationId>({ApplicationId{3}}));
   EXPECT_EQ(event.plan->affected_resources, std::vector<ResourceId>({ResourceId{9}}));
@@ -255,6 +283,36 @@ TEST(FileJournalTest, PreservesObservedStateAndFinalizesInterruptedTransition) {
   EXPECT_EQ(transition.value().phase, TransitionPhase::failed);
   ASSERT_TRUE(transition.value().failure);
   EXPECT_EQ(transition.value().failure->error.code, ErrorCode::backend_unavailable);
+}
+
+TEST(FileJournalTest, RestoresFallbackCommitAndRecoveryApplicationEffects) {
+  using namespace std::chrono_literals;
+  TemporaryFile file;
+  {
+    auto journal = OpenFileTransitionJournal({file.path()});
+    ASSERT_TRUE(journal);
+    auto engine =
+        ExecutionEngine::Create(RecoveryModel(), std::make_unique<ReplayBackend>(false, true, true),
+                                std::move(journal).value());
+    ASSERT_TRUE(engine);
+    auto completed =
+        engine.value()->RequestMode(DomainId{1}, ModeId{2}, std::chrono::steady_clock::now() + 1s);
+    ASSERT_TRUE(completed);
+    EXPECT_EQ(completed.value().phase, TransitionPhase::failed);
+    EXPECT_EQ(engine.value()->Snapshot().configuration.committed_modes.at(DomainId{1}), ModeId{3});
+  }
+
+  auto journal = OpenFileTransitionJournal({file.path()});
+  ASSERT_TRUE(journal);
+  auto backend = std::make_unique<ReplayBackend>(false, false);
+  auto* observer = backend.get();
+  auto restored =
+      ExecutionEngine::Create(RecoveryModel(), std::move(backend), std::move(journal).value());
+  ASSERT_TRUE(restored) << restored.error().message;
+  const auto snapshot = restored.value()->Snapshot();
+  EXPECT_EQ(snapshot.configuration.committed_modes.at(DomainId{1}), ModeId{3});
+  EXPECT_TRUE(snapshot.configuration.running_applications.empty());
+  EXPECT_TRUE(observer->operations.empty());
 }
 
 } // namespace

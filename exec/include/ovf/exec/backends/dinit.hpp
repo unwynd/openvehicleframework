@@ -13,6 +13,7 @@ namespace ovf::exec::backends {
 
 struct DinitConfig final {
   std::string control_socket;
+  std::string system_recovery_service;
   std::unordered_map<ApplicationId, std::string> services;
 };
 

@@ -51,6 +51,13 @@ struct TransitionFailureSnapshot final {
   std::int32_t signal{};
   std::uint64_t backend_code{};
   std::string backend_message;
+  FailureAction recovery_action{FailureAction::hold_observed_configuration};
+  bool recovery_attempted{};
+  bool recovery_succeeded{};
+  std::optional<Error> recovery_error;
+  std::optional<ModeId> recovered_mode;
+  std::vector<ApplicationId> recovery_stopped_applications;
+  std::vector<ApplicationId> recovery_started_applications;
 };
 
 struct TransitionSnapshot final {

@@ -26,6 +26,17 @@ Result<SystemConfiguration> TransitionPlanner::InitialConfiguration() const {
 
 Result<TransitionPlan> TransitionPlanner::Plan(const SystemConfiguration& current, DomainId domain,
                                                ModeId target) const {
+  return BuildPlan(current, domain, target, false);
+}
+
+Result<TransitionPlan> TransitionPlanner::Reconcile(const SystemConfiguration& current,
+                                                    DomainId domain, ModeId target) const {
+  return BuildPlan(current, domain, target, true);
+}
+
+Result<TransitionPlan> TransitionPlanner::BuildPlan(const SystemConfiguration& current,
+                                                    DomainId domain, ModeId target,
+                                                    bool allow_current_mode) const {
   if (current.generation != model_.value().generation) {
     return MakeError(ErrorCode::configuration_error,
                      "system configuration generation does not match the active model");
@@ -42,7 +53,7 @@ Result<TransitionPlan> TransitionPlanner::Plan(const SystemConfiguration& curren
     return MakeError(ErrorCode::configuration_error,
                      "system configuration has no committed mode for the domain");
   }
-  if (current_mode->second == target) {
+  if (!allow_current_mode && current_mode->second == target) {
     return MakeError(ErrorCode::invalid_transition, "domain is already in the target mode");
   }
 
@@ -107,6 +118,48 @@ Result<TransitionPlan> TransitionPlanner::Plan(const SystemConfiguration& curren
   plan.guarded_domains.assign(guarded_domains.begin(), guarded_domains.end());
   plan.affected_resources.assign(resources.begin(), resources.end());
   return plan;
+}
+
+Result<std::vector<ApplicationId>>
+TransitionPlanner::StopDomainApplications(const SystemConfiguration& current,
+                                          DomainId domain) const {
+  if (current.generation != model_.value().generation || model_.FindDomain(domain) == nullptr) {
+    return MakeError(ErrorCode::configuration_error,
+                     "cannot stop an unknown domain or model generation");
+  }
+  auto remaining_modes = current.committed_modes;
+  remaining_modes.erase(domain);
+  std::unordered_set<ApplicationId> required;
+  for (const auto& [selected_domain, selected_mode] : remaining_modes) {
+    const auto* mode = model_.FindMode({selected_domain, selected_mode});
+    if (mode == nullptr) {
+      return MakeError(ErrorCode::configuration_error,
+                       "system configuration selects an undefined execution mode");
+    }
+    required.insert(mode->applications.begin(), mode->applications.end());
+  }
+  std::vector<ApplicationId> pending(required.begin(), required.end());
+  while (!pending.empty()) {
+    const auto application = pending.back();
+    pending.pop_back();
+    const auto* definition = model_.FindApplication(application);
+    if (definition == nullptr) {
+      return MakeError(ErrorCode::configuration_error,
+                       "execution mode selects an undefined application");
+    }
+    for (const auto dependency : definition->dependencies) {
+      if (required.insert(dependency).second) {
+        pending.push_back(dependency);
+      }
+    }
+  }
+  std::unordered_set<ApplicationId> stopped;
+  for (const auto application : current.running_applications) {
+    if (!required.contains(application)) {
+      stopped.insert(application);
+    }
+  }
+  return Order(stopped, true);
 }
 
 Result<std::unordered_set<ApplicationId>>

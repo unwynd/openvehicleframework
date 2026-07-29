@@ -306,6 +306,21 @@ public:
     return Change(application, cp_cmd::STOPSERVICE, ApplicationState::stopped, reason, deadline);
   }
 
+  Result<void> RequestSystemRecovery(Deadline deadline) noexcept override {
+    if (config_.system_recovery_service.empty()) {
+      return MakeError(ErrorCode::unsupported, "dinit system recovery service is not configured");
+    }
+    auto connection = Connection::Open(config_.control_socket, deadline);
+    if (!connection) {
+      return connection.error();
+    }
+    auto loaded = Load(connection.value(), config_.system_recovery_service, false, deadline);
+    if (!loaded) {
+      return loaded.error();
+    }
+    return Command(connection.value(), loaded.value().handle, cp_cmd::STARTSERVICE, deadline);
+  }
+
 private:
   Result<std::string_view> Service(ApplicationId application) const noexcept {
     const auto found = config_.services.find(application);
@@ -368,7 +383,9 @@ bool ValidServiceName(std::string_view name) {
 } // namespace
 
 Result<std::unique_ptr<detail::ProcessBackend>> CreateDinitBackend(DinitConfig config) {
-  if (config.control_socket.empty() || config.control_socket.front() != '/') {
+  if (config.control_socket.empty() || config.control_socket.front() != '/' ||
+      (!config.system_recovery_service.empty() &&
+       !ValidServiceName(config.system_recovery_service))) {
     return MakeError(ErrorCode::invalid_argument, "dinit control socket path must be absolute");
   }
   if (config.services.empty()) {
@@ -398,16 +415,22 @@ Result<DinitConfig> ParseDinitConfig(std::string_view configuration) {
   Json::Value root;
   std::string errors;
   if (!Json::parseFromStream(builder, input, &root, &errors) || !root.isObject() ||
-      root["backendVersion"] != 1 || root["kind"] != "dinit" || !root["controlSocket"].isString() ||
+      !root["backendVersion"].isIntegral() || root["backendVersion"].asUInt64() != 1U ||
+      root["kind"] != "dinit" || !root["controlSocket"].isString() ||
       !root["applications"].isArray()) {
     return MakeError(ErrorCode::configuration_error,
                      "generated dinit backend configuration is invalid");
   }
   DinitConfig result;
   result.control_socket = root["controlSocket"].asString();
+  if (!root["systemRecoveryService"].isString()) {
+    return MakeError(ErrorCode::configuration_error, "generated dinit recovery service is invalid");
+  }
+  result.system_recovery_service = root["systemRecoveryService"].asString();
   try {
     for (const auto& entry : root["applications"]) {
-      if (!entry.isObject() || !entry["id"].isUInt64() || entry["id"].asUInt64() == 0U ||
+      if (!entry.isObject() || !entry["id"].isIntegral() ||
+          (entry["id"].isInt64() && entry["id"].asInt64() < 0) || entry["id"].asUInt64() == 0U ||
           !entry["service"].isString()) {
         return MakeError(ErrorCode::configuration_error,
                          "generated dinit application mapping is invalid");

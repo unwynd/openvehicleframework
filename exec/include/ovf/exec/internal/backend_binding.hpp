@@ -18,6 +18,7 @@ using BackendLogger = std::function<void(BackendLogLevel, std::string_view)>;
 struct BackendBindingConfig final {
   std::string configuration;
   std::uint32_t required_parallel_operations{1U};
+  bool require_system_recovery{};
   BackendLogger logger;
 };
 

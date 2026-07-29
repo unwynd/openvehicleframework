@@ -69,7 +69,8 @@ typedef struct ovf_exec_capabilities_v1 {
   uint8_t supports_exit_evidence;
   uint8_t supports_log_access;
   uint8_t supports_resource_control;
-  uint8_t reserved[3];
+  uint8_t supports_system_recovery;
+  uint8_t reserved[2];
 } ovf_exec_capabilities_v1;
 
 typedef enum ovf_exec_log_level_v1 {
@@ -108,6 +109,8 @@ typedef ovf_exec_status_v1 (*ovf_exec_backend_stop_fn_v1)(struct ovf_exec_backen
                                                           ovf_exec_stop_reason_v1 reason,
                                                           uint64_t deadline_ns,
                                                           ovf_exec_evidence_v1* evidence);
+typedef ovf_exec_status_v1 (*ovf_exec_backend_system_recovery_fn_v1)(
+    struct ovf_exec_backend_v1* self, uint64_t deadline_ns);
 
 typedef struct ovf_exec_backend_v1 {
   size_t struct_size;
@@ -117,6 +120,7 @@ typedef struct ovf_exec_backend_v1 {
   ovf_exec_backend_inspect_fn_v1 inspect;
   ovf_exec_backend_start_fn_v1 start;
   ovf_exec_backend_stop_fn_v1 stop;
+  ovf_exec_backend_system_recovery_fn_v1 request_system_recovery;
 } ovf_exec_backend_v1;
 
 typedef struct ovf_exec_backend_factory_v1 {

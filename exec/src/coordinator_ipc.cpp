@@ -58,8 +58,8 @@ Json::Value ErrorValue(const Error& error) {
 }
 
 Error DecodeError(const Json::Value& value) {
-  if (!value.isObject() || !IsUnsignedInteger(value["code"]) ||
-      !value["message"].isString() || !IsUnsignedInteger(value["supportData"]) ||
+  if (!value.isObject() || !IsUnsignedInteger(value["code"]) || !value["message"].isString() ||
+      !IsUnsignedInteger(value["supportData"]) ||
       value["code"].asUInt64() > static_cast<unsigned>(ErrorCode::internal_error)) {
     return MakeError(ErrorCode::communication_error, "coordinator returned an invalid error");
   }
@@ -75,8 +75,7 @@ Json::Value TransitionValue(const ovf::exec::TransitionSnapshot& transition) {
   value["targetMode"] = Json::UInt64{transition.target_mode.value()};
   value["phase"] = static_cast<Json::UInt>(transition.phase);
   value["updatedNs"] = Json::Int64{
-      std::chrono::duration_cast<std::chrono::nanoseconds>(
-          transition.updated_at.time_since_epoch())
+      std::chrono::duration_cast<std::chrono::nanoseconds>(transition.updated_at.time_since_epoch())
           .count()};
   if (transition.failure) {
     Json::Value failure;
@@ -88,20 +87,34 @@ Json::Value TransitionValue(const ovf::exec::TransitionSnapshot& transition) {
     failure["signal"] = transition.failure->signal;
     failure["backendCode"] = Json::UInt64{transition.failure->backend_code};
     failure["backendMessage"] = transition.failure->backend_message;
+    failure["recoveryAction"] = static_cast<Json::UInt>(transition.failure->recovery_action);
+    failure["recoveryAttempted"] = transition.failure->recovery_attempted;
+    failure["recoverySucceeded"] = transition.failure->recovery_succeeded;
+    if (transition.failure->recovery_error) {
+      failure["recoveryError"] = ErrorValue(*transition.failure->recovery_error);
+    }
+    if (transition.failure->recovered_mode) {
+      failure["recoveredMode"] = Json::UInt64{transition.failure->recovered_mode->value()};
+    }
+    failure["recoveryStoppedApplications"] = Json::Value{Json::arrayValue};
+    for (const auto application : transition.failure->recovery_stopped_applications) {
+      failure["recoveryStoppedApplications"].append(Json::UInt64{application.value()});
+    }
+    failure["recoveryStartedApplications"] = Json::Value{Json::arrayValue};
+    for (const auto application : transition.failure->recovery_started_applications) {
+      failure["recoveryStartedApplications"].append(Json::UInt64{application.value()});
+    }
     value["failure"] = std::move(failure);
   }
   return value;
 }
 
 Result<ovf::exec::TransitionSnapshot> DecodeTransition(const Json::Value& value) {
-  if (!value.isObject() || !IsUnsignedInteger(value["id"]) ||
-      !IsUnsignedInteger(value["domain"]) || !IsUnsignedInteger(value["sourceMode"]) ||
-      !IsUnsignedInteger(value["targetMode"]) || !IsUnsignedInteger(value["phase"]) ||
-      !IsSignedInteger(value["updatedNs"]) ||
-      value["phase"].asUInt64() >
-          static_cast<unsigned>(TransitionPhase::recovery_failed)) {
-    return MakeError(ErrorCode::communication_error,
-                     "coordinator returned an invalid transition");
+  if (!value.isObject() || !IsUnsignedInteger(value["id"]) || !IsUnsignedInteger(value["domain"]) ||
+      !IsUnsignedInteger(value["sourceMode"]) || !IsUnsignedInteger(value["targetMode"]) ||
+      !IsUnsignedInteger(value["phase"]) || !IsSignedInteger(value["updatedNs"]) ||
+      value["phase"].asUInt64() > static_cast<unsigned>(TransitionPhase::recovering)) {
+    return MakeError(ErrorCode::communication_error, "coordinator returned an invalid transition");
   }
   ovf::exec::TransitionSnapshot result{
       TransitionId{value["id"].asUInt64()},
@@ -109,16 +122,19 @@ Result<ovf::exec::TransitionSnapshot> DecodeTransition(const Json::Value& value)
       ModeId{value["sourceMode"].asUInt64()},
       ModeId{value["targetMode"].asUInt64()},
       static_cast<TransitionPhase>(value["phase"].asUInt()),
-      std::chrono::steady_clock::time_point{
-          std::chrono::nanoseconds{value["updatedNs"].asInt64()}},
+      std::chrono::steady_clock::time_point{std::chrono::nanoseconds{value["updatedNs"].asInt64()}},
       std::nullopt,
   };
   if (value.isMember("failure")) {
     const auto& failure = value["failure"];
     if (!failure.isObject() || !IsSignedInteger(failure["exitCode"]) ||
-        !IsSignedInteger(failure["signal"]) ||
-        !IsUnsignedInteger(failure["backendCode"]) ||
-        !failure["backendMessage"].isString()) {
+        !IsSignedInteger(failure["signal"]) || !IsUnsignedInteger(failure["backendCode"]) ||
+        !failure["backendMessage"].isString() || !IsUnsignedInteger(failure["recoveryAction"]) ||
+        failure["recoveryAction"].asUInt64() >
+            static_cast<unsigned>(FailureAction::request_system_recovery) ||
+        !failure["recoveryAttempted"].isBool() || !failure["recoverySucceeded"].isBool() ||
+        !failure["recoveryStoppedApplications"].isArray() ||
+        !failure["recoveryStartedApplications"].isArray()) {
       return MakeError(ErrorCode::communication_error,
                        "coordinator returned invalid failure evidence");
     }
@@ -129,6 +145,13 @@ Result<ovf::exec::TransitionSnapshot> DecodeTransition(const Json::Value& value)
         failure["signal"].asInt(),
         failure["backendCode"].asUInt64(),
         failure["backendMessage"].asString(),
+        static_cast<FailureAction>(failure["recoveryAction"].asUInt()),
+        failure["recoveryAttempted"].asBool(),
+        failure["recoverySucceeded"].asBool(),
+        std::nullopt,
+        std::nullopt,
+        {},
+        {},
     };
     if (failure.isMember("application")) {
       if (!IsUnsignedInteger(failure["application"])) {
@@ -136,6 +159,40 @@ Result<ovf::exec::TransitionSnapshot> DecodeTransition(const Json::Value& value)
                          "coordinator returned invalid failure application");
       }
       decoded.application = ApplicationId{failure["application"].asUInt64()};
+    }
+    if (failure.isMember("recoveryError")) {
+      const auto recovery_error = DecodeError(failure["recoveryError"]);
+      if (!recovery_error) {
+        return MakeError(ErrorCode::communication_error,
+                         "coordinator returned invalid recovery error");
+      }
+      decoded.recovery_error = recovery_error;
+    }
+    if (failure.isMember("recoveredMode")) {
+      if (!IsUnsignedInteger(failure["recoveredMode"])) {
+        return MakeError(ErrorCode::communication_error,
+                         "coordinator returned invalid recovered mode");
+      }
+      decoded.recovered_mode = ModeId{failure["recoveredMode"].asUInt64()};
+    }
+    try {
+      for (const auto& application : failure["recoveryStoppedApplications"]) {
+        if (!IsUnsignedInteger(application) || application.asUInt64() == 0U) {
+          return MakeError(ErrorCode::communication_error,
+                           "coordinator returned invalid recovery stop evidence");
+        }
+        decoded.recovery_stopped_applications.emplace_back(application.asUInt64());
+      }
+      for (const auto& application : failure["recoveryStartedApplications"]) {
+        if (!IsUnsignedInteger(application) || application.asUInt64() == 0U) {
+          return MakeError(ErrorCode::communication_error,
+                           "coordinator returned invalid recovery start evidence");
+        }
+        decoded.recovery_started_applications.emplace_back(application.asUInt64());
+      }
+    } catch (...) {
+      return MakeError(ErrorCode::resource_exhausted,
+                       "cannot allocate recovery application evidence");
     }
     result.failure = std::move(decoded);
   }
@@ -158,9 +215,8 @@ Json::Value DomainValue(const ExecutionDomain& domain) {
 }
 
 Result<ExecutionDomain> DecodeDomain(const Json::Value& value) {
-  if (!value.isObject() || !IsUnsignedInteger(value["id"]) ||
-      !value["name"].isString() || !IsUnsignedInteger(value["committedMode"]) ||
-      !IsUnsignedInteger(value["status"]) ||
+  if (!value.isObject() || !IsUnsignedInteger(value["id"]) || !value["name"].isString() ||
+      !IsUnsignedInteger(value["committedMode"]) || !IsUnsignedInteger(value["status"]) ||
       value["status"].asUInt64() > static_cast<unsigned>(DomainStatus::recovering)) {
     return MakeError(ErrorCode::communication_error, "coordinator returned an invalid domain");
   }
@@ -232,14 +288,12 @@ Result<SystemSnapshot> DecodeSnapshot(const Json::Value& value) {
     for (const auto& item : value["applications"]) {
       if (!IsUnsignedInteger(item["id"]) || !item["name"].isString() ||
           !IsUnsignedInteger(item["state"]) ||
-          item["state"].asUInt64() >
-              static_cast<unsigned>(ApplicationState::unavailable)) {
+          item["state"].asUInt64() > static_cast<unsigned>(ApplicationState::unavailable)) {
         return MakeError(ErrorCode::communication_error,
                          "coordinator returned an invalid application");
       }
-      result.applications.push_back(
-          {ApplicationId{item["id"].asUInt64()}, item["name"].asString(),
-           static_cast<ApplicationState>(item["state"].asUInt())});
+      result.applications.push_back({ApplicationId{item["id"].asUInt64()}, item["name"].asString(),
+                                     static_cast<ApplicationState>(item["state"].asUInt())});
     }
     for (const auto& item : value["transitions"]) {
       auto transition = DecodeTransition(item);
@@ -270,8 +324,7 @@ Json::Value EventValue(const CoordinatorEvent& event) {
 Result<CoordinatorEvent> DecodeEvent(const Json::Value& value) {
   if (!value.isObject() || !IsUnsignedInteger(value["kind"]) ||
       !IsUnsignedInteger(value["revision"]) ||
-      value["kind"].asUInt64() >
-          static_cast<unsigned>(CoordinatorEventKind::recovery_changed)) {
+      value["kind"].asUInt64() > static_cast<unsigned>(CoordinatorEventKind::recovery_changed)) {
     return MakeError(ErrorCode::communication_error, "coordinator returned an invalid event");
   }
   CoordinatorEvent event{static_cast<CoordinatorEventKind>(value["kind"].asUInt()),
@@ -322,8 +375,7 @@ bool WriteAll(int descriptor, std::string_view content) noexcept {
 #else
     constexpr int flags = 0;
 #endif
-    const auto count =
-        ::send(descriptor, content.data() + offset, content.size() - offset, flags);
+    const auto count = ::send(descriptor, content.data() + offset, content.size() - offset, flags);
     if (count < 0 && errno == EINTR) {
       continue;
     }
@@ -407,8 +459,7 @@ Result<void> DisableSigPipe(int descriptor) {
   return {};
 }
 
-Result<Descriptor> Connect(const std::string& endpoint,
-                           std::chrono::milliseconds timeout) {
+Result<Descriptor> Connect(const std::string& endpoint, std::chrono::milliseconds timeout) {
   if (endpoint.empty() || endpoint.front() != '/' ||
       endpoint.size() >= sizeof(sockaddr_un::sun_path) ||
       timeout <= std::chrono::milliseconds::zero()) {
@@ -430,8 +481,7 @@ Result<Descriptor> Connect(const std::string& endpoint,
   }
   const int flags = ::fcntl(descriptor.get(), F_GETFL, 0);
   if (flags < 0 || ::fcntl(descriptor.get(), F_SETFL, flags | O_NONBLOCK) != 0) {
-    return MakeError(ErrorCode::communication_error, "cannot configure coordinator socket",
-                     errno);
+    return MakeError(ErrorCode::communication_error, "cannot configure coordinator socket", errno);
   }
   sockaddr_un address{};
   address.sun_family = AF_UNIX;
@@ -482,7 +532,7 @@ Result<std::uint32_t> PeerUid(int descriptor) {
   }
   return static_cast<std::uint32_t>(uid);
 #elif defined(__linux__)
-  struct ucred credentials {};
+  struct ucred credentials{};
   socklen_t size = sizeof(credentials);
   if (::getsockopt(descriptor, SOL_SOCKET, SO_PEERCRED, &credentials, &size) != 0) {
     return MakeError(ErrorCode::permission_denied, "cannot authenticate coordinator peer", errno);
@@ -536,9 +586,8 @@ public:
     }
     auto response = Decode(content.value());
     if (!response || !response.value()["ok"].isBool()) {
-      return response ? Result<Json::Value>{
-                            MakeError(ErrorCode::communication_error,
-                                      "coordinator returned an invalid response")}
+      return response ? Result<Json::Value>{MakeError(ErrorCode::communication_error,
+                                                      "coordinator returned an invalid response")}
                       : Result<Json::Value>{response.error()};
     }
     if (!response.value()["ok"].asBool()) {
@@ -551,8 +600,7 @@ public:
     Json::Value request;
     request["operation"] = "snapshot";
     auto response = Call(std::move(request));
-    return response ? DecodeSnapshot(response.value())
-                    : Result<SystemSnapshot>{response.error()};
+    return response ? DecodeSnapshot(response.value()) : Result<SystemSnapshot>{response.error()};
   }
 
   Result<ExecutionDomain> Domain(DomainId domain) const override {
@@ -560,8 +608,7 @@ public:
     request["operation"] = "domain";
     request["domain"] = Json::UInt64{domain.value()};
     auto response = Call(std::move(request));
-    return response ? DecodeDomain(response.value())
-                    : Result<ExecutionDomain>{response.error()};
+    return response ? DecodeDomain(response.value()) : Result<ExecutionDomain>{response.error()};
   }
 
   Result<ExecutionMode> Mode(DomainId domain, ModeId mode) const override {
@@ -574,8 +621,7 @@ public:
       return response.error();
     }
     if (!IsUnsignedInteger(response.value()["domain"]) ||
-        !IsUnsignedInteger(response.value()["id"]) ||
-        !response.value()["name"].isString()) {
+        !IsUnsignedInteger(response.value()["id"]) || !response.value()["name"].isString()) {
       return MakeError(ErrorCode::communication_error, "coordinator returned an invalid mode");
     }
     return ExecutionMode{DomainId{response.value()["domain"].asUInt64()},
@@ -583,8 +629,7 @@ public:
                          response.value()["name"].asString()};
   }
 
-  Result<TransitionId> Request(DomainId domain, ModeId mode,
-                               TransitionOptions options) override {
+  Result<TransitionId> Request(DomainId domain, ModeId mode, TransitionOptions options) override {
     Json::Value request;
     request["operation"] = "request";
     request["domain"] = Json::UInt64{domain.value()};
@@ -593,10 +638,10 @@ public:
     auto response = Call(std::move(request));
     return response && IsUnsignedInteger(response.value())
                ? Result<TransitionId>{TransitionId{response.value().asUInt64()}}
-               : response ? Result<TransitionId>{
-                                MakeError(ErrorCode::communication_error,
-                                          "coordinator returned an invalid transition id")}
-                          : Result<TransitionId>{response.error()};
+           : response
+               ? Result<TransitionId>{MakeError(ErrorCode::communication_error,
+                                                "coordinator returned an invalid transition id")}
+               : Result<TransitionId>{response.error()};
   }
 
   Result<void> Cancel(TransitionId transition) override {
@@ -607,8 +652,7 @@ public:
     return response ? Result<void>{} : Result<void>{response.error()};
   }
 
-  Result<ovf::exec::TransitionSnapshot>
-  TransitionState(TransitionId transition) const override {
+  Result<ovf::exec::TransitionSnapshot> TransitionState(TransitionId transition) const override {
     Json::Value request;
     request["operation"] = "transition";
     request["transition"] = Json::UInt64{transition.value()};
@@ -623,8 +667,7 @@ public:
     if (deadline <= now) {
       return MakeError(ErrorCode::deadline_exceeded, "transition wait deadline expired");
     }
-    const auto timeout =
-        std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+    const auto timeout = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
     Json::Value request;
     request["operation"] = "wait";
     request["transition"] = Json::UInt64{transition.value()};
@@ -634,8 +677,8 @@ public:
                     : Result<ovf::exec::TransitionSnapshot>{response.error()};
   }
 
-  Result<std::function<void()>>
-  Subscribe(EventFilter filter, SystemCoordinator::EventHandler handler) override {
+  Result<std::function<void()>> Subscribe(EventFilter filter,
+                                          SystemCoordinator::EventHandler handler) override {
     if (!handler) {
       return MakeError(ErrorCode::invalid_argument, "event handler is required");
     }
@@ -653,42 +696,40 @@ public:
       const auto endpoint = endpoint_;
       const auto timeout = timeout_;
       auto client = std::make_shared<IpcCoordinatorClient>(endpoint, timeout);
-      state->worker = std::thread(
-          [state, client, filter = std::move(filter), handler = std::move(handler),
-           revision = snapshot.value().revision]() mutable {
-            while (!state->stop.load(std::memory_order_acquire)) {
-              Json::Value request;
-              request["operation"] = "events";
-              request["afterRevision"] = Json::UInt64{revision};
-              auto response = client->Call(std::move(request));
-              if (response && response.value().isArray()) {
-                for (const auto& item : response.value()) {
-                  auto event = DecodeEvent(item);
-                  if (!event) {
-                    state->stop.store(true, std::memory_order_release);
-                    break;
-                  }
-                  revision = std::max(revision, event.value().revision);
-                  const bool domain_matches =
-                      !filter.domain || event.value().domain == filter.domain;
-                  const bool kind_matches =
-                      (event.value().kind == CoordinatorEventKind::transition_changed &&
-                       filter.transitions) ||
-                      (event.value().kind == CoordinatorEventKind::configuration_changed &&
-                       filter.configuration) ||
-                      (event.value().kind == CoordinatorEventKind::recovery_changed &&
-                       filter.recovery);
-                  if (domain_matches && kind_matches) {
-                    try {
-                      handler(event.value());
-                    } catch (...) {
-                    }
-                  }
+      state->worker = std::thread([state, client, filter = std::move(filter),
+                                   handler = std::move(handler),
+                                   revision = snapshot.value().revision]() mutable {
+        while (!state->stop.load(std::memory_order_acquire)) {
+          Json::Value request;
+          request["operation"] = "events";
+          request["afterRevision"] = Json::UInt64{revision};
+          auto response = client->Call(std::move(request));
+          if (response && response.value().isArray()) {
+            for (const auto& item : response.value()) {
+              auto event = DecodeEvent(item);
+              if (!event) {
+                state->stop.store(true, std::memory_order_release);
+                break;
+              }
+              revision = std::max(revision, event.value().revision);
+              const bool domain_matches = !filter.domain || event.value().domain == filter.domain;
+              const bool kind_matches =
+                  (event.value().kind == CoordinatorEventKind::transition_changed &&
+                   filter.transitions) ||
+                  (event.value().kind == CoordinatorEventKind::configuration_changed &&
+                   filter.configuration) ||
+                  (event.value().kind == CoordinatorEventKind::recovery_changed && filter.recovery);
+              if (domain_matches && kind_matches) {
+                try {
+                  handler(event.value());
+                } catch (...) {
                 }
               }
-              std::this_thread::sleep_for(kEventPollInterval);
             }
-          });
+          }
+          std::this_thread::sleep_for(kEventPollInterval);
+        }
+      });
     } catch (...) {
       return MakeError(ErrorCode::resource_exhausted,
                        "cannot create coordinator event subscription");
@@ -761,8 +802,7 @@ public:
       }
       acceptor_ = std::thread([this] { Accept(); });
     } catch (...) {
-      return MakeError(ErrorCode::resource_exhausted,
-                       "cannot create coordinator IPC workers");
+      return MakeError(ErrorCode::resource_exhausted, "cannot create coordinator IPC workers");
     }
     return {};
   }
@@ -813,9 +853,8 @@ private:
       Work work;
       {
         std::unique_lock lock(mutex_);
-        available_.wait(lock, [this] {
-          return stopping_.load(std::memory_order_acquire) || !queue_.empty();
-        });
+        available_.wait(
+            lock, [this] { return stopping_.load(std::memory_order_acquire) || !queue_.empty(); });
         if (queue_.empty()) {
           return;
         }
@@ -840,8 +879,7 @@ private:
   }
 
   Json::Value Dispatch(const Json::Value& request, std::uint32_t uid) {
-    if (!request["version"].isIntegral() ||
-        request["version"].asUInt64() != kProtocolVersion ||
+    if (!request["version"].isIntegral() || request["version"].asUInt64() != kProtocolVersion ||
         !request["operation"].isString()) {
       return Failure(MakeError(ErrorCode::communication_error,
                                "coordinator protocol version is incompatible"));
@@ -870,10 +908,8 @@ private:
                       DomainValue);
     }
     if (operation == "mode") {
-      if (!IsUnsignedInteger(request["domain"]) ||
-          !IsUnsignedInteger(request["mode"])) {
-        return Failure(
-            MakeError(ErrorCode::invalid_argument, "domain and mode ids are required"));
+      if (!IsUnsignedInteger(request["domain"]) || !IsUnsignedInteger(request["mode"])) {
+        return Failure(MakeError(ErrorCode::invalid_argument, "domain and mode ids are required"));
       }
       auto mode = coordinator_.ResolveMode(DomainId{request["domain"].asUInt64()},
                                            ModeId{request["mode"].asUInt64()});
@@ -886,22 +922,18 @@ private:
       });
     }
     if (operation == "request") {
-      if (!IsUnsignedInteger(request["domain"]) ||
-          !IsUnsignedInteger(request["mode"])) {
-        return Failure(
-            MakeError(ErrorCode::invalid_argument, "domain and mode ids are required"));
+      if (!IsUnsignedInteger(request["domain"]) || !IsUnsignedInteger(request["mode"])) {
+        return Failure(MakeError(ErrorCode::invalid_argument, "domain and mode ids are required"));
       }
-      if (!IsSignedInteger(request["timeoutMs"]) ||
-          request["timeoutMs"].asInt64() <= 0) {
-        return Failure(MakeError(ErrorCode::invalid_argument,
-                                 "transition timeout must be positive"));
+      if (!IsSignedInteger(request["timeoutMs"]) || request["timeoutMs"].asInt64() <= 0) {
+        return Failure(
+            MakeError(ErrorCode::invalid_argument, "transition timeout must be positive"));
       }
       auto transition = coordinator_.RequestMode(
           DomainId{request["domain"].asUInt64()}, ModeId{request["mode"].asUInt64()},
           {std::chrono::milliseconds{request["timeoutMs"].asInt64()}});
-      return transition
-                 ? Success(Json::Value{Json::UInt64{transition.value().Id().value()}})
-                 : Failure(transition.error());
+      return transition ? Success(Json::Value{Json::UInt64{transition.value().Id().value()}})
+                        : Failure(transition.error());
     }
     if (operation == "cancel") {
       if (!IsUnsignedInteger(request["transition"])) {
@@ -913,10 +945,9 @@ private:
     if (operation == "transition" || operation == "wait") {
       if (!IsUnsignedInteger(request["transition"]) ||
           (operation == "wait" &&
-           (!IsSignedInteger(request["timeoutMs"]) ||
-            request["timeoutMs"].asInt64() <= 0))) {
-        return Failure(MakeError(ErrorCode::invalid_argument,
-                                 "valid transition id and timeout are required"));
+           (!IsSignedInteger(request["timeoutMs"]) || request["timeoutMs"].asInt64() <= 0))) {
+        return Failure(
+            MakeError(ErrorCode::invalid_argument, "valid transition id and timeout are required"));
       }
       const auto id = TransitionId{request["transition"].asUInt64()};
       auto snapshot = coordinator_.GetSnapshot();
@@ -940,9 +971,9 @@ private:
         if (!current) {
           return Failure(current.error());
         }
-        const auto item = std::find_if(
-            current.value().transitions.begin(), current.value().transitions.end(),
-            [id](const auto& value) { return value.id == id; });
+        const auto item =
+            std::find_if(current.value().transitions.begin(), current.value().transitions.end(),
+                         [id](const auto& value) { return value.id == id; });
         if (item == current.value().transitions.end()) {
           return Failure(MakeError(ErrorCode::not_found, "transition is not known"));
         }
@@ -957,15 +988,14 @@ private:
     }
     if (operation == "events") {
       if (!IsUnsignedInteger(request["afterRevision"])) {
-        return Failure(MakeError(ErrorCode::invalid_argument,
-                                 "event revision is required"));
+        return Failure(MakeError(ErrorCode::invalid_argument, "event revision is required"));
       }
       const auto revision = request["afterRevision"].asUInt64();
       Json::Value result{Json::arrayValue};
       std::lock_guard lock(event_mutex_);
       if (!events_.empty() && revision + 1U < events_.front().revision) {
-        return Failure(MakeError(ErrorCode::resource_exhausted,
-                                 "coordinator event history was overrun"));
+        return Failure(
+            MakeError(ErrorCode::resource_exhausted, "coordinator event history was overrun"));
       }
       for (const auto& event : events_) {
         if (event.revision > revision) {
@@ -1000,8 +1030,7 @@ ConnectCoordinatorIpc(const CoordinatorOptions& options) {
     return MakeError(ErrorCode::invalid_argument, "coordinator endpoint is required");
   }
   try {
-    auto client =
-        std::make_shared<IpcCoordinatorClient>(options.endpoint, options.connect_timeout);
+    auto client = std::make_shared<IpcCoordinatorClient>(options.endpoint, options.connect_timeout);
     Json::Value request;
     request["operation"] = "hello";
     auto hello = client->Call(std::move(request));
@@ -1042,8 +1071,7 @@ StartCoordinatorServer(SystemCoordinator coordinator, CoordinatorServerOptions o
     return MakeError(ErrorCode::communication_error, "cannot create coordinator listener", errno);
   }
   const int listener_flags = ::fcntl(listener.get(), F_GETFD, 0);
-  if (listener_flags < 0 ||
-      ::fcntl(listener.get(), F_SETFD, listener_flags | FD_CLOEXEC) != 0) {
+  if (listener_flags < 0 || ::fcntl(listener.get(), F_SETFD, listener_flags | FD_CLOEXEC) != 0) {
     return MakeError(ErrorCode::communication_error,
                      "cannot protect coordinator listener across exec", errno);
   }
@@ -1058,13 +1086,12 @@ StartCoordinatorServer(SystemCoordinator coordinator, CoordinatorServerOptions o
       ::listen(listener.get(), static_cast<int>(options.connection_capacity)) != 0) {
     const auto error = errno;
     ::unlink(options.endpoint.c_str());
-    return MakeError(ErrorCode::communication_error, "cannot activate coordinator endpoint",
-                     error);
+    return MakeError(ErrorCode::communication_error, "cannot activate coordinator endpoint", error);
   }
   const auto endpoint = options.endpoint;
   try {
-    auto server = std::make_unique<IpcCoordinatorServer>(
-        std::move(coordinator), std::move(options), std::move(listener));
+    auto server = std::make_unique<IpcCoordinatorServer>(std::move(coordinator), std::move(options),
+                                                         std::move(listener));
     auto started = server->Start();
     if (!started) {
       return started.error();

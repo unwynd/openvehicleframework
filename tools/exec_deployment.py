@@ -285,6 +285,9 @@ def generate_artifacts(
         "backendVersion": 1,
         "kind": "dinit",
         "library": model["platform"]["dinit"]["backendLibrary"],
+        "systemRecoveryService": model["platform"]["dinit"][
+            "systemRecoveryService"
+        ],
         "controlSocket": model["platform"]["dinit"]["controlSocket"],
         "applications": applications,
     }

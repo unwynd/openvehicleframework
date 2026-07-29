@@ -31,6 +31,13 @@ TransitionSnapshot PublicSnapshot(const detail::TransitionSnapshot& source) {
         source.failure->evidence.signal,
         source.failure->evidence.native_code,
         source.failure->evidence.message,
+        source.failure->recovery_action,
+        source.failure->recovery_attempted,
+        source.failure->recovery_succeeded,
+        source.failure->recovery_error,
+        source.failure->recovered_mode,
+        source.failure->recovery_stopped_applications,
+        source.failure->recovery_started_applications,
     };
   }
   return result;
@@ -317,13 +324,17 @@ private:
       }
       const auto domain = accepted.plan.domain;
       const auto id = accepted.id;
+      const auto before = engine_->Snapshot().configuration.committed_modes.at(domain);
       auto completed = engine_->Execute(std::move(accepted));
+      const auto after = engine_->Snapshot().configuration.committed_modes.at(domain);
       static_cast<void>(completed);
 
       std::vector<SystemCoordinator::EventHandler> transition_handlers;
       std::vector<SystemCoordinator::EventHandler> configuration_handlers;
+      std::vector<SystemCoordinator::EventHandler> recovery_handlers;
       CoordinatorEvent transition_event;
       CoordinatorEvent configuration_event;
+      CoordinatorEvent recovery_event;
       {
         std::lock_guard lock(mutex_);
         const auto active = active_domains_.find(domain);
@@ -336,10 +347,17 @@ private:
         ++revision_;
         transition_event = {CoordinatorEventKind::transition_changed, revision_, id, domain};
         CollectHandlersLocked(transition_event, transition_handlers);
-        if (completed && completed.value().phase == TransitionPhase::succeeded) {
+        if (completed &&
+            (completed.value().phase == TransitionPhase::succeeded || before != after)) {
           configuration_event = {CoordinatorEventKind::configuration_changed, revision_, id,
                                  domain};
           CollectHandlersLocked(configuration_event, configuration_handlers);
+        }
+        const auto* definition = engine_->Model().FindDomain(domain);
+        if (completed && completed.value().failure && definition != nullptr &&
+            definition->recovery.action != FailureAction::hold_observed_configuration) {
+          recovery_event = {CoordinatorEventKind::recovery_changed, revision_, id, domain};
+          CollectHandlersLocked(recovery_event, recovery_handlers);
         }
       }
       changed_.notify_all();
@@ -352,6 +370,12 @@ private:
       for (const auto& handler : configuration_handlers) {
         try {
           handler(configuration_event);
+        } catch (...) {
+        }
+      }
+      for (const auto& handler : recovery_handlers) {
+        try {
+          handler(recovery_event);
         } catch (...) {
         }
       }
@@ -411,21 +435,18 @@ public:
   Result<ExecutionMode> Mode(DomainId domain, ModeId mode) const override {
     return service_->Mode(domain, mode);
   }
-  Result<TransitionId> Request(DomainId domain, ModeId mode,
-                               TransitionOptions options) override {
+  Result<TransitionId> Request(DomainId domain, ModeId mode, TransitionOptions options) override {
     return service_->Request(domain, mode, options);
   }
-  Result<void> Cancel(TransitionId transition) override {
-    return service_->Cancel(transition);
-  }
+  Result<void> Cancel(TransitionId transition) override { return service_->Cancel(transition); }
   Result<TransitionSnapshot> TransitionState(TransitionId transition) const override {
     return service_->TransitionState(transition);
   }
   Result<TransitionSnapshot> Wait(TransitionId transition, Deadline deadline) const override {
     return service_->Wait(transition, deadline);
   }
-  Result<std::function<void()>>
-  Subscribe(EventFilter filter, SystemCoordinator::EventHandler handler) override {
+  Result<std::function<void()>> Subscribe(EventFilter filter,
+                                          SystemCoordinator::EventHandler handler) override {
     return service_->Subscribe(std::move(filter), std::move(handler));
   }
 
@@ -469,8 +490,8 @@ Transition::operator bool() const noexcept { return static_cast<bool>(impl_); }
 
 Result<SystemCoordinator> SystemCoordinator::Connect(CoordinatorOptions options) {
   auto connected = detail::ConnectCoordinatorIpc(options);
-  return connected ? Result<SystemCoordinator>{
-                         detail_CoordinatorFactory::CreateClient(std::move(connected).value())}
+  return connected ? Result<SystemCoordinator>{detail_CoordinatorFactory::CreateClient(
+                         std::move(connected).value())}
                    : Result<SystemCoordinator>{connected.error()};
 }
 SystemCoordinator::SystemCoordinator(std::shared_ptr<Impl> impl) : impl_(std::move(impl)) {}
@@ -500,7 +521,7 @@ Result<Transition> SystemCoordinator::RequestMode(DomainId domain, ModeId mode,
   }
   auto requested = impl_->client->Request(domain, mode, options);
   return requested ? Result<Transition>{Transition{
-                   std::make_shared<Transition::Impl>(impl_->client, requested.value())}}
+                         std::make_shared<Transition::Impl>(impl_->client, requested.value())}}
                    : Result<Transition>{requested.error()};
 }
 Result<void> SystemCoordinator::Cancel(TransitionId transition) {

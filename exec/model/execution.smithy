@@ -176,6 +176,9 @@ structure DinitBackend {
     backendLibrary: AbsolutePath
 
     @required
+    systemRecoveryService: SymbolicName
+
+    @required
     controlSocket: AbsolutePath
 
     @required

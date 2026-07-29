@@ -3,6 +3,7 @@
 #include "ovf/exec/internal/engine.hpp"
 
 #include <algorithm>
+#include <thread>
 #include <utility>
 
 namespace ovf::exec::detail {
@@ -50,6 +51,20 @@ ExecutionEngine::Create(ValidatedModel model, std::unique_ptr<ProcessBackend> ba
   std::unordered_map<TransitionId, TransitionSnapshot> transitions;
   std::unordered_map<TransitionId, TransitionPlan> plans;
   std::uint64_t next_transition{1U};
+  const auto valid_progress = [](TransitionPhase previous, TransitionPhase next) {
+    if (previous == next) {
+      return true;
+    }
+    if (previous == TransitionPhase::recovering) {
+      return next == TransitionPhase::failed || next == TransitionPhase::recovery_failed;
+    }
+    const bool terminal =
+        previous == TransitionPhase::succeeded || previous == TransitionPhase::rejected ||
+        previous == TransitionPhase::failed || previous == TransitionPhase::cancelled ||
+        previous == TransitionPhase::superseded || previous == TransitionPhase::deadline_exceeded ||
+        previous == TransitionPhase::recovery_failed;
+    return !terminal && static_cast<std::uint8_t>(previous) < static_cast<std::uint8_t>(next);
+  };
   for (const auto& event : replayed.value()) {
     if (event.generation != model.value().generation) {
       return MakeError(ErrorCode::configuration_error,
@@ -69,8 +84,7 @@ ExecutionEngine::Create(ValidatedModel model, std::unique_ptr<ProcessBackend> ba
         (previous->second.domain != event.transition.domain ||
          previous->second.source_mode != event.transition.source_mode ||
          previous->second.target_mode != event.transition.target_mode ||
-         static_cast<std::uint8_t>(previous->second.phase) >
-             static_cast<std::uint8_t>(event.transition.phase))) {
+         !valid_progress(previous->second.phase, event.transition.phase))) {
       return MakeError(ErrorCode::persistence_error, "journal transition history is inconsistent",
                        event.transition.id.value());
     }
@@ -100,6 +114,33 @@ ExecutionEngine::Create(ValidatedModel model, std::unique_ptr<ProcessBackend> ba
                          event.transition.id.value());
       }
       plans[event.transition.id] = *event.plan;
+    }
+    if (event.transition.failure) {
+      const auto& failure = *event.transition.failure;
+      if (failure.recovered_mode) {
+        if (model.FindMode({event.transition.domain, *failure.recovered_mode}) == nullptr) {
+          return MakeError(ErrorCode::persistence_error,
+                           "journal recovery mode is not valid for the domain",
+                           event.transition.id.value());
+        }
+        initial.value().committed_modes[event.transition.domain] = *failure.recovered_mode;
+      }
+      for (const auto application : failure.recovery_stopped_applications) {
+        if (model.FindApplication(application) == nullptr) {
+          return MakeError(ErrorCode::persistence_error,
+                           "journal recovery stop references an unknown application",
+                           event.transition.id.value());
+        }
+        initial.value().running_applications.erase(application);
+      }
+      for (const auto application : failure.recovery_started_applications) {
+        if (model.FindApplication(application) == nullptr) {
+          return MakeError(ErrorCode::persistence_error,
+                           "journal recovery start references an unknown application",
+                           event.transition.id.value());
+        }
+        initial.value().running_applications.insert(application);
+      }
     }
     if (event.transition.phase == TransitionPhase::succeeded) {
       const auto plan = plans.find(event.transition.id);
@@ -317,7 +358,7 @@ Result<TransitionSnapshot> ExecutionEngine::Execute(AcceptedTransition accepted)
       const auto error =
           stopped ? MakeError(ErrorCode::backend_error, "application did not stop cleanly")
                   : stopped.error();
-      return Fail(transition, error, application, stopped ? stopped.value() : BackendEvidence{});
+      return Recover(transition, error, application, stopped ? stopped.value() : BackendEvidence{});
     }
     std::lock_guard lock(mutex_);
     configuration_.running_applications.erase(application);
@@ -328,20 +369,71 @@ Result<TransitionSnapshot> ExecutionEngine::Execute(AcceptedTransition accepted)
     if (!recorded) {
       return Fail(transition, recorded.error());
     }
+    const bool requires_readiness =
+        std::any_of(plan.start.begin(), plan.start.end(), [this](ApplicationId application) {
+          return model_.FindApplication(application)->readiness == ReadinessPolicy::required;
+        });
+    if (requires_readiness) {
+      recorded = Record(transition, TransitionPhase::awaiting_readiness);
+      if (!recorded) {
+        return Fail(transition, recorded.error());
+      }
+    }
   }
   for (const auto application : plan.start) {
     if (IsCancelled(transition.id)) {
       return Fail(transition, MakeError(ErrorCode::cancelled, "transition was cancelled"));
     }
     const auto* definition = model_.FindApplication(application);
-    const auto operation_deadline =
-        std::min(deadline, std::chrono::steady_clock::now() + definition->start_timeout);
-    auto started = backend_->Start(application, operation_deadline);
-    if (!started || started.value().state != ApplicationState::ready) {
-      const auto error =
-          started ? MakeError(ErrorCode::backend_error, "application did not become ready")
-                  : started.error();
-      return Fail(transition, error, application, started ? started.value() : BackendEvidence{});
+    BackendEvidence last_evidence;
+    Error last_error =
+        MakeError(ErrorCode::backend_error, "application did not reach its required state");
+    bool application_started = false;
+    for (std::uint32_t attempt = 1U; attempt <= definition->retry.max_attempts; ++attempt) {
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= deadline) {
+        last_error =
+            MakeError(ErrorCode::deadline_exceeded, "transition deadline expired during retry");
+        break;
+      }
+      const auto operation_deadline = std::min(deadline, now + definition->start_timeout);
+      auto started = backend_->Start(application, operation_deadline);
+      if (started) {
+        last_evidence = started.value();
+        const bool required_state = definition->readiness == ReadinessPolicy::required
+                                        ? started.value().state == ApplicationState::ready
+                                        : started.value().state == ApplicationState::starting ||
+                                              started.value().state == ApplicationState::ready;
+        if (required_state) {
+          application_started = true;
+          break;
+        }
+        last_error =
+            MakeError(ErrorCode::backend_error, "application did not reach its required state");
+      } else {
+        last_error = started.error();
+      }
+      if (attempt == definition->retry.max_attempts) {
+        break;
+      }
+      const auto cleanup_deadline =
+          std::min(deadline, std::chrono::steady_clock::now() + definition->stop_timeout);
+      auto cleaned = backend_->Stop(application, StopReason::restart, cleanup_deadline);
+      if (!cleaned || cleaned.value().state != ApplicationState::stopped) {
+        last_error = cleaned ? MakeError(ErrorCode::backend_error,
+                                         "failed start attempt could not be cleaned up")
+                             : cleaned.error();
+        if (cleaned) {
+          last_evidence = cleaned.value();
+        }
+        break;
+      }
+      const auto retry_at =
+          std::min(deadline, std::chrono::steady_clock::now() + definition->retry.delay);
+      std::this_thread::sleep_until(retry_at);
+    }
+    if (!application_started) {
+      return Recover(transition, std::move(last_error), application, std::move(last_evidence));
     }
     std::lock_guard lock(mutex_);
     configuration_.running_applications.insert(application);
@@ -434,10 +526,181 @@ Result<void> ExecutionEngine::Record(TransitionSnapshot& transition,
   return {};
 }
 
+Result<void> ExecutionEngine::ApplyRecoveryPlan(const TransitionPlan& plan, Deadline deadline,
+                                                TransitionFailure& failure) noexcept {
+  for (const auto application : plan.stop) {
+    const auto* definition = model_.FindApplication(application);
+    const auto operation_deadline =
+        std::min(deadline, std::chrono::steady_clock::now() + definition->stop_timeout);
+    auto stopped = backend_->Stop(application, StopReason::recovery, operation_deadline);
+    if (!stopped || stopped.value().state != ApplicationState::stopped) {
+      failure.application = application;
+      if (stopped) {
+        failure.evidence = stopped.value();
+      }
+      return stopped ? Result<void>{MakeError(ErrorCode::backend_error,
+                                              "recovery could not stop application")}
+                     : Result<void>{stopped.error()};
+    }
+    try {
+      failure.recovery_stopped_applications.push_back(application);
+    } catch (...) {
+      return MakeError(ErrorCode::resource_exhausted, "cannot record recovery stop evidence");
+    }
+    {
+      std::lock_guard lock(mutex_);
+      configuration_.running_applications.erase(application);
+    }
+  }
+  for (const auto application : plan.start) {
+    const auto* definition = model_.FindApplication(application);
+    bool ready = false;
+    for (std::uint32_t attempt = 1U; attempt <= definition->retry.max_attempts; ++attempt) {
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= deadline) {
+        return MakeError(ErrorCode::deadline_exceeded, "recovery deadline expired");
+      }
+      auto started =
+          backend_->Start(application, std::min(deadline, now + definition->start_timeout));
+      if (started) {
+        failure.evidence = started.value();
+        const bool required_state = definition->readiness == ReadinessPolicy::required
+                                        ? started.value().state == ApplicationState::ready
+                                        : started.value().state == ApplicationState::starting ||
+                                              started.value().state == ApplicationState::ready;
+        if (required_state) {
+          ready = true;
+          break;
+        }
+      } else if (attempt == definition->retry.max_attempts) {
+        failure.application = application;
+        return started.error();
+      }
+      if (attempt < definition->retry.max_attempts) {
+        const auto cleanup_deadline =
+            std::min(deadline, std::chrono::steady_clock::now() + definition->stop_timeout);
+        auto cleaned = backend_->Stop(application, StopReason::recovery, cleanup_deadline);
+        if (!cleaned || cleaned.value().state != ApplicationState::stopped) {
+          failure.application = application;
+          if (cleaned) {
+            failure.evidence = cleaned.value();
+          }
+          return cleaned ? Result<void>{MakeError(ErrorCode::backend_error,
+                                                  "recovery retry could not clean up application")}
+                         : Result<void>{cleaned.error()};
+        }
+        std::this_thread::sleep_until(
+            std::min(deadline, std::chrono::steady_clock::now() + definition->retry.delay));
+      }
+    }
+    if (!ready) {
+      failure.application = application;
+      return MakeError(ErrorCode::backend_error, "recovery could not start application");
+    }
+    try {
+      failure.recovery_started_applications.push_back(application);
+    } catch (...) {
+      return MakeError(ErrorCode::resource_exhausted, "cannot record recovery start evidence");
+    }
+    {
+      std::lock_guard lock(mutex_);
+      configuration_.running_applications.insert(application);
+    }
+  }
+  return {};
+}
+
+Result<TransitionSnapshot> ExecutionEngine::Recover(TransitionSnapshot& transition, Error error,
+                                                    std::optional<ApplicationId> application,
+                                                    BackendEvidence evidence) noexcept {
+  transition.failure = TransitionFailure{
+      .error = std::move(error),
+      .application = application,
+      .evidence = std::move(evidence),
+      .recovery_action = FailureAction::hold_observed_configuration,
+      .recovery_attempted = false,
+      .recovery_succeeded = false,
+      .recovery_error = std::nullopt,
+      .recovered_mode = std::nullopt,
+      .recovery_stopped_applications = {},
+      .recovery_started_applications = {},
+  };
+  const auto* domain = model_.FindDomain(transition.domain);
+  if (domain == nullptr || domain->recovery.action == FailureAction::hold_observed_configuration) {
+    return Fail(transition, transition.failure->error, transition.failure->application,
+                transition.failure->evidence);
+  }
+  transition.failure->recovery_action = domain->recovery.action;
+  transition.failure->recovery_attempted = true;
+  auto recorded = Record(transition, TransitionPhase::recovering);
+  if (!recorded) {
+    return Fail(transition, recorded.error());
+  }
+  const auto deadline = std::chrono::steady_clock::now() + domain->recovery.deadline;
+  Result<void> recovered;
+  if (domain->recovery.action == FailureAction::enter_fallback_mode) {
+    SystemConfiguration configuration;
+    {
+      std::lock_guard lock(mutex_);
+      configuration = configuration_;
+    }
+    auto plan = planner_.Reconcile(configuration, domain->id, domain->recovery.fallback_mode);
+    if (!plan) {
+      recovered = plan.error();
+    } else {
+      recovered = ApplyRecoveryPlan(plan.value(), deadline, *transition.failure);
+      if (recovered) {
+        std::lock_guard lock(mutex_);
+        configuration_.committed_modes[domain->id] = domain->recovery.fallback_mode;
+        transition.failure->recovered_mode = domain->recovery.fallback_mode;
+      }
+    }
+  } else if (domain->recovery.action == FailureAction::stop_domain) {
+    SystemConfiguration configuration;
+    {
+      std::lock_guard lock(mutex_);
+      configuration = configuration_;
+    }
+    auto stopped = planner_.StopDomainApplications(configuration, domain->id);
+    if (!stopped) {
+      recovered = stopped.error();
+    } else {
+      TransitionPlan plan;
+      plan.stop = std::move(stopped).value();
+      recovered = ApplyRecoveryPlan(plan, deadline, *transition.failure);
+    }
+  } else if (domain->recovery.action == FailureAction::request_system_recovery) {
+    recovered = backend_->RequestSystemRecovery(deadline);
+  } else {
+    recovered = MakeError(ErrorCode::unsupported, "recovery policy is not implemented");
+  }
+  if (!recovered) {
+    transition.failure->recovery_error = recovered.error();
+    recorded = Record(transition, TransitionPhase::recovery_failed);
+    return recorded ? Result<TransitionSnapshot>{transition}
+                    : Result<TransitionSnapshot>{recorded.error()};
+  }
+  transition.failure->recovery_succeeded = true;
+  recorded = Record(transition, TransitionPhase::failed);
+  return recorded ? Result<TransitionSnapshot>{transition}
+                  : Result<TransitionSnapshot>{recorded.error()};
+}
+
 Result<TransitionSnapshot> ExecutionEngine::Fail(TransitionSnapshot& transition, Error error,
                                                  std::optional<ApplicationId> application,
                                                  BackendEvidence evidence) noexcept {
-  transition.failure = TransitionFailure{std::move(error), application, std::move(evidence)};
+  transition.failure = TransitionFailure{
+      .error = std::move(error),
+      .application = application,
+      .evidence = std::move(evidence),
+      .recovery_action = FailureAction::hold_observed_configuration,
+      .recovery_attempted = false,
+      .recovery_succeeded = false,
+      .recovery_error = std::nullopt,
+      .recovered_mode = std::nullopt,
+      .recovery_stopped_applications = {},
+      .recovery_started_applications = {},
+  };
   const auto terminal =
       transition.failure->error.code == ErrorCode::cancelled ? TransitionPhase::cancelled
       : transition.failure->error.code == ErrorCode::deadline_exceeded

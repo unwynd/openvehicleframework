@@ -10,26 +10,26 @@ using namespace ovf::exec;
 using namespace ovf::exec::backends;
 
 TEST(DinitBackendTest, ValidatesConfigurationBeforeConnecting) {
-  auto relative = CreateDinitBackend({"relative", {{ApplicationId{1}, "camera"}}});
+  auto relative = CreateDinitBackend({"relative", {}, {{ApplicationId{1}, "camera"}}});
   ASSERT_FALSE(relative);
   EXPECT_EQ(relative.error().code, ErrorCode::invalid_argument);
 
-  auto empty = CreateDinitBackend({"/run/dinitctl", {}});
+  auto empty = CreateDinitBackend({"/run/dinitctl", {}, {}});
   ASSERT_FALSE(empty);
   EXPECT_EQ(empty.error().code, ErrorCode::invalid_argument);
 
-  auto invalid_id = CreateDinitBackend({"/run/dinitctl", {{ApplicationId{}, "camera"}}});
+  auto invalid_id = CreateDinitBackend({"/run/dinitctl", {}, {{ApplicationId{}, "camera"}}});
   ASSERT_FALSE(invalid_id);
   EXPECT_EQ(invalid_id.error().code, ErrorCode::invalid_argument);
 
-  auto invalid_name = CreateDinitBackend({"/run/dinitctl", {{ApplicationId{1}, "../camera"}}});
+  auto invalid_name = CreateDinitBackend({"/run/dinitctl", {}, {{ApplicationId{1}, "../camera"}}});
   ASSERT_FALSE(invalid_name);
   EXPECT_EQ(invalid_name.error().code, ErrorCode::invalid_argument);
 }
 
 TEST(DinitBackendTest, ReportsUnavailableControlSocket) {
-  auto created =
-      CreateDinitBackend({"/path/that/does/not/exist/dinitctl", {{ApplicationId{1}, "camera"}}});
+  auto created = CreateDinitBackend(
+      {"/path/that/does/not/exist/dinitctl", {}, {{ApplicationId{1}, "camera"}}});
   ASSERT_TRUE(created);
   auto backend = std::move(created).value();
   auto status = backend->Inspect(ApplicationId{1});
@@ -38,7 +38,7 @@ TEST(DinitBackendTest, ReportsUnavailableControlSocket) {
 }
 
 TEST(DinitBackendTest, RejectsUnmappedApplicationsWithoutConnecting) {
-  auto created = CreateDinitBackend({"/run/dinitctl", {{ApplicationId{1}, "camera"}}});
+  auto created = CreateDinitBackend({"/run/dinitctl", {}, {{ApplicationId{1}, "camera"}}});
   ASSERT_TRUE(created);
   auto backend = std::move(created).value();
   auto status = backend->Inspect(ApplicationId{2});

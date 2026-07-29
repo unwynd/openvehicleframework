@@ -32,12 +32,22 @@ public:
                                                       Deadline deadline) noexcept = 0;
   [[nodiscard]] virtual Result<BackendEvidence> Stop(ApplicationId application, StopReason reason,
                                                      Deadline deadline) noexcept = 0;
+  [[nodiscard]] virtual Result<void> RequestSystemRecovery(Deadline) noexcept {
+    return MakeError(ErrorCode::unsupported, "backend does not support system recovery requests");
+  }
 };
 
 struct TransitionFailure final {
   Error error;
   std::optional<ApplicationId> application;
   BackendEvidence evidence;
+  FailureAction recovery_action{FailureAction::hold_observed_configuration};
+  bool recovery_attempted{};
+  bool recovery_succeeded{};
+  std::optional<Error> recovery_error;
+  std::optional<ModeId> recovered_mode;
+  std::vector<ApplicationId> recovery_stopped_applications;
+  std::vector<ApplicationId> recovery_started_applications;
 };
 
 struct TransitionSnapshot final {
@@ -116,6 +126,11 @@ private:
   [[nodiscard]] Result<TransitionSnapshot> Fail(TransitionSnapshot& transition, Error error,
                                                 std::optional<ApplicationId> application = {},
                                                 BackendEvidence evidence = {}) noexcept;
+  [[nodiscard]] Result<TransitionSnapshot> Recover(TransitionSnapshot& transition, Error error,
+                                                   std::optional<ApplicationId> application,
+                                                   BackendEvidence evidence) noexcept;
+  [[nodiscard]] Result<void> ApplyRecoveryPlan(const TransitionPlan& plan, Deadline deadline,
+                                               TransitionFailure& failure) noexcept;
   [[nodiscard]] bool IsCancelled(TransitionId transition) const noexcept;
 
   ValidatedModel model_;

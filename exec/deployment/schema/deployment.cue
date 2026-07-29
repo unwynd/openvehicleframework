@@ -61,6 +61,7 @@ package ovf_exec_deployment
 #Platform: {
 	dinit: {
 		backendLibrary:    #AbsolutePath
+		systemRecoveryService: #Name
 		controlSocket:     #AbsolutePath
 		servicesDirectory: #AbsolutePath
 		logBufferSize:     int & >=4096
