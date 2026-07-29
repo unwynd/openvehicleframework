@@ -61,13 +61,20 @@ def main() -> int:
     service: subprocess.Popen[str] | None = None
     service_log = service_log_path.open("w", encoding="utf-8")
     try:
+        service_ready_read, service_ready_write = os.pipe()
+        service_environment = environment.copy()
+        service_environment["OVF_EXEC_APPLICATION_ID"] = "1"
+        service_environment["OVF_EXEC_READY_FD"] = str(service_ready_write)
+        service_environment["DINIT_SERVICE"] = "ovf-radar-service"
         service = subprocess.Popen(
             [service_binary],
-            env=environment,
+            env=service_environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            pass_fds=(service_ready_write,),
         )
+        os.close(service_ready_write)
         assert service.stdout is not None
         selector = selectors.DefaultSelector()
         selector.register(service.stdout, selectors.EVENT_READ)
@@ -84,19 +91,52 @@ def main() -> int:
             if ready:
                 break
         if not ready:
+            os.close(service_ready_read)
             raise RuntimeError("service did not become ready")
-        client = subprocess.run(
+        if os.read(service_ready_read, 1) != b"\x01":
+            os.close(service_ready_read)
+            raise RuntimeError("service sent an invalid readiness notification")
+        os.close(service_ready_read)
+
+        client_ready_read, client_ready_write = os.pipe()
+        client_environment = environment.copy()
+        client_environment["OVF_EXEC_APPLICATION_ID"] = "2"
+        client_environment["OVF_EXEC_READY_FD"] = str(client_ready_write)
+        client_environment["DINIT_SERVICE"] = "ovf-radar-client"
+        client = subprocess.Popen(
             [client_binary],
-            env=environment,
+            env=client_environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            timeout=30,
+            pass_fds=(client_ready_write,),
         )
-        client_log_path.write_text(client.stdout, encoding="utf-8")
-        observed = set(client.stdout.splitlines())
-        if client.returncode != 0 or not EXPECTED.issubset(observed):
-            raise RuntimeError(f"client exchange failed:\n{client.stdout}")
+        os.close(client_ready_write)
+        assert client.stdout is not None
+        selector = selectors.DefaultSelector()
+        selector.register(client.stdout, selectors.EVENT_READ)
+        lines: list[str] = []
+        observed: set[str] = set()
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and client.poll() is None:
+            for key, _ in selector.select(timeout=0.25):
+                line = key.fileobj.readline()
+                if line:
+                    lines.append(line)
+                    observed.add(line.rstrip())
+            if EXPECTED.issubset(observed):
+                break
+        client_ready = os.read(client_ready_read, 1)
+        os.close(client_ready_read)
+        stop(client)
+        remainder = client.stdout.read()
+        if remainder:
+            lines.append(remainder)
+            observed.update(remainder.splitlines())
+        content = "".join(lines)
+        client_log_path.write_text(content, encoding="utf-8")
+        if client_ready != b"\x01" or client.returncode != 0 or not EXPECTED.issubset(observed):
+            raise RuntimeError(f"client exchange failed:\n{content}")
         return 0
     finally:
         stop(service)
