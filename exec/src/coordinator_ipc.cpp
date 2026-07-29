@@ -760,10 +760,6 @@ public:
 
   ~IpcCoordinatorServer() override {
     stopping_.store(true, std::memory_order_release);
-    if (listener_.get() >= 0) {
-      ::shutdown(listener_.get(), SHUT_RDWR);
-      listener_ = Descriptor{};
-    }
     {
       std::lock_guard lock(mutex_);
       for (const auto descriptor : active_) {
@@ -774,6 +770,7 @@ public:
     if (acceptor_.joinable()) {
       acceptor_.join();
     }
+    listener_ = Descriptor{};
     for (auto& worker : workers_) {
       if (worker.joinable()) {
         worker.join();
@@ -822,6 +819,20 @@ private:
 
   void Accept() {
     while (!stopping_.load(std::memory_order_acquire)) {
+      pollfd ready{listener_.get(), POLLIN, 0};
+      const int polled = ::poll(&ready, 1, 100);
+      if (polled == 0) {
+        continue;
+      }
+      if (polled < 0) {
+        if (errno == EINTR) {
+          continue;
+        }
+        return;
+      }
+      if ((ready.revents & POLLIN) == 0) {
+        return;
+      }
       const int descriptor = ::accept(listener_.get(), nullptr, nullptr);
       if (descriptor < 0) {
         if (errno == EINTR) {
