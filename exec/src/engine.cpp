@@ -672,7 +672,7 @@ Result<TransitionSnapshot> ExecutionEngine::Recover(TransitionSnapshot& transiti
   } else if (domain->recovery.action == FailureAction::request_system_recovery) {
     recovered = backend_->RequestSystemRecovery(deadline);
   } else {
-    recovered = MakeError(ErrorCode::unsupported, "recovery policy is not implemented");
+    recovered = MakeError(ErrorCode::internal_error, "validated recovery policy is invalid");
   }
   if (!recovered) {
     transition.failure->recovery_error = recovered.error();

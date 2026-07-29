@@ -163,11 +163,6 @@ public:
     }
   }
 
-  Result<void> ReportFailure(const FailureReport&) noexcept override {
-    return MakeError(ErrorCode::unsupported,
-                     "failure reporting requires the execution daemon control channel");
-  }
-
   std::uint64_t Subscribe(StopHandler handler) override {
     if (!handler) {
       return 0U;

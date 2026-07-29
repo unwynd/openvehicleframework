@@ -19,12 +19,6 @@ struct ApplicationOptions final {
   std::string expected_name;
 };
 
-struct FailureReport final {
-  std::uint32_t code{};
-  std::string message;
-  std::uint64_t support_data{};
-};
-
 class StopSubscription final {
 public:
   StopSubscription() = default;
@@ -61,7 +55,6 @@ public:
   [[nodiscard]] StopReason GetStopReason() const noexcept;
   [[nodiscard]] Result<StopReason> WaitForStop(Deadline deadline) noexcept;
   [[nodiscard]] Result<StopSubscription> OnStop(std::function<void(StopReason)> handler);
-  [[nodiscard]] Result<void> ReportFailure(FailureReport report) noexcept;
 
 private:
   class Impl;

@@ -25,11 +25,6 @@ public:
     return {};
   }
 
-  Result<void> ReportFailure(const FailureReport& report) noexcept override {
-    failure_ = report;
-    return {};
-  }
-
   std::uint64_t Subscribe(StopHandler handler) override {
     std::lock_guard lock(mutex_);
     const auto id = next_id_++;
@@ -69,7 +64,6 @@ public:
   }
 
   bool ready_{};
-  FailureReport failure_;
 
 private:
   mutable std::mutex mutex_;
@@ -118,22 +112,6 @@ TEST(ApplicationTest, DeliversStopAndSupportsSubscriptionLifetime) {
   EXPECT_EQ(waited.value(), StopReason::mode_change);
 
   subscription.value().Reset();
-}
-
-TEST(ApplicationTest, ValidatesFailureReports) {
-  auto backend = std::make_unique<FakeLifecycleBackend>();
-  auto* observer = backend.get();
-  auto result = detail_ApplicationFactory::Create(std::move(backend));
-  ASSERT_TRUE(result);
-  auto application = std::move(result).value();
-
-  auto invalid = application.ReportFailure({});
-  ASSERT_FALSE(invalid);
-  EXPECT_EQ(invalid.error().code, ErrorCode::invalid_argument);
-
-  EXPECT_TRUE(application.ReportFailure({17, "sensor initialization failed", 9}));
-  EXPECT_EQ(observer->failure_.code, 17U);
-  EXPECT_EQ(observer->failure_.support_data, 9U);
 }
 
 } // namespace

@@ -114,17 +114,6 @@ Result<StopSubscription> Application::OnStop(std::function<void(StopReason)> han
   });
 }
 
-Result<void> Application::ReportFailure(FailureReport report) noexcept {
-  if (!impl_) {
-    return MakeError(ErrorCode::invalid_transition, "application has been moved from");
-  }
-  if (report.code == 0U || report.message.empty()) {
-    return MakeError(ErrorCode::invalid_argument,
-                     "failure code must be nonzero and message must not be empty");
-  }
-  return impl_->Backend().ReportFailure(report);
-}
-
 Result<Application>
 detail_ApplicationFactory::Create(std::unique_ptr<detail::LifecycleBackend> backend) {
   if (!backend) {

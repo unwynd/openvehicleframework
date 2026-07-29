@@ -19,7 +19,6 @@ public:
   [[nodiscard]] virtual ApplicationId Id() const noexcept = 0;
   [[nodiscard]] virtual std::string Name() const = 0;
   [[nodiscard]] virtual Result<void> ReportReady() noexcept = 0;
-  [[nodiscard]] virtual Result<void> ReportFailure(const FailureReport& report) noexcept = 0;
   [[nodiscard]] virtual std::uint64_t Subscribe(StopHandler handler) = 0;
   virtual void Unsubscribe(std::uint64_t subscription) noexcept = 0;
   [[nodiscard]] virtual bool StopRequested() const noexcept = 0;
