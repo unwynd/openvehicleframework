@@ -56,6 +56,17 @@ cc_test(
 )
 
 cc_test(
+    name = "dinit_client_compile_test",
+    srcs = ["dinit_client_compile_test.cpp"],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:osx": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = ["@dinit_source//:client"],
+)
+
+cc_test(
     name = "engine_test",
     srcs = ["engine_test.cpp"],
     deps = [
@@ -70,6 +81,7 @@ test_suite(
         ":application_test",
         ":backend_abi_test",
         ":backend_binding_test",
+        ":dinit_client_compile_test",
         ":engine_test",
         ":model_test",
         ":planner_test",

@@ -4,6 +4,7 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files([
     "boost.BUILD.bazel",
+    "dinit.BUILD.bazel",
     "iceoryx2-module.patch",
     "vsomeip.BUILD.bazel",
 ])
