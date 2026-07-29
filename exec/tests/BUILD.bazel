@@ -1,8 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
 package(default_visibility = ["//visibility:public"])
+
+cc_binary(
+    name = "dinit_test_service",
+    srcs = ["dinit_test_service.cpp"],
+)
 
 cc_test(
     name = "backend_abi_test",
@@ -67,6 +73,43 @@ cc_test(
 )
 
 cc_test(
+    name = "dinit_backend_test",
+    srcs = ["dinit_backend_test.cpp"],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:osx": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//exec:dinit_backend",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "dinit_integration_test",
+    srcs = ["dinit_integration_test.cpp"],
+    data = [
+        ":dinit_test_service",
+        "@dinit_source//:dinit",
+    ],
+    env = {
+        "OVF_TEST_DINIT": "$(rootpath @dinit_source//:dinit)",
+        "OVF_TEST_DINIT_SERVICE": "$(rootpath :dinit_test_service)",
+    },
+    tags = ["integration"],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:osx": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//exec:dinit_backend",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "engine_test",
     srcs = ["engine_test.cpp"],
     deps = [
@@ -81,7 +124,9 @@ test_suite(
         ":application_test",
         ":backend_abi_test",
         ":backend_binding_test",
+        ":dinit_backend_test",
         ":dinit_client_compile_test",
+        ":dinit_integration_test",
         ":engine_test",
         ":model_test",
         ":planner_test",

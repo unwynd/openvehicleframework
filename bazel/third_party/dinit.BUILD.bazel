@@ -28,6 +28,7 @@ genrule(
           "SUPPORT_CAPABILITIES=0 " +
           "SUPPORT_IOPRIO=0 " +
           "SUPPORT_OOM_ADJ=0 " +
+          "DEFAULT_AUTO_RESTART=ALWAYS " +
           "DEFAULT_START_TIMEOUT=60 " +
           "DEFAULT_STOP_TIMEOUT=10 > $@",
     tools = [":mconfig_gen"],
@@ -44,4 +45,38 @@ cc_library(
         "dasynq/include",
         "src/includes",
     ],
+)
+
+cc_binary(
+    name = "dinit",
+    srcs = [
+        "src/baseproc-service.cc",
+        "src/control.cc",
+        "src/dinit.cc",
+        "src/dinit-env.cc",
+        "src/dinit-iostream.cc",
+        "src/dinit-log.cc",
+        "src/dinit-main.cc",
+        "src/load-service.cc",
+        "src/options-processing.cc",
+        "src/proc-service.cc",
+        "src/run-child-proc.cc",
+        "src/service.cc",
+        "src/settings.cc",
+    ],
+    copts = [
+        "-std=c++17",
+        "-Wno-error=unused-parameter",
+    ],
+    includes = [
+        ".",
+        "dasynq/include",
+        "src/includes",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:osx": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [":client"],
 )
