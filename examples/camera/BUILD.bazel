@@ -10,4 +10,5 @@ ovf_cc_application(
     platform = "//platform:iceoryx2",
     tags = ["manual"],
     visibility = ["//visibility:public"],
+    deps = ["//exec:application_api"],
 )

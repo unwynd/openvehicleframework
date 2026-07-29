@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_shared_library.bzl", "cc_shared_library")
 
@@ -37,6 +38,36 @@ cc_library(
     copts = ["-std=c++20"],
     includes = ["include"],
     deps = [":model"],
+)
+
+cc_shared_library(
+    name = "application_shared",
+    shared_lib_name = select({
+        "@platforms//os:osx": "libovf_exec_application.dylib",
+        "//conditions:default": "libovf_exec_application.so",
+    }),
+    deps = [":application"],
+)
+
+cc_library(
+    name = "application_headers",
+    hdrs = [
+        "include/ovf/exec/application.hpp",
+        "include/ovf/exec/error.hpp",
+        "include/ovf/exec/types.hpp",
+    ],
+    includes = ["include"],
+)
+
+cc_import(
+    name = "application_api",
+    shared_library = ":application_shared",
+    deps = [":application_headers"],
+)
+
+filegroup(
+    name = "application_runtime",
+    srcs = [":application_shared"],
 )
 
 cc_library(

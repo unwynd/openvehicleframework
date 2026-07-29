@@ -130,6 +130,7 @@ ovf_vsomeip_platform_bundle(
     framework = [
         ":shared",
         ":vsomeip_plugin",
+        "//exec:application_runtime",
     ],
     framework_license = "//:LICENSE",
     service_unit = "transports/vsomeip/config/ovf-vsomeip-routing.service",

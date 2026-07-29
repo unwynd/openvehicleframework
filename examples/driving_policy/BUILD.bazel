@@ -10,4 +10,5 @@ ovf_cc_application(
     platform = "//platform:vsomeip",
     tags = ["manual"],
     visibility = ["//visibility:public"],
+    deps = ["//exec:application_api"],
 )

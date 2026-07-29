@@ -1,21 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ovf/exec/application.hpp"
 #include "ovf_application.hpp"
 #include "radar/ovf_contract.hpp"
 
-#include <atomic>
 #include <chrono>
-#include <csignal>
 #include <iostream>
 #include <thread>
 
 namespace {
 using namespace example::radar;
 using namespace std::chrono_literals;
-
-std::atomic_bool running{true};
-
-void Stop(int) { running.store(false); }
 
 class RadarService final : public RadarServiceSkeleton {
 public:
@@ -45,36 +40,46 @@ private:
 } // namespace
 
 int main() {
-  std::signal(SIGINT, Stop);
-  std::signal(SIGTERM, Stop);
-
-  auto application = ovf::app::CreateRuntime("ovf-radar-service");
-  if (!application) {
-    std::cerr << "failed to start the radar service runtime\n";
+  auto execution = ovf::exec::Application::Create();
+  if (!execution) {
+    std::cerr << "failed to create the radar execution context\n";
     return 1;
+  }
+  auto communication = ovf::app::CreateRuntime("ovf-radar-service");
+  if (!communication) {
+    std::cerr << "failed to start the radar service runtime\n";
+    return 2;
   }
 
   RadarService implementation;
-  auto service = implementation.OfferService(application.get(), ovf::app::radar());
+  auto service = implementation.OfferService(communication.get(), ovf::app::radar());
   if (!service.valid()) {
     std::cerr << "failed to offer RadarService\n";
-    return 2;
+    return 3;
+  }
+  auto ready = execution.value().ReportReady();
+  if (!ready) {
+    std::cerr << "failed to report radar readiness\n";
+    service.close();
+    return 4;
   }
 
   std::cout << "SERVICE_READY" << std::endl;
   std::uint64_t sequence{};
-  while (running.load()) {
+  while (!execution.value().StopRequested()) {
     RadarFrame frame{};
     frame.capturedAt = ++sequence;
     if (!frame.objects.push_back({7, 12.5F, -1.5F, 98}) ||
         service.publishRadarObjectsChanged(frame)) {
       std::cerr << "failed to publish RadarObjectsChanged\n";
-      return 3;
+      service.close();
+      return 5;
     }
     implementation.set_speed(13.5F + static_cast<float>(sequence));
     if (service.publishVehicleStateField(implementation.state())) {
       std::cerr << "failed to publish VehicleStateField\n";
-      return 4;
+      service.close();
+      return 6;
     }
     std::this_thread::sleep_for(100ms);
   }

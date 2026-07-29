@@ -21,6 +21,7 @@ def main() -> None:
         "etc/vsomeip.json",
         "usr/bin/routingmanagerd",
         "usr/lib/libovf_com.so",
+        "usr/lib/libovf_exec_application.so",
         "usr/lib/libvsomeip3-cfg.so",
         "usr/lib/libvsomeip3-cfg.so.3",
         "usr/lib/libvsomeip3-e2e.so",

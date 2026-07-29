@@ -325,6 +325,7 @@ def package_vsomeip_platform(args: argparse.Namespace) -> int:
     runtime_targets = {
         "routingmanagerd": ("usr/bin/routingmanagerd", 0o755),
         "libovf_com.so": ("usr/lib/libovf_com.so", 0o755),
+        "libovf_exec_application.so": ("usr/lib/libovf_exec_application.so", 0o755),
         "libovf_com_provider_vsomeip.so": (
             "usr/lib/ovf/providers/libovf_com_provider_vsomeip.so",
             0o755,

@@ -15,13 +15,13 @@ public:
   [[nodiscard]] virtual Result<SystemSnapshot> Snapshot() const = 0;
   [[nodiscard]] virtual Result<ExecutionDomain> Domain(DomainId domain) const = 0;
   [[nodiscard]] virtual Result<ExecutionMode> Mode(DomainId domain, ModeId mode) const = 0;
-  [[nodiscard]] virtual Result<TransitionId>
-  Request(DomainId domain, ModeId mode, TransitionOptions options) = 0;
+  [[nodiscard]] virtual Result<TransitionId> Request(DomainId domain, ModeId mode,
+                                                     TransitionOptions options) = 0;
   [[nodiscard]] virtual Result<void> Cancel(TransitionId transition) = 0;
   [[nodiscard]] virtual Result<TransitionSnapshot>
   TransitionState(TransitionId transition) const = 0;
-  [[nodiscard]] virtual Result<TransitionSnapshot>
-  Wait(TransitionId transition, Deadline deadline) const = 0;
+  [[nodiscard]] virtual Result<TransitionSnapshot> Wait(TransitionId transition,
+                                                        Deadline deadline) const = 0;
   [[nodiscard]] virtual Result<std::function<void()>>
   Subscribe(EventFilter filter, SystemCoordinator::EventHandler handler) = 0;
 };

@@ -2,12 +2,12 @@
 
 #include "camera/ovf_contract.hpp"
 #include "environment_model/ovf_contract.hpp"
+#include "ovf/exec/application.hpp"
 #include "ovf_application.hpp"
 #include "radar/ovf_contract.hpp"
 
 #include <atomic>
 #include <chrono>
-#include <csignal>
 #include <iostream>
 #include <mutex>
 #include <thread>
@@ -15,49 +15,52 @@
 namespace {
 using namespace std::chrono_literals;
 
-std::atomic_bool running{true};
-void Stop(int) { running.store(false); }
-
 class EnvironmentImplementation final
     : public example::environment::EnvironmentModelServiceSkeleton {};
 } // namespace
 
 int main() {
-  std::signal(SIGINT, Stop);
-  std::signal(SIGTERM, Stop);
-  auto application = ovf::app::CreateRuntime("ovf-sensor-fusion");
-  if (!application) {
-    std::cerr << "failed to start sensor fusion runtime\n";
+  auto execution = ovf::exec::Application::Create();
+  if (!execution) {
+    std::cerr << "failed to create sensor fusion execution context\n";
     return 1;
+  }
+  auto communication = ovf::app::CreateRuntime("ovf-sensor-fusion");
+  if (!communication) {
+    std::cerr << "failed to start sensor fusion runtime\n";
+    return 2;
   }
 
   EnvironmentImplementation implementation;
-  auto output = implementation.OfferService(application.get(), ovf::app::environment_model());
+  auto output = implementation.OfferService(communication.get(), ovf::app::environment_model());
   if (!output.valid()) {
     std::cerr << "failed to offer EnvironmentModelService\n";
-    return 2;
+    return 3;
   }
 
   std::mutex mutex;
   std::condition_variable condition;
   auto camera =
-      example::camera::CameraServiceProxy::Find(application.get(), ovf::app::camera(), 10s);
-  auto radar = example::radar::RadarServiceProxy::Find(application.get(), ovf::app::radar(), 10s);
+      example::camera::CameraServiceProxy::Find(communication.get(), ovf::app::camera(), 10s);
+  auto radar = example::radar::RadarServiceProxy::Find(communication.get(), ovf::app::radar(), 10s);
   if (!camera || !radar) {
     std::cerr << "timed out discovering sensor inputs\n";
-    return 3;
+    output.close();
+    return 4;
   }
   auto camera_subscription = camera->subscribeCameraObjectsChanged();
   auto radar_subscription = radar->subscribeRadarObjectsChanged();
   if (!camera_subscription.valid() || !radar_subscription.valid()) {
     std::cerr << "failed to subscribe to sensor inputs\n";
-    return 4;
+    output.close();
+    return 5;
   }
 
   example::camera::CameraFrame latest_camera{};
   example::radar::RadarFrame latest_radar{};
   bool have_camera{};
   bool have_radar{};
+  std::atomic_bool communication_failed{};
   std::uint64_t output_sequence{};
   auto publish = [&] {
     if (!have_camera || !have_radar) {
@@ -89,7 +92,7 @@ int main() {
     latest_camera = frame;
     have_camera = true;
     if (!publish()) {
-      running.store(false);
+      communication_failed.store(true);
     }
   });
   radar_subscription.on_sample([&](example::radar::RadarFrame const& frame) {
@@ -97,16 +100,24 @@ int main() {
     latest_radar = frame;
     have_radar = true;
     if (!publish()) {
-      running.store(false);
+      communication_failed.store(true);
     }
   });
 
+  auto ready = execution.value().ReportReady();
+  if (!ready) {
+    std::cerr << "failed to report sensor fusion readiness\n";
+    radar_subscription.close();
+    camera_subscription.close();
+    output.close();
+    return 6;
+  }
   std::cout << "SENSOR_FUSION_READY" << std::endl;
-  while (running.load()) {
+  while (!execution.value().StopRequested() && !communication_failed.load()) {
     std::this_thread::sleep_for(100ms);
   }
   radar_subscription.close();
   camera_subscription.close();
   output.close();
-  return 0;
+  return communication_failed.load() ? 7 : 0;
 }

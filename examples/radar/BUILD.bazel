@@ -11,6 +11,7 @@ ovf_cc_application(
     interfaces = ["//contracts/radar"],
     platform = "//platform:inproc",
     tags = ["manual"],
+    deps = ["//exec:application_api"],
 )
 
 ovf_cc_application(
@@ -21,6 +22,7 @@ ovf_cc_application(
     platform = "//platform:vsomeip",
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:linux"],
+    deps = ["//exec:application_api"],
 )
 
 ovf_cc_application(
@@ -30,6 +32,7 @@ ovf_cc_application(
     interfaces = ["//contracts/radar"],
     platform = "//platform:iceoryx2",
     tags = ["manual"],
+    deps = ["//exec:application_api"],
 )
 
 ovf_cc_application(
@@ -39,6 +42,7 @@ ovf_cc_application(
     interfaces = ["//contracts/radar"],
     platform = "//platform:iceoryx2",
     tags = ["manual"],
+    deps = ["//exec:application_api"],
 )
 
 ovf_cc_application(
@@ -49,4 +53,5 @@ ovf_cc_application(
     platform = "//platform:vsomeip",
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:linux"],
+    deps = ["//exec:application_api"],
 )

@@ -43,16 +43,25 @@ def start_until(
     environment: dict[str, str],
     workdir: Path,
     log_path: Path,
+    application_id: int,
+    service_name: str,
 ) -> tuple[subprocess.Popen[str], object]:
     log = log_path.open("w", encoding="utf-8")
+    ready_read, ready_write = os.pipe()
+    managed_environment = environment.copy()
+    managed_environment["OVF_EXEC_APPLICATION_ID"] = str(application_id)
+    managed_environment["OVF_EXEC_READY_FD"] = str(ready_write)
+    managed_environment["DINIT_SERVICE"] = service_name
     process = subprocess.Popen(
         [executable],
         cwd=workdir,
-        env=environment,
+        env=managed_environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        pass_fds=(ready_write,),
     )
+    os.close(ready_write)
     assert process.stdout is not None
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ)
@@ -63,7 +72,11 @@ def start_until(
             log.write(line)
             log.flush()
             if marker in line:
+                if os.read(ready_read, 1) != b"\x01":
+                    raise RuntimeError(f"{executable.name} sent an invalid readiness notification")
+                os.close(ready_read)
                 return process, log
+    os.close(ready_read)
     remainder = process.stdout.read()
     log.write(remainder)
     log.close()
@@ -108,30 +121,35 @@ def main() -> int:
         )
         processes.append(routing)
         try:
-            for executable, marker, name in (
+            for executable, marker, name, application_id in (
                 (runfile("examples/radar/radar_iceoryx2_service"),
-                 "SERVICE_READY", "radar"),
-                (runfile("examples/camera/camera"), "CAMERA_READY", "camera"),
+                 "SERVICE_READY", "radar", 2),
+                (runfile("examples/camera/camera"), "CAMERA_READY", "camera", 1),
                 (runfile("examples/sensor_fusion/sensor_fusion"),
-                 "SENSOR_FUSION_READY", "sensor-fusion"),
+                 "SENSOR_FUSION_READY", "sensor-fusion", 3),
             ):
                 process, log = start_until(
-                    executable, marker, environment, workdir, logs / f"{name}.log"
+                    executable,
+                    marker,
+                    environment,
+                    workdir,
+                    logs / f"{name}.log",
+                    application_id,
+                    f"ovf-app-{application_id}",
                 )
                 processes.append(process)
                 open_logs.append(log)
-            policy = subprocess.run(
-                [runfile("examples/driving_policy/driving_policy")],
-                cwd=workdir,
-                env=environment,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                timeout=30,
+            policy, policy_log = start_until(
+                runfile("examples/driving_policy/driving_policy"),
+                "ENVIRONMENT_MODEL_RECEIVED",
+                environment,
+                workdir,
+                logs / "driving-policy.log",
+                4,
+                "ovf-app-4",
             )
-            (logs / "driving-policy.log").write_text(policy.stdout, encoding="utf-8")
-            if policy.returncode != 0 or "ENVIRONMENT_MODEL_RECEIVED" not in policy.stdout:
-                raise RuntimeError(f"driving policy received no fused data:\n{policy.stdout}")
+            processes.append(policy)
+            open_logs.append(policy_log)
             return 0
         finally:
             for process in reversed(processes):
