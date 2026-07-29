@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdlib>
+#include <vector>
 
 namespace {
 
@@ -29,6 +30,10 @@ TEST(ExecutionDeploymentTest, LoadsGeneratedRuntimeConfiguration) {
   EXPECT_EQ(loaded.value().coordinator.socket, "/run/ovf/exec/coordinator.sock");
   EXPECT_EQ(loaded.value().coordinator.limits.queue_capacity, 128U);
   EXPECT_EQ(loaded.value().coordinator.limits.worker_count, 4U);
+  EXPECT_EQ(loaded.value().coordinator.observation_uids,
+            (std::vector<std::uint32_t>{0U}));
+  EXPECT_EQ(loaded.value().coordinator.mutation_uids,
+            (std::vector<std::uint32_t>{0U}));
 }
 
 TEST(ExecutionDeploymentTest, RejectsMissingArtifacts) {

@@ -87,9 +87,14 @@ cc_library(
 
 cc_library(
     name = "coordinator",
-    srcs = ["src/coordinator.cpp"],
+    srcs = [
+        "src/coordinator.cpp",
+        "src/coordinator_ipc.cpp",
+    ],
     hdrs = [
         "include/ovf/exec/coordinator.hpp",
+        "include/ovf/exec/internal/coordinator_client.hpp",
+        "include/ovf/exec/internal/coordinator_server.hpp",
         "include/ovf/exec/internal/coordinator_service.hpp",
     ],
     copts = ["-std=c++20"],
@@ -98,6 +103,7 @@ cc_library(
         ":application",
         ":engine",
         ":model",
+        "@jsoncpp//:jsoncpp",
     ],
 )
 

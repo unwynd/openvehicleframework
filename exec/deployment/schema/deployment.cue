@@ -73,6 +73,8 @@ package ovf_exec_deployment
 		socket:        #AbsolutePath
 		queueCapacity: int & >=1 & <=4096
 		workerCount:   int & >=1 & <=64
+		observationUids: [...int & >=0 & <=4294967295]
+		mutationUids:    [...int & >=0 & <=4294967295]
 	}
 }
 

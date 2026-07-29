@@ -387,26 +387,61 @@ private:
 
 class SystemCoordinator::Impl final {
 public:
-  explicit Impl(std::shared_ptr<CoordinatorService> service) : service(std::move(service)) {}
-  std::shared_ptr<CoordinatorService> service;
+  explicit Impl(std::shared_ptr<detail::CoordinatorClient> client) : client(std::move(client)) {}
+  std::shared_ptr<detail::CoordinatorClient> client;
 };
 
 class Transition::Impl final {
 public:
-  Impl(std::shared_ptr<CoordinatorService> service, TransitionId id)
-      : service(std::move(service)), id(id) {}
-  std::shared_ptr<CoordinatorService> service;
+  Impl(std::shared_ptr<detail::CoordinatorClient> client, TransitionId id)
+      : client(std::move(client)), id(id) {}
+  std::shared_ptr<detail::CoordinatorClient> client;
   TransitionId id;
+};
+
+class LocalCoordinatorClient final : public detail::CoordinatorClient {
+public:
+  explicit LocalCoordinatorClient(std::shared_ptr<CoordinatorService> service)
+      : service_(std::move(service)) {}
+
+  Result<SystemSnapshot> Snapshot() const override { return service_->Snapshot(); }
+  Result<ExecutionDomain> Domain(DomainId domain) const override {
+    return service_->Domain(domain);
+  }
+  Result<ExecutionMode> Mode(DomainId domain, ModeId mode) const override {
+    return service_->Mode(domain, mode);
+  }
+  Result<TransitionId> Request(DomainId domain, ModeId mode,
+                               TransitionOptions options) override {
+    return service_->Request(domain, mode, options);
+  }
+  Result<void> Cancel(TransitionId transition) override {
+    return service_->Cancel(transition);
+  }
+  Result<TransitionSnapshot> TransitionState(TransitionId transition) const override {
+    return service_->TransitionState(transition);
+  }
+  Result<TransitionSnapshot> Wait(TransitionId transition, Deadline deadline) const override {
+    return service_->Wait(transition, deadline);
+  }
+  Result<std::function<void()>>
+  Subscribe(EventFilter filter, SystemCoordinator::EventHandler handler) override {
+    return service_->Subscribe(std::move(filter), std::move(handler));
+  }
+
+private:
+  std::shared_ptr<CoordinatorService> service_;
 };
 
 EventSubscription::EventSubscription(std::function<void()> unsubscribe)
     : unsubscribe_(std::move(unsubscribe)) {}
 EventSubscription::~EventSubscription() { Reset(); }
-EventSubscription::EventSubscription(EventSubscription&&) noexcept = default;
+EventSubscription::EventSubscription(EventSubscription&& other) noexcept
+    : unsubscribe_(std::exchange(other.unsubscribe_, std::function<void()>{})) {}
 EventSubscription& EventSubscription::operator=(EventSubscription&& other) noexcept {
   if (this != &other) {
     Reset();
-    unsubscribe_ = std::move(other.unsubscribe_);
+    unsubscribe_ = std::exchange(other.unsubscribe_, std::function<void()>{});
   }
   return *this;
 }
@@ -421,20 +456,22 @@ EventSubscription::operator bool() const noexcept { return static_cast<bool>(uns
 Transition::Transition(std::shared_ptr<Impl> impl) : impl_(std::move(impl)) {}
 TransitionId Transition::Id() const noexcept { return impl_ ? impl_->id : TransitionId{}; }
 Result<TransitionSnapshot> Transition::Get() const {
-  return impl_ ? impl_->service->TransitionState(impl_->id)
+  return impl_ ? impl_->client->TransitionState(impl_->id)
                : Result<TransitionSnapshot>{
                      MakeError(ErrorCode::invalid_transition, "transition handle is empty")};
 }
 Result<TransitionSnapshot> Transition::Wait(Deadline deadline) const {
-  return impl_ ? impl_->service->Wait(impl_->id, deadline)
+  return impl_ ? impl_->client->Wait(impl_->id, deadline)
                : Result<TransitionSnapshot>{
                      MakeError(ErrorCode::invalid_transition, "transition handle is empty")};
 }
 Transition::operator bool() const noexcept { return static_cast<bool>(impl_); }
 
-Result<SystemCoordinator> SystemCoordinator::Connect(CoordinatorOptions) {
-  return MakeError(ErrorCode::unsupported,
-                   "coordinator IPC endpoint support is not enabled in this build");
+Result<SystemCoordinator> SystemCoordinator::Connect(CoordinatorOptions options) {
+  auto connected = detail::ConnectCoordinatorIpc(options);
+  return connected ? Result<SystemCoordinator>{
+                         detail_CoordinatorFactory::CreateClient(std::move(connected).value())}
+                   : Result<SystemCoordinator>{connected.error()};
 }
 SystemCoordinator::SystemCoordinator(std::shared_ptr<Impl> impl) : impl_(std::move(impl)) {}
 SystemCoordinator::~SystemCoordinator() = default;
@@ -442,17 +479,17 @@ SystemCoordinator::SystemCoordinator(SystemCoordinator&&) noexcept = default;
 SystemCoordinator& SystemCoordinator::operator=(SystemCoordinator&&) noexcept = default;
 
 Result<SystemSnapshot> SystemCoordinator::GetSnapshot() const {
-  return impl_ ? impl_->service->Snapshot()
+  return impl_ ? impl_->client->Snapshot()
                : Result<SystemSnapshot>{
                      MakeError(ErrorCode::invalid_transition, "coordinator handle is empty")};
 }
 Result<ExecutionDomain> SystemCoordinator::ResolveDomain(DomainId domain) const {
-  return impl_ ? impl_->service->Domain(domain)
+  return impl_ ? impl_->client->Domain(domain)
                : Result<ExecutionDomain>{
                      MakeError(ErrorCode::invalid_transition, "coordinator handle is empty")};
 }
 Result<ExecutionMode> SystemCoordinator::ResolveMode(DomainId domain, ModeId mode) const {
-  return impl_ ? impl_->service->Mode(domain, mode)
+  return impl_ ? impl_->client->Mode(domain, mode)
                : Result<ExecutionMode>{
                      MakeError(ErrorCode::invalid_transition, "coordinator handle is empty")};
 }
@@ -461,13 +498,13 @@ Result<Transition> SystemCoordinator::RequestMode(DomainId domain, ModeId mode,
   if (!impl_) {
     return MakeError(ErrorCode::invalid_transition, "coordinator handle is empty");
   }
-  auto requested = impl_->service->Request(domain, mode, options);
+  auto requested = impl_->client->Request(domain, mode, options);
   return requested ? Result<Transition>{Transition{
-                         std::make_shared<Transition::Impl>(impl_->service, requested.value())}}
+                   std::make_shared<Transition::Impl>(impl_->client, requested.value())}}
                    : Result<Transition>{requested.error()};
 }
 Result<void> SystemCoordinator::Cancel(TransitionId transition) {
-  return impl_ ? impl_->service->Cancel(transition)
+  return impl_ ? impl_->client->Cancel(transition)
                : Result<void>{
                      MakeError(ErrorCode::invalid_transition, "coordinator handle is empty")};
 }
@@ -475,7 +512,7 @@ Result<EventSubscription> SystemCoordinator::Subscribe(EventFilter filter, Event
   if (!impl_) {
     return MakeError(ErrorCode::invalid_transition, "coordinator handle is empty");
   }
-  auto subscribed = impl_->service->Subscribe(std::move(filter), std::move(handler));
+  auto subscribed = impl_->client->Subscribe(std::move(filter), std::move(handler));
   return subscribed ? Result<EventSubscription>{EventSubscription{std::move(subscribed).value()}}
                     : Result<EventSubscription>{subscribed.error()};
 }
@@ -499,10 +536,15 @@ detail_CoordinatorFactory::Create(std::unique_ptr<detail::ExecutionEngine> engin
     auto service = std::make_shared<CoordinatorService>(std::move(engine), permissions,
                                                         options.queue_capacity);
     service->Start(options.worker_count);
-    return SystemCoordinator{std::make_shared<SystemCoordinator::Impl>(std::move(service))};
+    return CreateClient(std::make_shared<LocalCoordinatorClient>(std::move(service)));
   } catch (...) {
     return MakeError(ErrorCode::resource_exhausted, "cannot create coordinator resources");
   }
+}
+
+SystemCoordinator
+detail_CoordinatorFactory::CreateClient(std::shared_ptr<detail::CoordinatorClient> client) {
+  return SystemCoordinator{std::make_shared<SystemCoordinator::Impl>(std::move(client))};
 }
 
 } // namespace ovf::exec

@@ -54,7 +54,8 @@ Result<Json::Value> Parse(std::string_view content) {
 
 Result<std::uint64_t> Unsigned(const Json::Value& value, std::string_view field,
                                bool allow_zero = false) {
-  if (!value.isUInt64() || (!allow_zero && value.asUInt64() == 0U)) {
+  if (!value.isIntegral() || (value.isInt64() && value.asInt64() < 0) ||
+      (!allow_zero && value.asUInt64() == 0U)) {
     return MakeError(ErrorCode::configuration_error,
                      std::string{field} + " must be a positive integer");
   }
@@ -99,6 +100,27 @@ Result<std::vector<IdentifierType>> Identifiers(const Json::Value& value, std::s
     }
   } catch (...) {
     return MakeError(ErrorCode::resource_exhausted, "cannot allocate deployment identifiers");
+  }
+  return result;
+}
+
+Result<std::vector<std::uint32_t>> UserIds(const Json::Value& value, std::string_view field) {
+  if (!value.isArray()) {
+    return MakeError(ErrorCode::configuration_error, std::string{field} + " must be an array");
+  }
+  std::vector<std::uint32_t> result;
+  try {
+    result.reserve(value.size());
+    for (const auto& entry : value) {
+      if (!entry.isIntegral() || (entry.isInt64() && entry.asInt64() < 0) ||
+          entry.asUInt64() > std::numeric_limits<std::uint32_t>::max()) {
+        return MakeError(ErrorCode::configuration_error,
+                         std::string{field} + " contains an invalid UID");
+      }
+      result.push_back(static_cast<std::uint32_t>(entry.asUInt64()));
+    }
+  } catch (...) {
+    return MakeError(ErrorCode::resource_exhausted, "cannot allocate coordinator UID policy");
   }
   return result;
 }
@@ -270,7 +292,9 @@ Result<DomainDefinition> Domain(const Json::Value& value) {
 }
 
 Result<ValidatedModel> Execution(const Json::Value& root) {
-  if (root["deploymentVersion"] != 1 || !root["applications"].isArray() ||
+  if (!root["deploymentVersion"].isIntegral() ||
+      root["deploymentVersion"].asUInt64() != 1U ||
+      !root["applications"].isArray() ||
       !root["domains"].isArray()) {
     return MakeError(ErrorCode::configuration_error, "execution model version is unsupported");
   }
@@ -335,8 +359,13 @@ Result<RuntimeDeployment> LoadRuntimeDeployment(const std::string& execution_mod
                         "coordinator.queueCapacity");
   auto workers =
       Unsigned(root.value()["platform"]["coordinator"]["workerCount"], "coordinator.workerCount");
+  auto observation_uids =
+      UserIds(root.value()["platform"]["coordinator"]["observationUids"],
+              "coordinator.observationUids");
+  auto mutation_uids = UserIds(root.value()["platform"]["coordinator"]["mutationUids"],
+                               "coordinator.mutationUids");
   if (!model || !backend_kind || !journal_path || !maximum_record || !synchronize.isBool() ||
-      !endpoint || !queue || !workers ||
+      !endpoint || !queue || !workers || !observation_uids || !mutation_uids ||
       maximum_record.value() > std::numeric_limits<std::size_t>::max() ||
       queue.value() > std::numeric_limits<std::size_t>::max() ||
       workers.value() > std::numeric_limits<std::size_t>::max()) {
@@ -349,7 +378,9 @@ Result<RuntimeDeployment> LoadRuntimeDeployment(const std::string& execution_mod
       {std::move(journal_path).value(), static_cast<std::size_t>(maximum_record.value()),
        synchronize.asBool()},
       {std::move(endpoint).value(),
-       {static_cast<std::size_t>(queue.value()), static_cast<std::size_t>(workers.value())}},
+       {static_cast<std::size_t>(queue.value()), static_cast<std::size_t>(workers.value())},
+       std::move(observation_uids).value(),
+       std::move(mutation_uids).value()},
   };
 }
 

@@ -109,6 +109,7 @@ cc_test(
 cc_test(
     name = "coordinator_test",
     srcs = ["coordinator_test.cpp"],
+    tags = ["no-sandbox"],
     deps = [
         "//exec:coordinator",
         "@googletest//:gtest_main",

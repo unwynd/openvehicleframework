@@ -44,6 +44,10 @@ list StableIds {
     member: StableId
 }
 
+list UserIds {
+    member: Long
+}
+
 list Arguments {
     member: Argument
 }
@@ -198,6 +202,12 @@ structure CoordinatorEndpoint {
 
     @required
     workerCount: Integer
+
+    @required
+    observationUids: UserIds
+
+    @required
+    mutationUids: UserIds
 }
 
 structure ExecutionPlatform {

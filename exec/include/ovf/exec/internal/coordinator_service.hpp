@@ -3,6 +3,7 @@
 #pragma once
 
 #include "ovf/exec/coordinator.hpp"
+#include "ovf/exec/internal/coordinator_client.hpp"
 #include "ovf/exec/internal/engine.hpp"
 
 #include <cstddef>
@@ -30,6 +31,9 @@ public:
   Create(std::unique_ptr<detail::ExecutionEngine> engine,
          detail::CoordinatorPermissions permissions,
          detail::CoordinatorServiceOptions options = {});
+
+  [[nodiscard]] static SystemCoordinator
+  CreateClient(std::shared_ptr<detail::CoordinatorClient> client);
 };
 
 } // namespace ovf::exec

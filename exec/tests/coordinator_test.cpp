@@ -1,13 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ovf/exec/internal/coordinator_service.hpp"
+#include "ovf/exec/internal/coordinator_server.hpp"
 
 #include <gtest/gtest.h>
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdlib>
 #include <mutex>
+#include <thread>
 #include <unordered_map>
+#include <vector>
+
+#include <unistd.h>
 
 namespace {
 
@@ -77,6 +83,29 @@ private:
   };
   bool start_entered_{};
   bool release_{};
+};
+
+class TemporaryDirectory final {
+public:
+  TemporaryDirectory() {
+    std::string pattern = "/tmp/ovf-exec-ipc-XXXXXX";
+    storage_.assign(pattern.begin(), pattern.end());
+    storage_.push_back('\0');
+    const auto* created = ::mkdtemp(storage_.data());
+    if (created != nullptr) {
+      path_ = created;
+    }
+  }
+  ~TemporaryDirectory() {
+    if (!path_.empty()) {
+      ::rmdir(path_.c_str());
+    }
+  }
+  std::string Socket() const { return path_ + "/coordinator.sock"; }
+
+private:
+  std::vector<char> storage_;
+  std::string path_;
 };
 
 std::unique_ptr<ExecutionEngine> Engine(ValidatedModel model,
@@ -181,6 +210,74 @@ TEST(CoordinatorTest, PlansQueuedRequestAgainstEarlierAcceptedTarget) {
   auto domain = coordinator.ResolveDomain(DomainId{1});
   ASSERT_TRUE(domain);
   EXPECT_EQ(domain.value().committed_mode, ModeId{1});
+}
+
+TEST(CoordinatorTest, ServesAuthenticatedCoordinatorApiAcrossUnixSocket) {
+  BlockingBackend* backend{};
+  auto local = detail_CoordinatorFactory::Create(
+      Engine(Model(), &backend), {.observe = true, .mutate = true});
+  ASSERT_TRUE(local);
+  TemporaryDirectory temporary;
+  const auto endpoint = temporary.Socket();
+  const auto uid = static_cast<std::uint32_t>(::getuid());
+  auto server = StartCoordinatorServer(
+      std::move(local).value(),
+      {.endpoint = endpoint,
+       .observation_uids = {uid},
+       .mutation_uids = {uid},
+       .connection_capacity = 16U,
+       .worker_count = 2U,
+       .maximum_message_size = 65536U});
+  ASSERT_TRUE(server) << server.error().message;
+
+  auto connected = SystemCoordinator::Connect({endpoint, 1s});
+  ASSERT_TRUE(connected) << connected.error().message;
+  auto coordinator = std::move(connected).value();
+  auto initial_snapshot = coordinator.GetSnapshot();
+  ASSERT_TRUE(initial_snapshot) << initial_snapshot.error().message;
+  auto mode = coordinator.ResolveMode(DomainId{1}, ModeId{2});
+  ASSERT_TRUE(mode);
+  EXPECT_EQ(mode.value().name, "active");
+
+  std::atomic_uint events{};
+  auto subscription = coordinator.Subscribe({}, [&events](const CoordinatorEvent&) {
+    events.fetch_add(1U, std::memory_order_relaxed);
+  });
+  ASSERT_TRUE(subscription);
+  auto transition = coordinator.RequestMode(DomainId{1}, ModeId{2}, {.timeout = 2s});
+  ASSERT_TRUE(transition);
+  ASSERT_TRUE(backend->WaitUntilStart(std::chrono::steady_clock::now() + 1s));
+  backend->Release();
+  auto completed = transition.value().Wait(std::chrono::steady_clock::now() + 1s);
+  ASSERT_TRUE(completed);
+  EXPECT_EQ(completed.value().phase, TransitionPhase::succeeded);
+  for (int attempt = 0;
+       attempt < 100 && events.load(std::memory_order_relaxed) == 0U; ++attempt) {
+    std::this_thread::sleep_for(10ms);
+  }
+  EXPECT_GT(events.load(std::memory_order_relaxed), 0U);
+}
+
+TEST(CoordinatorTest, RejectsPeerWithoutGeneratedObservationAuthority) {
+  auto local = detail_CoordinatorFactory::Create(
+      Engine(Model()), {.observe = true, .mutate = true});
+  ASSERT_TRUE(local);
+  TemporaryDirectory temporary;
+  const auto endpoint = temporary.Socket();
+  const auto other_uid = static_cast<std::uint32_t>(::getuid()) + 1U;
+  auto server = StartCoordinatorServer(
+      std::move(local).value(),
+      {.endpoint = endpoint,
+       .observation_uids = {other_uid},
+       .mutation_uids = {other_uid},
+       .connection_capacity = 4U,
+       .worker_count = 1U,
+       .maximum_message_size = 65536U});
+  ASSERT_TRUE(server);
+
+  auto connected = SystemCoordinator::Connect({endpoint, 1s});
+  ASSERT_FALSE(connected);
+  EXPECT_EQ(connected.error().code, ErrorCode::permission_denied);
 }
 
 } // namespace

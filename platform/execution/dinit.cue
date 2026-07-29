@@ -17,5 +17,7 @@ platform: {
 		socket:        "/run/ovf/exec/coordinator.sock"
 		queueCapacity: 128
 		workerCount:   4
+		observationUids: [0]
+		mutationUids:    [0]
 	}
 }

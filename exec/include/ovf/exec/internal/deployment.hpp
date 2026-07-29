@@ -6,12 +6,15 @@
 #include "ovf/exec/internal/file_journal.hpp"
 
 #include <string>
+#include <vector>
 
 namespace ovf::exec::detail {
 
 struct CoordinatorEndpoint final {
   std::string socket;
   CoordinatorServiceOptions limits;
+  std::vector<std::uint32_t> observation_uids;
+  std::vector<std::uint32_t> mutation_uids;
 };
 
 struct RuntimeDeployment final {
