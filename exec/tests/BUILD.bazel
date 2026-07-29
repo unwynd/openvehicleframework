@@ -5,6 +5,21 @@ load("@rules_cc//cc:cc_test.bzl", "cc_test")
 package(default_visibility = ["//visibility:public"])
 
 cc_test(
+    name = "backend_abi_test",
+    srcs = ["backend_abi_test.c"],
+    deps = ["//exec:backend_abi"],
+)
+
+cc_test(
+    name = "backend_binding_test",
+    srcs = ["backend_binding_test.cpp"],
+    deps = [
+        "//exec:backend_binding",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "model_test",
     srcs = ["model_test.cpp"],
     deps = [
@@ -53,6 +68,8 @@ test_suite(
     name = "all_tests",
     tests = [
         ":application_test",
+        ":backend_abi_test",
+        ":backend_binding_test",
         ":engine_test",
         ":model_test",
         ":planner_test",
