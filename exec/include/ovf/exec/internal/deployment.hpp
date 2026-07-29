@@ -13,6 +13,8 @@ namespace ovf::exec::detail {
 struct CoordinatorEndpoint final {
   std::string socket;
   CoordinatorServiceOptions limits;
+  std::size_t connection_capacity{};
+  std::size_t maximum_message_size{};
   std::vector<std::uint32_t> observation_uids;
   std::vector<std::uint32_t> mutation_uids;
 };
@@ -20,6 +22,7 @@ struct CoordinatorEndpoint final {
 struct RuntimeDeployment final {
   ValidatedModel model;
   std::string backend_kind;
+  std::string backend_library;
   std::string backend_configuration;
   FileJournalOptions journal;
   CoordinatorEndpoint coordinator;

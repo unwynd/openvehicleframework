@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_shared_library.bzl", "cc_shared_library")
 
@@ -103,7 +104,40 @@ cc_library(
         ":application",
         ":engine",
         ":model",
-        "@jsoncpp//:jsoncpp",
+        "@jsoncpp",
+    ],
+)
+
+cc_library(
+    name = "artifact_integrity",
+    srcs = ["src/artifact_integrity.cpp"],
+    hdrs = ["include/ovf/exec/internal/artifact_integrity.hpp"],
+    copts = ["-std=c++20"],
+    includes = ["include"],
+    deps = [
+        ":model",
+        "@jsoncpp",
+    ],
+)
+
+cc_library(
+    name = "backend_loader",
+    srcs = ["src/backend_loader.cpp"],
+    hdrs = ["include/ovf/exec/internal/backend_loader.hpp"],
+    copts = ["-std=c++20"],
+    includes = ["include"],
+    linkopts = select({
+        "@platforms//os:linux": ["-ldl"],
+        "//conditions:default": [],
+    }),
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:osx": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":backend_abi",
+        ":model",
     ],
 )
 
@@ -177,6 +211,25 @@ cc_shared_library(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [":dinit_plugin_entry"],
+)
+
+cc_binary(
+    name = "ovf-execd",
+    srcs = ["daemon/main.cpp"],
+    copts = ["-std=c++20"],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:osx": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":artifact_integrity",
+        ":backend_binding",
+        ":backend_loader",
+        ":coordinator",
+        ":deployment",
+        ":file_journal",
+    ],
 )
 
 alias(

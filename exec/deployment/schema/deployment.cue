@@ -60,6 +60,7 @@ package ovf_exec_deployment
 
 #Platform: {
 	dinit: {
+		backendLibrary:    #AbsolutePath
 		controlSocket:     #AbsolutePath
 		servicesDirectory: #AbsolutePath
 		logBufferSize:     int & >=4096
@@ -73,6 +74,8 @@ package ovf_exec_deployment
 		socket:        #AbsolutePath
 		queueCapacity: int & >=1 & <=4096
 		workerCount:   int & >=1 & <=64
+		connectionCapacity: int & >=1 & <=4096
+		maximumMessageSize: int & >=4096 & <=16777216
 		observationUids: [...int & >=0 & <=4294967295]
 		mutationUids:    [...int & >=0 & <=4294967295]
 	}

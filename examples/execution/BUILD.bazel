@@ -27,3 +27,9 @@ filegroup(
     srcs = [":deployment"],
     output_group = "services",
 )
+
+filegroup(
+    name = "manifest",
+    srcs = [":deployment"],
+    output_group = "manifest",
+)

@@ -173,6 +173,9 @@ list ExecutionDomains {
 
 structure DinitBackend {
     @required
+    backendLibrary: AbsolutePath
+
+    @required
     controlSocket: AbsolutePath
 
     @required
@@ -202,6 +205,12 @@ structure CoordinatorEndpoint {
 
     @required
     workerCount: Integer
+
+    @required
+    connectionCapacity: Integer
+
+    @required
+    maximumMessageSize: Long
 
     @required
     observationUids: UserIds

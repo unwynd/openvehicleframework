@@ -12,6 +12,27 @@ cc_binary(
 )
 
 cc_test(
+    name = "artifact_integrity_test",
+    srcs = ["artifact_integrity_test.cpp"],
+    data = [
+        "//examples/execution:backend_config",
+        "//examples/execution:dinit_services",
+        "//examples/execution:execution_model",
+        "//examples/execution:manifest",
+    ],
+    env = {
+        "OVF_TEST_EXECUTION_BACKEND": "$(rootpath //examples/execution:backend_config)",
+        "OVF_TEST_EXECUTION_MANIFEST": "$(rootpath //examples/execution:manifest)",
+        "OVF_TEST_EXECUTION_MODEL": "$(rootpath //examples/execution:execution_model)",
+        "OVF_TEST_EXECUTION_SERVICES": "$(rootpath //examples/execution:dinit_services)",
+    },
+    deps = [
+        "//exec:artifact_integrity",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "backend_abi_test",
     srcs = ["backend_abi_test.c"],
     deps = ["//exec:backend_abi"],
@@ -34,6 +55,24 @@ py_test(
         "@platforms//os:osx": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
+)
+
+cc_test(
+    name = "backend_loader_test",
+    srcs = ["backend_loader_test.cpp"],
+    data = ["//exec:dinit_plugin"],
+    env = {
+        "OVF_TEST_EXECUTION_PLUGIN": "$(rootpath //exec:dinit_plugin)",
+    },
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:osx": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//exec:backend_loader",
+        "@googletest//:gtest_main",
+    ],
 )
 
 cc_test(
@@ -202,8 +241,10 @@ test_suite(
     name = "all_tests",
     tests = [
         ":application_test",
+        ":artifact_integrity_test",
         ":backend_abi_test",
         ":backend_binding_test",
+        ":backend_loader_test",
         ":coordinator_test",
         ":deployment_test",
         ":dinit_backend_test",

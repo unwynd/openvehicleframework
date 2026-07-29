@@ -4,6 +4,7 @@
 
 #include <json/json.h>
 
+#include <algorithm>
 #include <fstream>
 #include <limits>
 #include <optional>
@@ -292,10 +293,8 @@ Result<DomainDefinition> Domain(const Json::Value& value) {
 }
 
 Result<ValidatedModel> Execution(const Json::Value& root) {
-  if (!root["deploymentVersion"].isIntegral() ||
-      root["deploymentVersion"].asUInt64() != 1U ||
-      !root["applications"].isArray() ||
-      !root["domains"].isArray()) {
+  if (!root["deploymentVersion"].isIntegral() || root["deploymentVersion"].asUInt64() != 1U ||
+      !root["applications"].isArray() || !root["domains"].isArray()) {
     return MakeError(ErrorCode::configuration_error, "execution model version is unsupported");
   }
   auto generation = Unsigned(root["generation"], "generation");
@@ -348,7 +347,10 @@ Result<RuntimeDeployment> LoadRuntimeDeployment(const std::string& execution_mod
     return backend.error();
   }
   auto model = Execution(root.value());
+  const auto backend_version =
+      Unsigned(backend.value()["backendVersion"], "backend.backendVersion");
   auto backend_kind = String(backend.value()["kind"], "backend.kind");
+  auto backend_library = String(backend.value()["library"], "backend.library");
   auto journal_path =
       String(root.value()["platform"]["persistence"]["journal"], "persistence.journal");
   auto maximum_record = Unsigned(root.value()["platform"]["persistence"]["maximumRecordSize"],
@@ -359,26 +361,47 @@ Result<RuntimeDeployment> LoadRuntimeDeployment(const std::string& execution_mod
                         "coordinator.queueCapacity");
   auto workers =
       Unsigned(root.value()["platform"]["coordinator"]["workerCount"], "coordinator.workerCount");
-  auto observation_uids =
-      UserIds(root.value()["platform"]["coordinator"]["observationUids"],
-              "coordinator.observationUids");
-  auto mutation_uids = UserIds(root.value()["platform"]["coordinator"]["mutationUids"],
-                               "coordinator.mutationUids");
-  if (!model || !backend_kind || !journal_path || !maximum_record || !synchronize.isBool() ||
-      !endpoint || !queue || !workers || !observation_uids || !mutation_uids ||
-      maximum_record.value() > std::numeric_limits<std::size_t>::max() ||
-      queue.value() > std::numeric_limits<std::size_t>::max() ||
-      workers.value() > std::numeric_limits<std::size_t>::max()) {
+  auto connections = Unsigned(root.value()["platform"]["coordinator"]["connectionCapacity"],
+                              "coordinator.connectionCapacity");
+  auto maximum_message = Unsigned(root.value()["platform"]["coordinator"]["maximumMessageSize"],
+                                  "coordinator.maximumMessageSize");
+  auto observation_uids = UserIds(root.value()["platform"]["coordinator"]["observationUids"],
+                                  "coordinator.observationUids");
+  auto mutation_uids =
+      UserIds(root.value()["platform"]["coordinator"]["mutationUids"], "coordinator.mutationUids");
+  if (!model || !backend_version || backend_version.value() != 1U || !backend_kind ||
+      !backend_library || !journal_path || !maximum_record || !synchronize.isBool() || !endpoint ||
+      !queue || !workers || !connections || !maximum_message || !observation_uids ||
+      !mutation_uids || maximum_record.value() > std::numeric_limits<std::size_t>::max() ||
+      maximum_record.value() < 4096U || maximum_record.value() > kMaximumDeploymentSize ||
+      queue.value() > std::numeric_limits<std::size_t>::max() || queue.value() > 4096U ||
+      workers.value() > std::numeric_limits<std::size_t>::max() || workers.value() > 64U ||
+      workers.value() > queue.value() ||
+      connections.value() > std::numeric_limits<std::size_t>::max() ||
+      connections.value() > 4096U || workers.value() > connections.value() ||
+      maximum_message.value() > std::numeric_limits<std::size_t>::max() ||
+      maximum_message.value() < 4096U || maximum_message.value() > kMaximumDeploymentSize ||
+      observation_uids.value().empty() || backend_library.value().front() != '/') {
     return MakeError(ErrorCode::configuration_error, "runtime platform configuration is invalid");
+  }
+  for (const auto uid : mutation_uids.value()) {
+    if (std::find(observation_uids.value().begin(), observation_uids.value().end(), uid) ==
+        observation_uids.value().end()) {
+      return MakeError(ErrorCode::configuration_error,
+                       "coordinator mutation authority requires observation authority");
+    }
   }
   return RuntimeDeployment{
       std::move(model).value(),
       std::move(backend_kind).value(),
+      std::move(backend_library).value(),
       std::move(backend_content).value(),
       {std::move(journal_path).value(), static_cast<std::size_t>(maximum_record.value()),
        synchronize.asBool()},
       {std::move(endpoint).value(),
        {static_cast<std::size_t>(queue.value()), static_cast<std::size_t>(workers.value())},
+       static_cast<std::size_t>(connections.value()),
+       static_cast<std::size_t>(maximum_message.value()),
        std::move(observation_uids).value(),
        std::move(mutation_uids).value()},
   };

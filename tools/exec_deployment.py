@@ -284,6 +284,7 @@ def generate_artifacts(
     backend = {
         "backendVersion": 1,
         "kind": "dinit",
+        "library": model["platform"]["dinit"]["backendLibrary"],
         "controlSocket": model["platform"]["dinit"]["controlSocket"],
         "applications": applications,
     }
@@ -294,6 +295,12 @@ def generate_artifacts(
         "artifactVersion": 1,
         "modelGeneration": model["generation"],
         "modelFingerprint": fingerprint(model),
+        "executionModelArtifactFingerprint": hashlib.sha256(
+            output_model.read_bytes()
+        ).hexdigest(),
+        "backendConfigurationFingerprint": hashlib.sha256(
+            backend_config.read_bytes()
+        ).hexdigest(),
         "smithySchemaFingerprint": fingerprint(schema_ast),
         "backendConfiguration": backend_config.name,
     }

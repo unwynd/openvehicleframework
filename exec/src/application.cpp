@@ -34,12 +34,12 @@ StopSubscription::StopSubscription(std::function<void()> unsubscribe)
 StopSubscription::~StopSubscription() { Reset(); }
 
 StopSubscription::StopSubscription(StopSubscription&& other) noexcept
-    : unsubscribe_(std::move(other.unsubscribe_)) {}
+    : unsubscribe_(std::exchange(other.unsubscribe_, std::function<void()>{})) {}
 
 StopSubscription& StopSubscription::operator=(StopSubscription&& other) noexcept {
   if (this != &other) {
     Reset();
-    unsubscribe_ = std::move(other.unsubscribe_);
+    unsubscribe_ = std::exchange(other.unsubscribe_, std::function<void()>{});
   }
   return *this;
 }

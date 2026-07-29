@@ -24,16 +24,17 @@ TEST(ExecutionDeploymentTest, LoadsGeneratedRuntimeConfiguration) {
   EXPECT_NE(loaded.value().model.FindApplication(ApplicationId{3}), nullptr);
   EXPECT_NE(loaded.value().model.FindMode({DomainId{2}, ModeId{2}}), nullptr);
   EXPECT_EQ(loaded.value().backend_kind, "dinit");
+  EXPECT_EQ(loaded.value().backend_library, "/usr/lib/libovf_exec_backend_dinit.so");
   EXPECT_EQ(loaded.value().journal.path, "/var/lib/ovf/exec/journal.v1");
   EXPECT_EQ(loaded.value().journal.maximum_record_size, 1048576U);
   EXPECT_TRUE(loaded.value().journal.synchronize);
   EXPECT_EQ(loaded.value().coordinator.socket, "/run/ovf/exec/coordinator.sock");
   EXPECT_EQ(loaded.value().coordinator.limits.queue_capacity, 128U);
   EXPECT_EQ(loaded.value().coordinator.limits.worker_count, 4U);
-  EXPECT_EQ(loaded.value().coordinator.observation_uids,
-            (std::vector<std::uint32_t>{0U}));
-  EXPECT_EQ(loaded.value().coordinator.mutation_uids,
-            (std::vector<std::uint32_t>{0U}));
+  EXPECT_EQ(loaded.value().coordinator.connection_capacity, 128U);
+  EXPECT_EQ(loaded.value().coordinator.maximum_message_size, 1048576U);
+  EXPECT_EQ(loaded.value().coordinator.observation_uids, (std::vector<std::uint32_t>{0U}));
+  EXPECT_EQ(loaded.value().coordinator.mutation_uids, (std::vector<std::uint32_t>{0U}));
 }
 
 TEST(ExecutionDeploymentTest, RejectsMissingArtifacts) {
