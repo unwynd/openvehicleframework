@@ -24,6 +24,7 @@ struct TransitionPlan final {
   std::vector<ApplicationId> retain;
   std::vector<ApplicationId> stop;
   std::vector<ApplicationId> start;
+  std::vector<DomainId> guarded_domains;
   std::vector<ResourceId> affected_resources;
 };
 

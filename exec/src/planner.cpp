@@ -93,6 +93,18 @@ Result<TransitionPlan> TransitionPlanner::Plan(const SystemConfiguration& curren
   plan.retain = Order(retained, false);
   plan.stop = Order(to_stop, true);
   plan.start = Order(to_start, false);
+  std::set<DomainId> guarded_domains{domain};
+  for (const auto& candidate_domain : model_.value().domains) {
+    for (const auto& candidate_mode : candidate_domain.modes) {
+      for (const auto& constraint : candidate_mode.constraints) {
+        if (candidate_domain.id == domain || constraint.other.domain == domain) {
+          guarded_domains.insert(candidate_domain.id);
+          guarded_domains.insert(constraint.other.domain);
+        }
+      }
+    }
+  }
+  plan.guarded_domains.assign(guarded_domains.begin(), guarded_domains.end());
   plan.affected_resources.assign(resources.begin(), resources.end());
   return plan;
 }

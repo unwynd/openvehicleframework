@@ -10,6 +10,7 @@ option(OVF_BUILD_INPROC_TRANSPORT "Build the reference in-process transport" ON)
 add_library(ovf_exec
     exec/src/application.cpp
     exec/src/dinit_lifecycle.cpp
+    exec/src/engine.cpp
     exec/src/model.cpp
     exec/src/planner.cpp
     exec/src/scheduler.cpp

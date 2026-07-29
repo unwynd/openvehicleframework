@@ -40,10 +40,20 @@ cc_test(
     ],
 )
 
+cc_test(
+    name = "engine_test",
+    srcs = ["engine_test.cpp"],
+    deps = [
+        "//exec:engine",
+        "@googletest//:gtest_main",
+    ],
+)
+
 test_suite(
     name = "all_tests",
     tests = [
         ":application_test",
+        ":engine_test",
         ":model_test",
         ":planner_test",
         ":scheduler_test",
