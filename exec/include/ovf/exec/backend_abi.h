@@ -131,6 +131,8 @@ typedef struct ovf_exec_backend_factory_v1 {
 
 typedef const ovf_exec_backend_factory_v1* (*ovf_exec_backend_query_fn_v1)(void);
 
+const ovf_exec_backend_factory_v1* ovf_exec_backend_query_v1(void);
+
 #ifdef __cplusplus
 }
 #endif

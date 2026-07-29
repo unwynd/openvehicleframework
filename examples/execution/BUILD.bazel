@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("//bazel:execution.bzl", "ovf_exec_deployment")
+
+package(default_visibility = ["//visibility:public"])
+
+ovf_exec_deployment(
+    name = "deployment",
+    deployment = "deployment.cue",
+    platform = "//platform:exec_dinit",
+)
+
+filegroup(
+    name = "backend_config",
+    srcs = [":deployment"],
+    output_group = "backend_config",
+)
+
+filegroup(
+    name = "execution_model",
+    srcs = [":deployment"],
+    output_group = "ir",
+)
+
+filegroup(
+    name = "dinit_services",
+    srcs = [":deployment"],
+    output_group = "services",
+)

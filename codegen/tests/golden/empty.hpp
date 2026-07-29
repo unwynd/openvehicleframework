@@ -12,7 +12,7 @@
 #include <variant>
 #include <vector>
 
-#include "ovf/com/generated.hpp"
+#include "ovf/com/provider_binding.hpp"
 
 namespace test::empty {
 

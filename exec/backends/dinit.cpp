@@ -3,6 +3,7 @@
 #include "ovf/exec/backends/dinit.hpp"
 
 #include <dinit-client.h>
+#include <json/json.h>
 
 #include <algorithm>
 #include <cctype>
@@ -10,6 +11,7 @@
 #include <chrono>
 #include <cstring>
 #include <limits>
+#include <sstream>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -384,6 +386,47 @@ Result<std::unique_ptr<detail::ProcessBackend>> CreateDinitBackend(DinitConfig c
   } catch (...) {
     return MakeError(ErrorCode::resource_exhausted, "dinit backend allocation failed");
   }
+}
+
+Result<DinitConfig> ParseDinitConfig(std::string_view configuration) {
+  Json::CharReaderBuilder builder;
+  builder["allowComments"] = false;
+  builder["allowTrailingCommas"] = false;
+  builder["rejectDupKeys"] = true;
+  builder["strictRoot"] = true;
+  std::istringstream input(std::string{configuration});
+  Json::Value root;
+  std::string errors;
+  if (!Json::parseFromStream(builder, input, &root, &errors) || !root.isObject() ||
+      root["backendVersion"] != 1 || root["kind"] != "dinit" || !root["controlSocket"].isString() ||
+      !root["applications"].isArray()) {
+    return MakeError(ErrorCode::configuration_error,
+                     "generated dinit backend configuration is invalid");
+  }
+  DinitConfig result;
+  result.control_socket = root["controlSocket"].asString();
+  try {
+    for (const auto& entry : root["applications"]) {
+      if (!entry.isObject() || !entry["id"].isUInt64() || entry["id"].asUInt64() == 0U ||
+          !entry["service"].isString()) {
+        return MakeError(ErrorCode::configuration_error,
+                         "generated dinit application mapping is invalid");
+      }
+      if (!result.services
+               .emplace(ApplicationId{entry["id"].asUInt64()}, entry["service"].asString())
+               .second) {
+        return MakeError(ErrorCode::configuration_error,
+                         "generated dinit application mapping is duplicated");
+      }
+    }
+  } catch (...) {
+    return MakeError(ErrorCode::resource_exhausted, "cannot allocate dinit backend configuration");
+  }
+  auto validated = CreateDinitBackend(result);
+  if (!validated) {
+    return validated.error();
+  }
+  return result;
 }
 
 } // namespace ovf::exec::backends

@@ -2,6 +2,7 @@
 
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
+load("@rules_python//python:defs.bzl", "py_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -14,6 +15,25 @@ cc_test(
     name = "backend_abi_test",
     srcs = ["backend_abi_test.c"],
     deps = ["//exec:backend_abi"],
+)
+
+py_test(
+    name = "generated_dinit_test",
+    srcs = ["generated_dinit_test.py"],
+    data = [
+        "//examples/execution:dinit_services",
+        "@dinit_source//:dinit-check",
+    ],
+    env = {
+        "OVF_TEST_DINIT_CHECK": "$(rootpath @dinit_source//:dinit-check)",
+        "OVF_TEST_DINIT_SERVICES": "$(rootpath //examples/execution:dinit_services)",
+    },
+    main = "generated_dinit_test.py",
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:osx": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
 )
 
 cc_test(
@@ -96,6 +116,23 @@ cc_test(
 )
 
 cc_test(
+    name = "deployment_test",
+    srcs = ["deployment_test.cpp"],
+    data = [
+        "//examples/execution:backend_config",
+        "//examples/execution:execution_model",
+    ],
+    env = {
+        "OVF_TEST_EXECUTION_BACKEND": "$(rootpath //examples/execution:backend_config)",
+        "OVF_TEST_EXECUTION_MODEL": "$(rootpath //examples/execution:execution_model)",
+    },
+    deps = [
+        "//exec:deployment",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "dinit_backend_test",
     srcs = ["dinit_backend_test.cpp"],
     target_compatible_with = select({
@@ -133,6 +170,25 @@ cc_test(
 )
 
 cc_test(
+    name = "dinit_plugin_test",
+    srcs = ["dinit_plugin_test.cpp"],
+    data = ["//examples/execution:backend_config"],
+    env = {
+        "OVF_TEST_EXECUTION_BACKEND": "$(rootpath //examples/execution:backend_config)",
+    },
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:osx": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//exec:backend_binding",
+        "//exec:dinit_plugin_entry",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "engine_test",
     srcs = ["engine_test.cpp"],
     deps = [
@@ -148,11 +204,14 @@ test_suite(
         ":backend_abi_test",
         ":backend_binding_test",
         ":coordinator_test",
+        ":deployment_test",
         ":dinit_backend_test",
         ":dinit_client_compile_test",
         ":dinit_integration_test",
+        ":dinit_plugin_test",
         ":engine_test",
         ":file_journal_test",
+        ":generated_dinit_test",
         ":model_test",
         ":planner_test",
         ":scheduler_test",

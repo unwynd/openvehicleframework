@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 namespace ovf::exec::backends {
@@ -17,5 +18,7 @@ struct DinitConfig final {
 
 [[nodiscard]] Result<std::unique_ptr<detail::ProcessBackend>>
 CreateDinitBackend(DinitConfig config);
+
+[[nodiscard]] Result<DinitConfig> ParseDinitConfig(std::string_view configuration);
 
 } // namespace ovf::exec::backends

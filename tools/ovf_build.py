@@ -17,6 +17,12 @@ import tarfile
 import tempfile
 
 from tools.smithy_ast_to_ir import compile_model
+from tools.exec_deployment import (
+    finalize_manifest as finalize_execution_manifest,
+    generate_artifacts as generate_execution_artifacts,
+    validate_semantics as validate_execution_semantics,
+    validate_smithy_model as validate_execution_smithy_model,
+)
 from tools.validate_deployment import (
     deployment_fingerprint,
     make_plan,
@@ -93,11 +99,12 @@ def compile_deployment(args: argparse.Namespace) -> int:
         ]
         completed = subprocess.run(
             cue_arguments,
-            check=True,
             capture_output=True,
             text=True,
             env=environment,
         )
+        if completed.returncode != 0:
+            raise ValueError(completed.stderr.strip())
     model = json.loads(completed.stdout)
     deployment = resolve_deployment(contract, model)
     write_if_changed(
@@ -119,6 +126,74 @@ def compile_deployment(args: argparse.Namespace) -> int:
     }
     write_if_changed(args.plan, json.dumps(plan, sort_keys=True, indent=2) + "\n")
     write_if_changed(args.report, json.dumps(report, sort_keys=True, indent=2) + "\n")
+    return 0
+
+
+def compile_execution_deployment(args: argparse.Namespace) -> int:
+    with tempfile.TemporaryDirectory(prefix="ovf-exec-smithy-") as temporary:
+        root = Path(temporary)
+        config = {
+            "version": "1.0",
+            "sources": [str(args.model.resolve())],
+            "projections": {
+                "ovf": {"plugins": {"model": {"includePreludeShapes": True}}}
+            },
+        }
+        config_path = root / "smithy-build.json"
+        config_path.write_text(json.dumps(config, sort_keys=True), encoding="utf-8")
+        output = root / "smithy-output"
+        subprocess.run(
+            [
+                str(args.smithy.resolve()),
+                "build",
+                "--config",
+                str(config_path),
+                "--output",
+                str(output),
+                "--no-color",
+            ],
+            check=True,
+        )
+        schema_ast = read(output / "ovf/model/model.json")
+    with tempfile.TemporaryDirectory(prefix="ovf-exec-cue-") as cue_cache:
+        environment = dict(os.environ)
+        environment["CUE_CACHE_DIR"] = cue_cache
+        environment["CUE_CONFIG_DIR"] = cue_cache
+        completed = subprocess.run(
+            [
+                str(args.cue.resolve()),
+                "export",
+                str(args.schema.resolve()),
+                str(args.deployment.resolve()),
+                str(args.platform.resolve()),
+                "--expression",
+                "model",
+                "--out",
+                "json",
+            ],
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        if completed.returncode != 0:
+            raise ValueError(completed.stderr.strip())
+    model = json.loads(completed.stdout)
+    errors = validate_execution_smithy_model(schema_ast, model)
+    errors.extend(validate_execution_semantics(model))
+    if errors:
+        raise ValueError("\n".join(errors))
+    generate_execution_artifacts(
+        model,
+        schema_ast,
+        args.execution_ir,
+        args.backend_config,
+        args.metadata,
+    )
+    return 0
+
+
+def finalize_execution_deployment(args: argparse.Namespace) -> int:
+    finalize_execution_manifest(args.metadata, args.services, args.manifest)
     return 0
 
 
@@ -352,6 +427,24 @@ def parser() -> argparse.ArgumentParser:
     deployment.add_argument("--plan", required=True, type=Path)
     deployment.add_argument("--report", required=True, type=Path)
     deployment.set_defaults(run=compile_deployment)
+
+    execution = commands.add_parser("execution-deployment")
+    execution.add_argument("--smithy", required=True, type=Path)
+    execution.add_argument("--model", required=True, type=Path)
+    execution.add_argument("--cue", required=True, type=Path)
+    execution.add_argument("--schema", required=True, type=Path)
+    execution.add_argument("--deployment", required=True, type=Path)
+    execution.add_argument("--platform", required=True, type=Path)
+    execution.add_argument("--execution-ir", required=True, type=Path)
+    execution.add_argument("--backend-config", required=True, type=Path)
+    execution.add_argument("--metadata", required=True, type=Path)
+    execution.set_defaults(run=compile_execution_deployment)
+
+    execution_manifest = commands.add_parser("execution-manifest")
+    execution_manifest.add_argument("--metadata", required=True, type=Path)
+    execution_manifest.add_argument("--services", required=True, type=Path)
+    execution_manifest.add_argument("--manifest", required=True, type=Path)
+    execution_manifest.set_defaults(run=finalize_execution_deployment)
 
     package = commands.add_parser("package")
     package.add_argument("--name", required=True)

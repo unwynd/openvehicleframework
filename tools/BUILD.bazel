@@ -17,6 +17,7 @@ py_library(
     name = "build_lib",
     srcs = [
         "__init__.py",
+        "exec_deployment.py",
         "smithy_ast_to_ir.py",
         "validate_deployment.py",
         "//:__init__.py",

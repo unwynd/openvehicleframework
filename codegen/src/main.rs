@@ -9,6 +9,8 @@ use std::path::PathBuf;
 
 const CPP_CONTRACT_TEMPLATE: &str = include_str!("../templates/cpp_contract.hpp.j2");
 const CPP_DEPLOYMENT_TEMPLATE: &str = include_str!("../templates/cpp_deployment.hpp.j2");
+const DINIT_BOOT_TEMPLATE: &str = include_str!("../templates/dinit_boot.j2");
+const DINIT_SERVICE_TEMPLATE: &str = include_str!("../templates/dinit_service.j2");
 
 fn cpp_type(name: &str) -> String {
     match name {
@@ -359,8 +361,87 @@ fn generate_cpp_deployment(
     Ok(())
 }
 
+fn generate_dinit_services(
+    model_path: PathBuf,
+    output: PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut model: JsonValue = serde_json::from_slice(&fs::read(model_path)?)?;
+    let applications = model["applications"]
+        .as_array_mut()
+        .ok_or("execution model has no applications")?;
+    for application in applications.iter_mut() {
+        let arguments = application["arguments"]
+            .as_array()
+            .ok_or("application arguments are missing")?;
+        let mut command = vec![
+            application["executable"]
+                .as_str()
+                .ok_or("application executable is missing")?
+                .to_owned(),
+        ];
+        command.extend(
+            arguments
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .ok_or("application argument is not a string")
+                        .map(str::to_owned)
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        let start = application["startTimeoutMs"]
+            .as_u64()
+            .ok_or("application start timeout is missing")?;
+        let stop = application["stopTimeoutMs"]
+            .as_u64()
+            .ok_or("application stop timeout is missing")?;
+        let object = application
+            .as_object_mut()
+            .ok_or("application is not an object")?;
+        object.insert("command".into(), JsonValue::String(command.join(" ")));
+        object.insert(
+            "start_timeout_seconds".into(),
+            JsonValue::from(start.div_ceil(1000).max(1)),
+        );
+        object.insert(
+            "stop_timeout_seconds".into(),
+            JsonValue::from(stop.div_ceil(1000).max(1)),
+        );
+    }
+    let mut environment = Environment::new();
+    environment.add_template("dinit_service", DINIT_SERVICE_TEMPLATE)?;
+    environment.add_template("dinit_boot", DINIT_BOOT_TEMPLATE)?;
+    fs::create_dir_all(&output)?;
+    let boot = environment
+        .get_template("dinit_boot")?
+        .render(context! {})?;
+    fs::write(output.join("boot"), boot.trim_start())?;
+    let service = environment.get_template("dinit_service")?;
+    for application in applications {
+        let identifier = application["id"]
+            .as_u64()
+            .ok_or("application id is missing")?;
+        let rendered =
+            service.render(context! { application => Value::from_serialize(application) })?;
+        fs::write(
+            output.join(format!("ovf-app-{identifier}")),
+            rendered.trim_start(),
+        )?;
+    }
+    Ok(())
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
+    if arguments.first().map(String::as_str) == Some("execution-dinit") {
+        if arguments.len() != 5 || arguments[1] != "--model" || arguments[3] != "--output" {
+            return Err(
+                "usage: ovf_codegen execution-dinit --model <model> --output <directory>".into(),
+            );
+        }
+        return generate_dinit_services(PathBuf::from(&arguments[2]), PathBuf::from(&arguments[4]));
+    }
     if arguments.first().map(String::as_str) == Some("deployment-cpp") {
         if arguments.len() != 7
             || arguments[1] != "--plan"

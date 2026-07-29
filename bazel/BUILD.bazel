@@ -3,3 +3,5 @@
 exports_files(["__init__.py"])
 
 exports_files(["application.bzl"])
+
+exports_files(["execution.bzl"])

@@ -8,6 +8,11 @@ filegroup(
 )
 
 filegroup(
+    name = "exec_dinit",
+    srcs = ["execution/dinit.cue"],
+)
+
+filegroup(
     name = "iceoryx2",
     srcs = ["providers/iceoryx2.cue"],
 )

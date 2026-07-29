@@ -48,6 +48,32 @@ cc_library(
 )
 
 cc_binary(
+    name = "dinit-check",
+    srcs = [
+        "src/dinit-check.cc",
+        "src/dinit-client.cc",
+        "src/dinit-iostream.cc",
+        "src/options-processing.cc",
+        "src/settings.cc",
+    ],
+    copts = [
+        "-std=c++17",
+        "-Wno-error=unused-parameter",
+    ],
+    includes = [
+        ".",
+        "dasynq/include",
+        "src/includes",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:osx": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [":client"],
+)
+
+cc_binary(
     name = "dinit",
     srcs = [
         "src/baseproc-service.cc",

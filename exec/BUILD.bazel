@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_shared_library.bzl", "cc_shared_library")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -113,6 +114,20 @@ cc_library(
 )
 
 cc_library(
+    name = "deployment",
+    srcs = ["src/deployment.cpp"],
+    hdrs = ["include/ovf/exec/internal/deployment.hpp"],
+    copts = ["-std=c++20"],
+    includes = ["include"],
+    deps = [
+        ":coordinator",
+        ":file_journal",
+        ":model",
+        "@jsoncpp",
+    ],
+)
+
+cc_library(
     name = "dinit_backend",
     srcs = ["backends/dinit.cpp"],
     hdrs = ["include/ovf/exec/backends/dinit.hpp"],
@@ -126,7 +141,36 @@ cc_library(
     deps = [
         ":engine",
         "@dinit_source//:client",
+        "@jsoncpp",
     ],
+)
+
+cc_library(
+    name = "dinit_plugin_entry",
+    srcs = ["backends/dinit_plugin.cpp"],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:osx": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":backend_abi",
+        ":dinit_backend",
+    ],
+)
+
+cc_shared_library(
+    name = "dinit_plugin",
+    shared_lib_name = select({
+        "@platforms//os:osx": "libovf_exec_backend_dinit.dylib",
+        "//conditions:default": "libovf_exec_backend_dinit.so",
+    }),
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:osx": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [":dinit_plugin_entry"],
 )
 
 alias(
