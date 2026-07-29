@@ -22,6 +22,20 @@ package ovf_exec_deployment
 	exclusiveResources: [...#Id]
 }
 
+#ApplicationFragment: {
+	schemaVersion: 1
+	name:          #Name
+	execution: {
+		readiness: *"required" | "process_started"
+		startup: timeoutMs: int & >=1
+		shutdown: timeoutMs: int & >=1
+		restart: {
+			maxAttempts: int & >=1 & <=16
+			delayMs:     int & >=0
+		}
+	}
+}
+
 #Constraint: {
 	kind: "requires_mode" | "excludes_mode"
 	other: {
@@ -51,11 +65,40 @@ package ovf_exec_deployment
 	modes: [#Mode, ...#Mode]
 }
 
-#Deployment: {
-	deploymentVersion: 1
-	generation:        #Id
-	applications:      [#Application, ...#Application]
-	domains:           [#Domain, ...#Domain]
+#Allocation: {
+	schemaVersion: 1
+	generation:    #Id
+	applications: [#Name]: #AllocatedApplication
+	domains:      [#AllocatedDomain, ...#AllocatedDomain]
+}
+
+#AllocatedApplication: {
+	id:         #Id
+	executable: #AbsolutePath
+	arguments: [...string]
+	dependencies:       [...#Name]
+	exclusiveResources: [...#Id]
+}
+
+#AllocatedMode: {
+	id:           #Id
+	name:         #Name
+	applications: [...#Name]
+	constraints:  [...#Constraint]
+}
+
+#AllocatedDomain: {
+	id:          #Id
+	name:        #Name
+	initialMode: #Id
+	replacement: *"supersede_if_safe" | "reject_while_busy" | "queue"
+	recovery: {
+		action: *"hold_observed_configuration" | "enter_fallback_mode" |
+			"stop_domain" | "request_system_recovery"
+		fallbackMode?: #Id
+		deadlineMs:    int & >=1
+	}
+	modes: [#AllocatedMode, ...#AllocatedMode]
 }
 
 #Platform: {
@@ -82,13 +125,42 @@ package ovf_exec_deployment
 	}
 }
 
-deploymentValue=deployment: #Deployment
+allocationValue=allocation: #Allocation
+applicationValues=applicationFragments: [#ApplicationFragment, ...#ApplicationFragment]
 platformValue=platform: #Platform
 
 model: {
-	deploymentVersion: deploymentValue.deploymentVersion
-	generation:        deploymentValue.generation
-	applications:      deploymentValue.applications
-	domains:           deploymentValue.domains
+	deploymentVersion: allocationValue.schemaVersion
+	generation:        allocationValue.generation
+	applications: [for fragment in applicationValues {
+		let assigned = allocationValue.applications[fragment.name]
+		id:         assigned.id
+		name:       fragment.name
+		executable: assigned.executable
+		arguments:  assigned.arguments
+		readiness:  fragment.execution.readiness
+		startTimeoutMs: fragment.execution.startup.timeoutMs
+		stopTimeoutMs:  fragment.execution.shutdown.timeoutMs
+		retry:           fragment.execution.restart
+		dependencies: [for dependency in assigned.dependencies {
+			allocationValue.applications[dependency].id
+		}]
+		exclusiveResources: assigned.exclusiveResources
+	}]
+	domains: [for domain in allocationValue.domains {
+		id:          domain.id
+		name:        domain.name
+		initialMode: domain.initialMode
+		replacement: domain.replacement
+		recovery:    domain.recovery
+		modes: [for mode in domain.modes {
+			id:   mode.id
+			name: mode.name
+			applications: [for application in mode.applications {
+				allocationValue.applications[application].id
+			}]
+			constraints: mode.constraints
+		}]
+	}]
 	platform:          platformValue
 }

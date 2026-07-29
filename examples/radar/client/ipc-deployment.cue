@@ -4,20 +4,20 @@ package ovf_deployment
 
 application: {
 	schemaVersion: 1
-	name:          "radar_service"
+	name:          "radar_ipc_client"
 	communication: instances: [{
 		interface: "example.radar#RadarService"
 		instance:  "front-radar"
-		role:      "provider"
-		transport: "network"
+		role:      "consumer"
+		transport: "ipc"
 	}]
 	execution: {
 		readiness: "required"
 		startup: timeoutMs: 5000
 		shutdown: timeoutMs: 3000
 		restart: {
-			maxAttempts: 2
-			delayMs:     100
+			maxAttempts: 1
+			delayMs:     0
 		}
 	}
 }

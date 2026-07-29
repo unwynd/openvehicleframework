@@ -2,20 +2,30 @@
 
 package ovf_deployment
 
-deployment: {
-	deploymentVersion: 1
-	instances: [
+application: {
+	schemaVersion: 1
+	name:          "provider_consumer_test"
+	communication: instances: [
 		{
 			interface: "example.radar#RadarService"
 			instance:  "front-radar"
 			role:      "provider"
-			transport: platforms[0].transport
+			transport: "network"
 		},
 		{
 			interface: "example.radar#RadarService"
 			instance:  "rear-radar"
 			role:      "consumer"
-			transport: platforms[0].transport
+			transport: "network"
 		},
 	]
+	execution: {
+		readiness: "required"
+		startup: timeoutMs: 1000
+		shutdown: timeoutMs: 1000
+		restart: {
+			maxAttempts: 1
+			delayMs:     0
+		}
+	}
 }

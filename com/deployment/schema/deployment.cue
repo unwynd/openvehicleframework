@@ -28,6 +28,23 @@ package ovf_deployment
 	instances:         [#Instance, ...#Instance]
 }
 
+#Application: {
+	schemaVersion: 1
+	name:          string & =~"^[a-z][a-z0-9_-]*$"
+	communication: {
+		instances: [#Instance, ...#Instance]
+	}
+	execution: {
+		readiness: *"required" | "process_started"
+		startup: timeoutMs: int & >=1
+		shutdown: timeoutMs: int & >=1
+		restart: {
+			maxAttempts: int & >=1 & <=16
+			delayMs:     int & >=0
+		}
+	}
+}
+
 #Platform: {
 	transport: "ipc" | "network"
 	profile:   "inproc" | "iceoryx2" | "vsomeip" | "cyclonedds"
@@ -36,10 +53,13 @@ package ovf_deployment
 	extensions?: [string]: _
 }
 
-deploymentValue=deployment: #Deployment
+applicationValue=application: #Application
 platformValues=platforms:   [#Platform, ...#Platform]
 
 model: {
-	deployment: deploymentValue
+	deployment: {
+		deploymentVersion: applicationValue.schemaVersion
+		instances:         applicationValue.communication.instances
+	}
 	platforms:  platformValues
 }

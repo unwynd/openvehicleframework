@@ -159,12 +159,93 @@ def compile_execution_deployment(args: argparse.Namespace) -> int:
         environment = dict(os.environ)
         environment["CUE_CACHE_DIR"] = cue_cache
         environment["CUE_CONFIG_DIR"] = cue_cache
+        applications = []
+        for application in args.application:
+            exported = subprocess.run(
+                [
+                    str(args.cue.resolve()),
+                    "export",
+                    str(application.resolve()),
+                    "--expression",
+                    "{schemaVersion: application.schemaVersion, "
+                    "name: application.name, execution: application.execution}",
+                    "--out",
+                    "json",
+                ],
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            if exported.returncode != 0:
+                raise ValueError(
+                    f"application execution fragment is invalid: {application}\n"
+                    f"{exported.stderr.strip()}"
+                )
+            applications.append(json.loads(exported.stdout))
+        allocation_export = subprocess.run(
+            [
+                str(args.cue.resolve()),
+                "export",
+                str(args.allocation.resolve()),
+                "--expression",
+                "allocation",
+                "--out",
+                "json",
+            ],
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        if allocation_export.returncode != 0:
+            raise ValueError(
+                f"execution allocation is invalid: {args.allocation}\n"
+                f"{allocation_export.stderr.strip()}"
+            )
+        allocation = json.loads(allocation_export.stdout)
+        fragment_names = [application.get("name") for application in applications]
+        if any(not isinstance(name, str) or not name for name in fragment_names):
+            raise ValueError(
+                "every application deployment fragment must define a non-empty name"
+            )
+        duplicate_names = sorted(
+            {
+                name
+                for name in fragment_names
+                if fragment_names.count(name) > 1
+            }
+        )
+        if duplicate_names:
+            raise ValueError(
+                "duplicate application deployment fragments: "
+                + ", ".join(duplicate_names)
+            )
+        allocated_names = set(allocation.get("applications", {}))
+        supplied_names = set(fragment_names)
+        if allocated_names != supplied_names:
+            missing = sorted(allocated_names - supplied_names)
+            unexpected = sorted(supplied_names - allocated_names)
+            details = []
+            if missing:
+                details.append("missing application targets: " + ", ".join(missing))
+            if unexpected:
+                details.append(
+                    "unallocated application targets: " + ", ".join(unexpected)
+                )
+            raise ValueError("; ".join(details))
+        application_values = Path(cue_cache) / "applications.cue"
+        application_values.write_text(
+            "package ovf_exec_deployment\n\napplicationFragments: "
+            + json.dumps(applications, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
         completed = subprocess.run(
             [
                 str(args.cue.resolve()),
                 "export",
                 str(args.schema.resolve()),
-                str(args.deployment.resolve()),
+                str(args.allocation.resolve()),
+                str(application_values),
                 str(args.platform.resolve()),
                 "--expression",
                 "model",
@@ -434,7 +515,8 @@ def parser() -> argparse.ArgumentParser:
     execution.add_argument("--model", required=True, type=Path)
     execution.add_argument("--cue", required=True, type=Path)
     execution.add_argument("--schema", required=True, type=Path)
-    execution.add_argument("--deployment", required=True, type=Path)
+    execution.add_argument("--allocation", required=True, type=Path)
+    execution.add_argument("--application", required=True, action="append", type=Path)
     execution.add_argument("--platform", required=True, type=Path)
     execution.add_argument("--execution-ir", required=True, type=Path)
     execution.add_argument("--backend-config", required=True, type=Path)

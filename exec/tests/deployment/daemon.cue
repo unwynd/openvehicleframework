@@ -2,24 +2,36 @@
 
 package ovf_exec_deployment
 
-deployment: {
-	deploymentVersion: 1
-	generation:        17
-	applications: [{
-		id:         1
-		name:       "managed_test"
-		executable: "/tmp/ovf-execd-e2e/bin/managed-test"
-		arguments: []
+application: {
+	schemaVersion: 1
+	name:          "managed_test"
+	communication: instances: [{
+		interface: "test.exec#ManagedTest"
+		instance:  "managed-test"
+		role:      "provider"
+		transport: "ipc"
+	}]
+	execution: {
 		readiness: "required"
-		startTimeoutMs: 2000
-		stopTimeoutMs:  2000
-		retry: {
+		startup: timeoutMs: 2000
+		shutdown: timeoutMs: 2000
+		restart: {
 			maxAttempts: 2
 			delayMs:     10
 		}
-		dependencies:      []
+	}
+}
+
+allocation: {
+	schemaVersion: 1
+	generation:    17
+	applications: managed_test: {
+		id:         1
+		executable: "/tmp/ovf-execd-e2e/bin/managed-test"
+		arguments:  []
+		dependencies:       []
 		exclusiveResources: []
-	}]
+	}
 	domains: [{
 		id:          1
 		name:        "machine"
@@ -37,7 +49,7 @@ deployment: {
 		}, {
 			id:           2
 			name:         "running"
-			applications: [1]
+			applications: ["managed_test"]
 			constraints:  []
 		}]
 	}]

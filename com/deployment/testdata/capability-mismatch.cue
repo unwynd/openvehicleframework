@@ -2,13 +2,14 @@
 
 package ovf_deployment
 
-deployment: {
-	deploymentVersion: 1
-	instances: [{
+application: {
+	schemaVersion: 1
+	name:          "capability_mismatch_test"
+	communication: instances: [{
 		interface: "example.radar#RadarService"
 		instance:  "front-radar"
 		role:      "consumer"
-		transport: platforms[0].transport
+		transport: "network"
 		requirements: {
 			features: ["discovery", "events", "methods", "loans"]
 			limits: {
@@ -19,4 +20,13 @@ deployment: {
 			}
 		}
 	}]
+	execution: {
+		readiness: "required"
+		startup: timeoutMs: 1000
+		shutdown: timeoutMs: 1000
+		restart: {
+			maxAttempts: 1
+			delayMs:     0
+		}
+	}
 }

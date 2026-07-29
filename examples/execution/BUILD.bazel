@@ -6,7 +6,13 @@ package(default_visibility = ["//visibility:public"])
 
 ovf_exec_deployment(
     name = "deployment",
-    deployment = "deployment.cue",
+    allocation = "allocation.cue",
+    applications = [
+        "//examples/camera:camera_execution_deployment",
+        "//examples/driving_policy:driving_policy_execution_deployment",
+        "//examples/radar:radar_iceoryx2_service_execution_deployment",
+        "//examples/sensor_fusion:sensor_fusion_execution_deployment",
+    ],
     platform = "//platform:exec_dinit",
 )
 

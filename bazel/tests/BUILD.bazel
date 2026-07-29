@@ -84,7 +84,7 @@ py_test(
     args = [
         "deployment",
         "0",
-        "examples/radar/client/deployment.cue",
+        "examples/radar/client/ipc-deployment.cue",
         "platform/providers/inproc.cue",
     ],
     data = [
@@ -92,7 +92,7 @@ py_test(
         "//com/deployment/profiles:all_profiles",
         "//com/deployment/schema:deployment.cue",
         "//com/model/examples:radar_ir",
-        "//examples/radar:client/deployment.cue",
+        "//examples/radar:client/ipc-deployment.cue",
         "//platform:inproc",
         "//tools:validate_deployment",
     ],
@@ -163,7 +163,7 @@ py_test(
     args = [
         "deployment",
         "0",
-        "examples/radar/service/deployment.cue",
+        "examples/radar/service/ipc-deployment.cue",
         "platform/providers/iceoryx2.cue",
     ],
     data = [
@@ -171,7 +171,7 @@ py_test(
         "//com/deployment/profiles:all_profiles",
         "//com/deployment/schema:deployment.cue",
         "//com/model/examples:radar_ir",
-        "//examples/radar:service/deployment.cue",
+        "//examples/radar:service/ipc-deployment.cue",
         "//platform:iceoryx2",
         "//tools:validate_deployment",
     ],
@@ -215,7 +215,7 @@ py_test(
     args = [
         "reproducible",
         "plan",
-        "examples/radar/client/deployment.cue",
+        "examples/radar/client/ipc-deployment.cue",
         "platform/providers/inproc.cue",
     ],
     data = [
@@ -223,7 +223,7 @@ py_test(
         "//com/deployment/profiles:all_profiles",
         "//com/deployment/schema:deployment.cue",
         "//com/model/examples:radar_ir",
-        "//examples/radar:client/deployment.cue",
+        "//examples/radar:client/ipc-deployment.cue",
         "//platform:inproc",
         "//tools:validate_deployment",
     ],

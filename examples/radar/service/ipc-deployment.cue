@@ -4,12 +4,12 @@ package ovf_deployment
 
 application: {
 	schemaVersion: 1
-	name:          "radar_service"
+	name:          "radar"
 	communication: instances: [{
 		interface: "example.radar#RadarService"
 		instance:  "front-radar"
 		role:      "provider"
-		transport: "network"
+		transport: "ipc"
 	}]
 	execution: {
 		readiness: "required"

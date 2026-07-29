@@ -26,6 +26,14 @@ OvfDeploymentInfo = provider(
     },
 )
 
+OvfApplicationInfo = provider(
+    doc = "Application-owned deployment and its executable target identity.",
+    fields = {
+        "deployment": "Authored application deployment CUE.",
+        "executable_target": "Label of the application executable target.",
+    },
+)
+
 def _contract_impl(ctx):
     ir = ctx.actions.declare_file(ctx.attr.output_name + ".ovf-ir.json")
     header = ctx.actions.declare_file(
@@ -282,6 +290,29 @@ ovf_application_package = rule(
     },
     outputs = {"bundle": "%{name}.tar"},
     doc = "Creates a deterministic target bundle which excludes framework middleware.",
+)
+
+def _application_info_impl(ctx):
+    return [
+        DefaultInfo(files = depset([ctx.file.deployment])),
+        OvfApplicationInfo(
+            deployment = ctx.file.deployment,
+            executable_target = ctx.attr.executable_target,
+        ),
+    ]
+
+ovf_application_info = rule(
+    implementation = _application_info_impl,
+    attrs = {
+        "deployment": attr.label(
+            mandatory = True,
+            allow_single_file = [".cue"],
+        ),
+        "executable_target": attr.string(
+            mandatory = True,
+        ),
+    },
+    doc = "Exports an application's deployment and executable to system integration.",
 )
 
 def _application_facade_impl(ctx):
@@ -553,4 +584,10 @@ def ovf_cc_application(
         tags = tags,
         visibility = visibility,
         **kwargs
+    )
+    ovf_application_info(
+        name = name + "_execution_deployment",
+        deployment = deployment,
+        executable_target = ":" + name,
+        visibility = visibility,
     )

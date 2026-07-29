@@ -2,6 +2,8 @@
 
 """Public Bazel API for validated execution deployment artifacts."""
 
+load("//bazel:application.bzl", "OvfApplicationInfo")
+
 OvfExecutionDeploymentInfo = provider(
     doc = "Validated execution model and generated supervisor artifacts.",
     fields = {
@@ -24,7 +26,13 @@ def _exec_deployment_impl(ctx):
     arguments.add("--model", ctx.file._model)
     arguments.add("--cue", ctx.file._cue)
     arguments.add("--schema", ctx.file._schema)
-    arguments.add("--deployment", ctx.file.deployment)
+    arguments.add("--allocation", ctx.file.allocation)
+    application_deployments = [
+        application[OvfApplicationInfo].deployment
+        for application in ctx.attr.applications
+    ]
+    for application in application_deployments:
+        arguments.add("--application", application)
     arguments.add("--platform", ctx.file.platform)
     arguments.add("--execution-ir", execution_ir)
     arguments.add("--backend-config", backend_config)
@@ -37,9 +45,9 @@ def _exec_deployment_impl(ctx):
             ctx.file._smithy,
             ctx.file._schema,
             ctx.file._cue,
-            ctx.file.deployment,
+            ctx.file.allocation,
             ctx.file.platform,
-        ],
+        ] + application_deployments,
         tools = ctx.files._smithy_runtime,
         outputs = [
             execution_ir,
@@ -101,10 +109,15 @@ def _exec_deployment_impl(ctx):
 ovf_exec_deployment = rule(
     implementation = _exec_deployment_impl,
     attrs = {
-        "deployment": attr.label(
+        "allocation": attr.label(
             mandatory = True,
             allow_single_file = [".cue"],
-            doc = "Platform-owned application and execution-domain allocation.",
+            doc = "System-owned execution-domain and mode allocation.",
+        ),
+        "applications": attr.label_list(
+            mandatory = True,
+            providers = [OvfApplicationInfo],
+            doc = "Application targets exporting their deployment and executable.",
         ),
         "platform": attr.label(
             mandatory = True,

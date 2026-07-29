@@ -12,10 +12,11 @@ separate processes. It demonstrates:
 The application sources use only the generated service API and the generated
 deployment facade. Provider loading, native identifiers, and routes are
 generated from the interface, the client or service instance declaration, and
-the platform-owned vSomeIP selection. The same declaration is used for
-iceoryx2; no native transport binding is authored by the application. The
-vSomeIP routing and discovery bootstrap is a separate platform artifact and
-contains no application or service inventory.
+the platform-owned vSomeIP selection. Network and IPC application targets own
+separate, self-contained deployment documents because the logical transport is
+an application choice; neither document contains a native transport binding.
+The vSomeIP routing and discovery bootstrap is a separate platform artifact
+and contains no application or service inventory.
 
 ## Automated two-process run
 

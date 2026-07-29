@@ -3,6 +3,7 @@
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load("@rules_python//python:defs.bzl", "py_test")
+load("//bazel:application.bzl", "ovf_application_info")
 load("//bazel:execution.bzl", "ovf_exec_deployment")
 
 package(default_visibility = ["//visibility:public"])
@@ -18,9 +19,16 @@ cc_binary(
     deps = ["//exec:application"],
 )
 
+ovf_application_info(
+    name = "managed_application_deployment",
+    deployment = "deployment/daemon.cue",
+    executable_target = "//exec/tests:managed_application_test_service",
+)
+
 ovf_exec_deployment(
     name = "daemon_deployment",
-    deployment = "deployment/daemon.cue",
+    allocation = "deployment/daemon.cue",
+    applications = [":managed_application_deployment"],
     platform = "deployment/platform.cue",
 )
 

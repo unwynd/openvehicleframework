@@ -2,12 +2,22 @@
 
 package ovf_deployment
 
-deployment: {
-	deploymentVersion: 1
-	instances: [{
+application: {
+	schemaVersion: 1
+	name:          "radar_client"
+	communication: instances: [{
 		interface: "example.radar#RadarService"
 		instance:  "front-radar"
 		role:      "consumer"
-		transport: platforms[0].transport
+		transport: "network"
 	}]
+	execution: {
+		readiness: "required"
+		startup: timeoutMs: 5000
+		shutdown: timeoutMs: 3000
+		restart: {
+			maxAttempts: 1
+			delayMs:     0
+		}
+	}
 }

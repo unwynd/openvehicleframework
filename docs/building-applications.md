@@ -41,6 +41,7 @@ For an application named `radar_app`, the macro creates:
 | Target | Purpose |
 |---|---|
 | `:radar_app` | C++ executable, dynamically linked to the framework API |
+| `:radar_app_execution_deployment` | Application deployment and executable-target identity exported to system integration |
 | `:radar_app_application_api` | Generated runtime and named-instance facade |
 | `:radar_app_artifacts` | IDL, headers, generated code, IR, deployment plan and validation report |
 | `:radar_app_bundle` | Deterministic target tar containing the application and target configuration |
@@ -93,8 +94,12 @@ examples/<application>/<role>/deployment.cue
 platform/providers/<provider>.cue
 ```
 
-Smithy interface targets define communication contracts. Application-owned CUE names the
-interface and logical instance and declares the provider or consumer role.
+Smithy interface targets define communication contracts. Application-owned CUE
+has one `application` root. It names the application, declares communication
+roles and logical transports, and defines lifecycle requirements such as
+readiness and bounded startup, shutdown, and restart policy. It does not assign
+runtime IDs, installation paths, dependencies, resources, execution domains,
+or modes.
 Platform-owned CUE selects the communication implementation and supplies
 platform policy and extensions. The compiler generates provider-native names,
 identifiers, resource mappings, stable instance identity, and the canonical
@@ -114,6 +119,13 @@ contain a second copy of application deployments.
 Resolved deployment JSON, canonical plan JSON, validation reports, generated
 C++ facades, and native mapping strings are build outputs. They are not authored
 or committed.
+
+System integration composes `*_execution_deployment` application targets with
+an execution allocation target. The allocation assigns runtime IDs,
+installation paths, dependencies, exclusive resources, and domain/mode
+membership. Execution-platform CUE supplies supervisor, persistence, and
+coordinator policy. Symbolic application names are resolved to stable numeric
+runtime references only in generated execution IR.
 
 ## Public lower-level rules
 
