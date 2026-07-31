@@ -27,10 +27,10 @@ struct BackendEvidence final {
 class ProcessBackend {
 public:
   virtual ~ProcessBackend() = default;
-  [[nodiscard]] virtual Result<BackendEvidence> Inspect(ApplicationId application) noexcept = 0;
-  [[nodiscard]] virtual Result<BackendEvidence> Start(ApplicationId application,
+  [[nodiscard]] virtual Result<BackendEvidence> Inspect(ExecutionUnitId unit) noexcept = 0;
+  [[nodiscard]] virtual Result<BackendEvidence> Start(ExecutionUnitId unit,
                                                       Deadline deadline) noexcept = 0;
-  [[nodiscard]] virtual Result<BackendEvidence> Stop(ApplicationId application, StopReason reason,
+  [[nodiscard]] virtual Result<BackendEvidence> Stop(ExecutionUnitId unit, StopReason reason,
                                                      Deadline deadline) noexcept = 0;
   [[nodiscard]] virtual Result<void> RequestSystemRecovery(Deadline) noexcept {
     return MakeError(ErrorCode::unsupported, "backend does not support system recovery requests");

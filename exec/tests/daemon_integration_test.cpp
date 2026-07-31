@@ -160,6 +160,7 @@ TEST(ExecutionDaemonIntegrationTest, RunsTransitionAndRecoversJournalAcrossDaemo
   const auto daemon = AbsolutePath(std::getenv("OVF_TEST_EXEC_DAEMON"));
   const auto dinit = AbsolutePath(std::getenv("OVF_TEST_DINIT"));
   const auto helper = AbsolutePath(std::getenv("OVF_TEST_MANAGED_SERVICE"));
+  const auto system_service = AbsolutePath(std::getenv("OVF_TEST_SYSTEM_SERVICE"));
   const auto plugin = AbsolutePath(std::getenv("OVF_TEST_DINIT_PLUGIN"));
   const auto model = AbsolutePath(std::getenv("OVF_TEST_EXECUTION_MODEL"));
   const auto backend = AbsolutePath(std::getenv("OVF_TEST_EXECUTION_BACKEND"));
@@ -168,6 +169,7 @@ TEST(ExecutionDaemonIntegrationTest, RunsTransitionAndRecoversJournalAcrossDaemo
   ASSERT_FALSE(daemon.empty());
   ASSERT_FALSE(dinit.empty());
   ASSERT_FALSE(helper.empty());
+  ASSERT_FALSE(system_service.empty());
   ASSERT_FALSE(plugin.empty());
   ASSERT_FALSE(model.empty());
   ASSERT_FALSE(backend.empty());
@@ -176,6 +178,7 @@ TEST(ExecutionDaemonIntegrationTest, RunsTransitionAndRecoversJournalAcrossDaemo
 
   TargetLayout target;
   target.CopyFile(helper, "bin/managed-test");
+  target.CopyFile(system_service, "bin/system-test");
   target.CopyFile(plugin, "lib/libovf_exec_backend_dinit.so");
   target.CopyFile(model, "artifacts/deployment.execution.json");
   target.CopyFile(backend, "artifacts/daemon_deployment.backend.json");
@@ -217,6 +220,9 @@ TEST(ExecutionDaemonIntegrationTest, RunsTransitionAndRecoversJournalAcrossDaemo
   EXPECT_EQ(running.value().domains.front().committed_mode, ModeId{2});
   ASSERT_EQ(running.value().applications.size(), 1U);
   EXPECT_EQ(running.value().applications.front().state, ApplicationState::ready);
+  ASSERT_EQ(running.value().units.size(), 2U);
+  EXPECT_EQ(running.value().units[0].kind, ExecutionUnitKind::managed_application);
+  EXPECT_EQ(running.value().units[1].kind, ExecutionUnitKind::service);
   for (int attempt = 0; attempt < 100 && event_count.load() == 0U; ++attempt) {
     std::this_thread::sleep_for(10ms);
   }
@@ -245,6 +251,7 @@ TEST(ExecutionDaemonIntegrationTest, RunsTransitionAndRecoversJournalAcrossDaemo
   auto final_snapshot = recovered.value().GetSnapshot();
   ASSERT_TRUE(final_snapshot);
   EXPECT_EQ(final_snapshot.value().applications.front().state, ApplicationState::stopped);
+  ASSERT_TRUE(WaitForPath(TargetLayout::Path("state/system.stopped")));
 }
 
 } // namespace

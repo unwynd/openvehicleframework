@@ -127,13 +127,44 @@ Result<std::vector<std::uint32_t>> UserIds(const Json::Value& value, std::string
 }
 
 Result<ReadinessPolicy> Readiness(const Json::Value& value) {
-  if (value == "required") {
-    return ReadinessPolicy::required;
+  if (value == "lifecycle_channel") {
+    return ReadinessPolicy::lifecycle_channel;
   }
   if (value == "process_started") {
     return ReadinessPolicy::process_started;
   }
+  if (value == "supervisor_notification") {
+    return ReadinessPolicy::supervisor_notification;
+  }
+  if (value == "successful_exit") {
+    return ReadinessPolicy::successful_exit;
+  }
+  if (value == "socket_available") {
+    return ReadinessPolicy::socket_available;
+  }
+  if (value == "mount_present") {
+    return ReadinessPolicy::mount_present;
+  }
   return MakeError(ErrorCode::configuration_error, "unknown readiness policy");
+}
+
+Result<ExecutionUnitKind> UnitKind(const Json::Value& value) {
+  if (value == "managed_application") {
+    return ExecutionUnitKind::managed_application;
+  }
+  if (value == "service") {
+    return ExecutionUnitKind::service;
+  }
+  if (value == "one_shot") {
+    return ExecutionUnitKind::one_shot;
+  }
+  if (value == "mount") {
+    return ExecutionUnitKind::mount;
+  }
+  if (value == "external") {
+    return ExecutionUnitKind::external;
+  }
+  return MakeError(ErrorCode::configuration_error, "unknown execution unit kind");
 }
 
 Result<ReplacementPolicy> Replacement(const Json::Value& value) {
@@ -179,6 +210,7 @@ Result<ApplicationDefinition> Application(const Json::Value& value) {
   auto id = Unsigned(value["id"], "application.id");
   auto name = String(value["name"], "application.name");
   auto readiness = Readiness(value["readiness"]);
+  auto kind = UnitKind(value["kind"]);
   auto start = Milliseconds(value["startTimeoutMs"], "application.startTimeoutMs");
   auto stop = Milliseconds(value["stopTimeoutMs"], "application.stopTimeoutMs");
   auto attempts = Unsigned(value["retry"]["maxAttempts"], "application.retry.maxAttempts");
@@ -186,8 +218,9 @@ Result<ApplicationDefinition> Application(const Json::Value& value) {
   auto dependencies = Identifiers<ApplicationId>(value["dependencies"], "application.dependencies");
   auto resources =
       Identifiers<ResourceId>(value["exclusiveResources"], "application.exclusiveResources");
-  if (!id || !name || !readiness || !start || !stop || !attempts || !delay || !dependencies ||
-      !resources || attempts.value() > std::numeric_limits<std::uint32_t>::max()) {
+  if (!id || !name || !readiness || !kind || !value["bootstrap"].isBool() || !start || !stop ||
+      !attempts || !delay || !dependencies || !resources ||
+      attempts.value() > std::numeric_limits<std::uint32_t>::max()) {
     const Error* error = nullptr;
     if (!id) {
       error = &id.error();
@@ -195,6 +228,8 @@ Result<ApplicationDefinition> Application(const Json::Value& value) {
       error = &name.error();
     } else if (!readiness) {
       error = &readiness.error();
+    } else if (!kind) {
+      error = &kind.error();
     } else if (!start) {
       error = &start.error();
     } else if (!stop) {
@@ -221,13 +256,15 @@ Result<ApplicationDefinition> Application(const Json::Value& value) {
       {static_cast<std::uint32_t>(attempts.value()), delay.value()},
       std::move(dependencies).value(),
       std::move(resources).value(),
+      kind.value(),
+      value["bootstrap"].asBool(),
   };
 }
 
 Result<ModeDefinition> Mode(const Json::Value& value) {
   auto id = Unsigned(value["id"], "mode.id");
   auto name = String(value["name"], "mode.name");
-  auto applications = Identifiers<ApplicationId>(value["applications"], "mode.applications");
+  auto applications = Identifiers<ApplicationId>(value["units"], "mode.units");
   if (!id || !name || !applications || !value["constraints"].isArray()) {
     return MakeError(ErrorCode::configuration_error, "mode definition is invalid");
   }
@@ -294,7 +331,7 @@ Result<DomainDefinition> Domain(const Json::Value& value) {
 
 Result<ValidatedModel> Execution(const Json::Value& root) {
   if (!root["deploymentVersion"].isIntegral() || root["deploymentVersion"].asUInt64() != 1U ||
-      !root["applications"].isArray() || !root["domains"].isArray()) {
+      !root["units"].isArray() || !root["domains"].isArray()) {
     return MakeError(ErrorCode::configuration_error, "execution model version is unsupported");
   }
   auto generation = Unsigned(root["generation"], "generation");
@@ -304,13 +341,13 @@ Result<ValidatedModel> Execution(const Json::Value& root) {
   ExecutionModel model;
   model.generation = {generation.value()};
   try {
-    model.applications.reserve(root["applications"].size());
-    for (const auto& entry : root["applications"]) {
+    model.units.reserve(root["units"].size());
+    for (const auto& entry : root["units"]) {
       auto application = Application(entry);
       if (!application) {
         return application.error();
       }
-      model.applications.push_back(std::move(application).value());
+      model.units.push_back(std::move(application).value());
     }
     model.domains.reserve(root["domains"].size());
     for (const auto& entry : root["domains"]) {
@@ -369,7 +406,7 @@ Result<RuntimeDeployment> LoadRuntimeDeployment(const std::string& execution_mod
                                   "coordinator.observationUids");
   auto mutation_uids =
       UserIds(root.value()["platform"]["coordinator"]["mutationUids"], "coordinator.mutationUids");
-  if (!model || !backend_version || backend_version.value() != 1U || !backend_kind ||
+  if (!model || !backend_version || backend_version.value() != 2U || !backend_kind ||
       !backend_library || !journal_path || !maximum_record || !synchronize.isBool() || !endpoint ||
       !queue || !workers || !connections || !maximum_message || !observation_uids ||
       !mutation_uids || maximum_record.value() > std::numeric_limits<std::size_t>::max() ||

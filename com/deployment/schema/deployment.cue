@@ -35,7 +35,7 @@ package ovf_deployment
 		instances: [#Instance, ...#Instance]
 	}
 	execution: {
-		readiness: *"required" | "process_started"
+		readiness: *"lifecycle_channel" | "process_started"
 		startup: timeoutMs: int & >=1
 		shutdown: timeoutMs: int & >=1
 		restart: {

@@ -42,7 +42,7 @@ ValidatedModel Model(std::uint32_t feature_attempts = 1U,
 ValidatedModel RecoveryModel(FailureAction action) {
   auto model = Model().value();
   ExecutionModel recovered{model.generation,
-                           model.applications,
+                           model.units,
                            {{DomainId{1},
                              "machine",
                              ModeId{1},
@@ -121,7 +121,7 @@ TEST(ExecutionEngineTest, ExecutesAndAtomicallyCommitsMode) {
 
   const auto snapshot = engine->Snapshot();
   EXPECT_EQ(snapshot.configuration.committed_modes.at(DomainId{1}), ModeId{2});
-  EXPECT_TRUE(snapshot.configuration.running_applications.contains(ApplicationId{2}));
+  EXPECT_TRUE(snapshot.configuration.running_units.contains(ApplicationId{2}));
 
   const auto events = journal_observer->Events();
   ASSERT_FALSE(events.empty());
@@ -148,7 +148,7 @@ TEST(ExecutionEngineTest, PreservesObservedStateAndEvidenceOnPartialFailure) {
 
   const auto snapshot = engine->Snapshot();
   EXPECT_EQ(snapshot.configuration.committed_modes.at(DomainId{1}), ModeId{1});
-  EXPECT_FALSE(snapshot.configuration.running_applications.contains(ApplicationId{2}));
+  EXPECT_FALSE(snapshot.configuration.running_units.contains(ApplicationId{2}));
 }
 
 TEST(ExecutionEngineTest, RejectsInvalidRequestsWithoutBackendEffects) {
@@ -215,8 +215,7 @@ TEST(ExecutionEngineTest, EntersConfiguredFallbackAfterTransitionFailure) {
   EXPECT_TRUE(transition.value().failure->recovery_succeeded);
   EXPECT_EQ(transition.value().failure->recovered_mode, ModeId{3});
   EXPECT_EQ(created.value()->Snapshot().configuration.committed_modes.at(DomainId{1}), ModeId{3});
-  EXPECT_FALSE(
-      created.value()->Snapshot().configuration.running_applications.contains(ApplicationId{1}));
+  EXPECT_FALSE(created.value()->Snapshot().configuration.running_units.contains(ApplicationId{1}));
   EXPECT_EQ(observer->operations, (std::vector<std::string>{"start:2", "stop:1"}));
   const auto events = journal_observer->Events();
   EXPECT_TRUE(std::any_of(events.begin(), events.end(), [](const auto& event) {
@@ -237,7 +236,7 @@ TEST(ExecutionEngineTest, StopsDomainApplicationsAfterTransitionFailure) {
       created.value()->RequestMode(DomainId{1}, ModeId{2}, std::chrono::steady_clock::now() + 1s);
   ASSERT_TRUE(transition);
   EXPECT_EQ(transition.value().phase, TransitionPhase::failed);
-  EXPECT_TRUE(created.value()->Snapshot().configuration.running_applications.empty());
+  EXPECT_TRUE(created.value()->Snapshot().configuration.running_units.empty());
   EXPECT_EQ(observer->operations, (std::vector<std::string>{"start:2", "stop:1"}));
 }
 

@@ -366,17 +366,36 @@ fn generate_dinit_services(
     output: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut model: JsonValue = serde_json::from_slice(&fs::read(model_path)?)?;
-    let applications = model["applications"]
+    let units = model["units"]
         .as_array_mut()
-        .ok_or("execution model has no applications")?;
-    for application in applications.iter_mut() {
-        let arguments = application["arguments"]
+        .ok_or("execution model has no units")?;
+    let service_names = units
+        .iter()
+        .map(|unit| {
+            let id = unit["id"].as_u64().ok_or("execution unit id is missing")?;
+            Ok((
+                id,
+                if unit["kind"] == "external" {
+                    unit["nativeService"]
+                        .as_str()
+                        .ok_or("external unit native service is missing")?
+                        .to_owned()
+                } else if unit["kind"] == "managed_application" {
+                    format!("ovf-app-{id}")
+                } else {
+                    format!("ovf-unit-{id}")
+                },
+            ))
+        })
+        .collect::<Result<std::collections::BTreeMap<_, _>, Box<dyn std::error::Error>>>()?;
+    for unit in units.iter_mut() {
+        let arguments = unit["arguments"]
             .as_array()
-            .ok_or("application arguments are missing")?;
+            .ok_or("execution unit arguments are missing")?;
         let mut command = vec![
-            application["executable"]
+            unit["executable"]
                 .as_str()
-                .ok_or("application executable is missing")?
+                .ok_or("execution unit executable is missing")?
                 .to_owned(),
         ];
         command.extend(
@@ -385,21 +404,63 @@ fn generate_dinit_services(
                 .map(|value| {
                     value
                         .as_str()
-                        .ok_or("application argument is not a string")
+                        .ok_or("execution unit argument is not a string")
                         .map(str::to_owned)
                 })
                 .collect::<Result<Vec<_>, _>>()?,
         );
-        let start = application["startTimeoutMs"]
+        let start = unit["startTimeoutMs"]
             .as_u64()
-            .ok_or("application start timeout is missing")?;
-        let stop = application["stopTimeoutMs"]
+            .ok_or("execution unit start timeout is missing")?;
+        let stop = unit["stopTimeoutMs"]
             .as_u64()
-            .ok_or("application stop timeout is missing")?;
-        let object = application
+            .ok_or("execution unit stop timeout is missing")?;
+        let stop_executable = unit["stopExecutable"].as_str().unwrap_or_default();
+        let stop_arguments = unit["stopArguments"]
+            .as_array()
+            .ok_or("execution unit stop arguments are missing")?;
+        let stop_command = if stop_executable.is_empty() {
+            String::new()
+        } else {
+            std::iter::once(stop_executable.to_owned())
+                .chain(
+                    stop_arguments
+                        .iter()
+                        .map(|value| {
+                            value
+                                .as_str()
+                                .ok_or("execution unit stop argument is not a string")
+                                .map(str::to_owned)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                )
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let dependency_services = unit["dependencies"]
+            .as_array()
+            .ok_or("execution unit dependencies are missing")?
+            .iter()
+            .map(|dependency| {
+                service_names
+                    .get(
+                        &dependency
+                            .as_u64()
+                            .ok_or("dependency id is not an integer")?,
+                    )
+                    .cloned()
+                    .ok_or_else(|| "dependency service mapping is missing".into())
+            })
+            .collect::<Result<Vec<String>, Box<dyn std::error::Error>>>()?;
+        let object = unit
             .as_object_mut()
-            .ok_or("application is not an object")?;
+            .ok_or("execution unit is not an object")?;
         object.insert("command".into(), JsonValue::String(command.join(" ")));
+        object.insert("stop_command".into(), JsonValue::String(stop_command));
+        object.insert(
+            "dependency_services".into(),
+            serde_json::to_value(dependency_services)?,
+        );
         object.insert(
             "start_timeout_seconds".into(),
             JsonValue::from(start.div_ceil(1000).max(1)),
@@ -413,25 +474,33 @@ fn generate_dinit_services(
     environment.add_template("dinit_service", DINIT_SERVICE_TEMPLATE)?;
     environment.add_template("dinit_boot", DINIT_BOOT_TEMPLATE)?;
     fs::create_dir_all(&output)?;
+    let bootstrap_services = units
+        .iter()
+        .filter(|unit| unit["bootstrap"].as_bool() == Some(true))
+        .filter_map(|unit| unit["id"].as_u64())
+        .filter_map(|id| service_names.get(&id).cloned())
+        .collect::<Vec<_>>();
     let boot = environment
         .get_template("dinit_boot")?
-        .render(context! {})?;
-    fs::write(output.join("boot"), boot.trim_start())?;
+        .render(context! { bootstrap_services })?;
+    fs::write(output.join("boot"), format!("{}\n", boot.trim()))?;
     let service = environment.get_template("dinit_service")?;
-    for application in applications {
-        let identifier = application["id"]
-            .as_u64()
-            .ok_or("application id is missing")?;
-        let rendered =
-            service.render(context! { application => Value::from_serialize(application) })?;
-        fs::write(
-            output.join(format!("ovf-app-{identifier}")),
-            rendered.trim_start(),
-        )?;
-        fs::write(
-            output.join(format!("ovf-app-{identifier}.env")),
-            format!("OVF_EXEC_APPLICATION_ID={identifier}\n"),
-        )?;
+    for unit in units {
+        if unit["kind"] == "external" {
+            continue;
+        }
+        let identifier = unit["id"].as_u64().ok_or("execution unit id is missing")?;
+        let service_name = service_names
+            .get(&identifier)
+            .ok_or("execution unit service mapping is missing")?;
+        let rendered = service.render(context! { unit => Value::from_serialize(&*unit) })?;
+        fs::write(output.join(service_name), format!("{}\n", rendered.trim()))?;
+        if unit["kind"] == "managed_application" {
+            fs::write(
+                output.join(format!("{service_name}.env")),
+                format!("OVF_EXEC_APPLICATION_ID={identifier}\n"),
+            )?;
+        }
     }
     Ok(())
 }

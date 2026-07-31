@@ -66,8 +66,7 @@ TEST(TransitionPlannerTest, BuildsInitialUnionOfActiveDomains) {
   TransitionPlanner planner(model);
   auto initial = planner.InitialConfiguration();
   ASSERT_TRUE(initial);
-  EXPECT_EQ(initial.value().running_applications,
-            std::unordered_set<ApplicationId>({ApplicationId{1}}));
+  EXPECT_EQ(initial.value().running_units, std::unordered_set<ApplicationId>({ApplicationId{1}}));
 }
 
 TEST(TransitionPlannerTest, OrdersDependenciesAndRetainsSharedApplications) {
@@ -97,7 +96,7 @@ TEST(TransitionPlannerTest, ValidatesCrossDomainConfiguration) {
   ASSERT_TRUE(operational);
   auto configuration = initial.value();
   configuration.committed_modes[DomainId{1}] = ModeId{2};
-  configuration.running_applications.insert(ApplicationId{2});
+  configuration.running_units.insert(ApplicationId{2});
 
   auto accepted = planner.Plan(configuration, DomainId{2}, ModeId{2});
   ASSERT_TRUE(accepted);
@@ -113,7 +112,7 @@ TEST(TransitionPlannerTest, StopsOnlyAfterLastDomainReleasesSharedApplication) {
   auto configuration = planner.InitialConfiguration().value();
   configuration.committed_modes[DomainId{1}] = ModeId{2};
   configuration.committed_modes[DomainId{2}] = ModeId{2};
-  configuration.running_applications = {ApplicationId{1}, ApplicationId{2}, ApplicationId{3}};
+  configuration.running_units = {ApplicationId{1}, ApplicationId{2}, ApplicationId{3}};
 
   auto diagnostics_off = planner.Plan(configuration, DomainId{2}, ModeId{1});
   ASSERT_TRUE(diagnostics_off);
@@ -121,6 +120,74 @@ TEST(TransitionPlannerTest, StopsOnlyAfterLastDomainReleasesSharedApplication) {
   EXPECT_TRUE(std::find(diagnostics_off.value().retain.begin(),
                         diagnostics_off.value().retain.end(),
                         ApplicationId{1}) != diagnostics_off.value().retain.end());
+}
+
+TEST(TransitionPlannerTest, KeepsBootstrapAndOrdersSystemUnitsWithApplications) {
+  ExecutionModel definition{
+      ModelGeneration{2},
+      {{ApplicationId{10},
+        "storage",
+        ReadinessPolicy::successful_exit,
+        std::chrono::seconds(5),
+        std::chrono::seconds(5),
+        {},
+        {},
+        {},
+        ExecutionUnitKind::one_shot,
+        true},
+       {ApplicationId{11},
+        "network",
+        ReadinessPolicy::process_started,
+        std::chrono::seconds(5),
+        std::chrono::seconds(5),
+        {},
+        {ApplicationId{10}},
+        {},
+        ExecutionUnitKind::service,
+        false},
+       {ApplicationId{12},
+        "camera",
+        ReadinessPolicy::lifecycle_channel,
+        std::chrono::seconds(5),
+        std::chrono::seconds(5),
+        {},
+        {ApplicationId{11}},
+        {},
+        ExecutionUnitKind::managed_application,
+        false}},
+      {{DomainId{1},
+        "machine",
+        ModeId{1},
+        ReplacementPolicy::supersede_if_safe,
+        {},
+        {{ModeId{1}, "boot", {}, {}},
+         {ModeId{2}, "operational", {ApplicationId{11}, ApplicationId{12}}, {}},
+         {ModeId{3}, "incomplete", {ApplicationId{12}}, {}}}}}};
+  auto validated = ValidateModel(std::move(definition));
+  ASSERT_TRUE(validated) << validated.error().message;
+  TransitionPlanner planner(validated.value());
+
+  auto initial = planner.InitialConfiguration();
+  ASSERT_TRUE(initial);
+  EXPECT_EQ(initial.value().running_units, (std::unordered_set<ApplicationId>{ApplicationId{10}}));
+
+  auto incomplete = planner.Plan(initial.value(), DomainId{1}, ModeId{3});
+  ASSERT_FALSE(incomplete);
+  EXPECT_EQ(incomplete.error().code, ErrorCode::invalid_transition);
+
+  auto start = planner.Plan(initial.value(), DomainId{1}, ModeId{2});
+  ASSERT_TRUE(start);
+  EXPECT_EQ(start.value().retain, (std::vector<ApplicationId>{ApplicationId{10}}));
+  EXPECT_EQ(start.value().start,
+            (std::vector<ApplicationId>{ApplicationId{11}, ApplicationId{12}}));
+
+  auto running = initial.value();
+  running.committed_modes[DomainId{1}] = ModeId{2};
+  running.running_units = {ApplicationId{10}, ApplicationId{11}, ApplicationId{12}};
+  auto stop = planner.Plan(running, DomainId{1}, ModeId{1});
+  ASSERT_TRUE(stop);
+  EXPECT_EQ(stop.value().stop, (std::vector<ApplicationId>{ApplicationId{12}, ApplicationId{11}}));
+  EXPECT_EQ(stop.value().retain, (std::vector<ApplicationId>{ApplicationId{10}}));
 }
 
 } // namespace

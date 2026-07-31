@@ -54,13 +54,13 @@ public:
       return MakeError(ErrorCode::invalid_argument,
                        "transition must lock at least one execution domain");
     }
-    if (HasDuplicates(resources.domains) || HasDuplicates(resources.applications) ||
+    if (HasDuplicates(resources.domains) || HasDuplicates(resources.units) ||
         HasDuplicates(resources.exclusive_resources)) {
       return MakeError(ErrorCode::invalid_argument,
                        "transition resource request contains duplicate identifiers");
     }
     std::sort(resources.domains.begin(), resources.domains.end());
-    std::sort(resources.applications.begin(), resources.applications.end());
+    std::sort(resources.units.begin(), resources.units.end());
     std::sort(resources.exclusive_resources.begin(), resources.exclusive_resources.end());
 
     std::unique_lock lock(mutex_);
@@ -68,8 +68,7 @@ public:
       return MakeError(ErrorCode::already_exists, "transition already owns a scheduler lease");
     }
     const auto available = [&] {
-      return Available(resources.domains, domains_) &&
-             Available(resources.applications, applications_) &&
+      return Available(resources.domains, domains_) && Available(resources.units, units_) &&
              Available(resources.exclusive_resources, exclusive_resources_);
     };
     if (!condition_.wait_until(lock, deadline, available)) {
@@ -78,7 +77,7 @@ public:
     }
 
     Claim(resources.domains, owner, domains_);
-    Claim(resources.applications, owner, applications_);
+    Claim(resources.units, owner, units_);
     Claim(resources.exclusive_resources, owner, exclusive_resources_);
     leases_.emplace(owner, std::move(resources));
     return Lease(shared_from_this(), owner);
@@ -90,7 +89,7 @@ public:
       return;
     }
     ReleaseOwned(owner, domains_);
-    ReleaseOwned(owner, applications_);
+    ReleaseOwned(owner, units_);
     ReleaseOwned(owner, exclusive_resources_);
     condition_.notify_all();
   }
@@ -108,7 +107,7 @@ private:
   std::condition_variable condition_;
   std::unordered_map<TransitionId, TransitionResources> leases_;
   std::unordered_map<DomainId, TransitionId> domains_;
-  std::unordered_map<ApplicationId, TransitionId> applications_;
+  std::unordered_map<ExecutionUnitId, TransitionId> units_;
   std::unordered_map<ResourceId, TransitionId> exclusive_resources_;
   std::weak_ptr<State> weak_;
 };

@@ -158,45 +158,82 @@ def _duplicates(values: list[dict[str, Any]], key: str) -> set[Any]:
 
 def validate_semantics(model: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    applications = model["applications"]
+    units = model["units"]
     domains = model["domains"]
-    for duplicate in sorted(_duplicates(applications, "id")):
-        errors.append(f"applications: duplicate id {duplicate}")
-    for duplicate in sorted(_duplicates(applications, "name")):
-        errors.append(f"applications: duplicate name {duplicate}")
-    app_ids = {item["id"] for item in applications}
+    for duplicate in sorted(_duplicates(units, "id")):
+        errors.append(f"units: duplicate id {duplicate}")
+    for duplicate in sorted(_duplicates(units, "name")):
+        errors.append(f"units: duplicate name {duplicate}")
+    unit_ids = {item["id"] for item in units}
     dependencies: dict[int, list[int]] = {}
-    for application in applications:
-        path = f"applications[{application['id']}]"
-        if not SAFE_COMMAND_TOKEN.fullmatch(application["executable"]):
+    bootstrap_ids = {item["id"] for item in units if item["bootstrap"]}
+    native_services = set(model["platform"]["dinit"]["nativeServices"])
+    readiness_by_kind = {
+        "managed_application": {"lifecycle_channel", "process_started"},
+        "service": {"process_started", "supervisor_notification"},
+        "one_shot": {"successful_exit"},
+        "mount": {"mount_present"},
+        "external": {"process_started", "supervisor_notification"},
+    }
+    for unit in units:
+        path = f"units[{unit['id']}]"
+        kind = unit["kind"]
+        executable = unit["executable"]
+        native_service = unit["nativeService"]
+        if kind == "external":
+            if executable:
+                errors.append(f"{path}.executable: external units use nativeService")
+            if not native_service:
+                errors.append(f"{path}.nativeService: external unit requires a service name")
+            elif native_service not in native_services:
+                errors.append(
+                    f"{path}.nativeService: service is not supplied by the platform"
+                )
+        elif not executable:
+            errors.append(f"{path}.executable: executable unit requires an absolute path")
+        if executable and not SAFE_COMMAND_TOKEN.fullmatch(executable):
             errors.append(f"{path}.executable: contains unsupported command characters")
-        for argument in application["arguments"]:
+        if unit["readiness"] not in readiness_by_kind.get(kind, set()):
+            errors.append(f"{path}.readiness: unsupported for {kind}")
+        for argument in unit["arguments"]:
             if not SAFE_COMMAND_TOKEN.fullmatch(argument):
                 errors.append(f"{path}.arguments: contains unsupported command characters")
-        unknown = sorted(set(application["dependencies"]) - app_ids)
+        stop_executable = unit["stopExecutable"]
+        if stop_executable and not SAFE_COMMAND_TOKEN.fullmatch(stop_executable):
+            errors.append(f"{path}.stopExecutable: contains unsupported command characters")
+        for argument in unit["stopArguments"]:
+            if not SAFE_COMMAND_TOKEN.fullmatch(argument):
+                errors.append(f"{path}.stopArguments: contains unsupported command characters")
+        if kind == "mount" and not stop_executable:
+            errors.append(f"{path}.stopExecutable: mount unit requires an unmount operation")
+        unknown = sorted(set(unit["dependencies"]) - unit_ids)
         if unknown:
-            errors.append(f"{path}.dependencies: unknown application ids {unknown}")
-        if application["id"] in application["dependencies"]:
-            errors.append(f"{path}.dependencies: application depends on itself")
-        dependencies[application["id"]] = application["dependencies"]
+            errors.append(f"{path}.dependencies: unknown unit ids {unknown}")
+        if unit["id"] in unit["dependencies"]:
+            errors.append(f"{path}.dependencies: unit depends on itself")
+        if unit["bootstrap"] and any(
+            dependency not in bootstrap_ids for dependency in unit["dependencies"]
+        ):
+            errors.append(f"{path}.dependencies: bootstrap unit depends on managed unit")
+        dependencies[unit["id"]] = unit["dependencies"]
 
     visiting: set[int] = set()
     visited: set[int] = set()
 
-    def visit(application: int) -> None:
-        if application in visited:
+    def visit(unit: int) -> None:
+        if unit in visited:
             return
-        if application in visiting:
-            errors.append(f"applications: dependency cycle includes {application}")
+        if unit in visiting:
+            errors.append(f"units: dependency cycle includes {unit}")
             return
-        visiting.add(application)
-        for dependency in dependencies.get(application, []):
+        visiting.add(unit)
+        for dependency in dependencies.get(unit, []):
             visit(dependency)
-        visiting.remove(application)
-        visited.add(application)
+        visiting.remove(unit)
+        visited.add(unit)
 
-    for application in sorted(app_ids):
-        visit(application)
+    for unit in sorted(unit_ids):
+        visit(unit)
 
     domain_ids = {item["id"] for item in domains}
     if len(domain_ids) != len(domains):
@@ -219,9 +256,9 @@ def validate_semantics(model: dict[str, Any]) -> list[str]:
             errors.append(f"{path}.recovery.fallbackMode: only valid for fallback recovery")
         for mode in modes:
             mode_path = f"{path}.modes[{mode['id']}]"
-            unknown = sorted(set(mode["applications"]) - app_ids)
+            unknown = sorted(set(mode["units"]) - unit_ids)
             if unknown:
-                errors.append(f"{mode_path}.applications: unknown application ids {unknown}")
+                errors.append(f"{mode_path}.units: unknown unit ids {unknown}")
             for constraint in mode["constraints"]:
                 other = constraint["other"]
                 other_domain = next(
@@ -236,18 +273,27 @@ def validate_semantics(model: dict[str, Any]) -> list[str]:
                     )
                 if other["domain"] == domain["id"] and other["mode"] == mode["id"]:
                     errors.append(f"{mode_path}.constraints: mode cannot constrain itself")
+    assigned_units = {
+        unit for domain in domains for mode in domain["modes"] for unit in mode["units"]
+    }
+    misplaced_bootstrap = sorted(assigned_units & bootstrap_ids)
+    if misplaced_bootstrap:
+        errors.append(f"domains: bootstrap units must not be mode members {misplaced_bootstrap}")
+    unassigned = sorted(unit_ids - bootstrap_ids - assigned_units)
+    if unassigned:
+        errors.append(f"domains: non-bootstrap units have no explicit mode membership {unassigned}")
     return errors
 
 
 def normalized(model: dict[str, Any]) -> dict[str, Any]:
     result = json.loads(json.dumps(model))
-    for application in result["applications"]:
-        application["dependencies"] = sorted(set(application["dependencies"]))
-        application["exclusiveResources"] = sorted(set(application["exclusiveResources"]))
-    result["applications"].sort(key=lambda item: item["id"])
+    for unit in result["units"]:
+        unit["dependencies"] = sorted(set(unit["dependencies"]))
+        unit["exclusiveResources"] = sorted(set(unit["exclusiveResources"]))
+    result["units"].sort(key=lambda item: item["id"])
     for domain in result["domains"]:
         for mode in domain["modes"]:
-            mode["applications"] = sorted(set(mode["applications"]))
+            mode["units"] = sorted(set(mode["units"]))
             mode["constraints"].sort(
                 key=lambda item: (
                     item["kind"], item["other"]["domain"], item["other"]["mode"]
@@ -258,8 +304,12 @@ def normalized(model: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def service_name(application_id: int) -> str:
-    return f"ovf-app-{application_id}"
+def service_name(unit: dict[str, Any]) -> str:
+    if unit["kind"] == "external":
+        return unit["nativeService"]
+    if unit["kind"] == "managed_application":
+        return f"ovf-app-{unit['id']}"
+    return f"ovf-unit-{unit['id']}"
 
 
 def fingerprint(value: Any) -> str:
@@ -277,19 +327,19 @@ def generate_artifacts(
     model = normalized(model)
     output_model.parent.mkdir(parents=True, exist_ok=True)
     output_model.write_text(json.dumps(model, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-    applications = [
-        {"id": item["id"], "service": service_name(item["id"])}
-        for item in model["applications"]
+    units = [
+        {"id": item["id"], "service": service_name(item)}
+        for item in model["units"]
     ]
     backend = {
-        "backendVersion": 1,
+        "backendVersion": 2,
         "kind": "dinit",
         "library": model["platform"]["dinit"]["backendLibrary"],
         "systemRecoveryService": model["platform"]["dinit"][
             "systemRecoveryService"
         ],
         "controlSocket": model["platform"]["dinit"]["controlSocket"],
-        "applications": applications,
+        "units": units,
     }
     backend_config.write_text(
         json.dumps(backend, sort_keys=True, indent=2) + "\n", encoding="utf-8"

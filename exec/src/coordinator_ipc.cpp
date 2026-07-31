@@ -248,6 +248,7 @@ Json::Value SnapshotValue(const SystemSnapshot& snapshot) {
   value["revision"] = Json::UInt64{snapshot.revision};
   value["recovering"] = snapshot.recovering;
   value["domains"] = Json::Value{Json::arrayValue};
+  value["units"] = Json::Value{Json::arrayValue};
   value["applications"] = Json::Value{Json::arrayValue};
   value["transitions"] = Json::Value{Json::arrayValue};
   for (const auto& domain : snapshot.domains) {
@@ -260,6 +261,15 @@ Json::Value SnapshotValue(const SystemSnapshot& snapshot) {
     item["state"] = static_cast<Json::UInt>(application.state);
     value["applications"].append(std::move(item));
   }
+  for (const auto& unit : snapshot.units) {
+    Json::Value item;
+    item["id"] = Json::UInt64{unit.id.value()};
+    item["name"] = unit.name;
+    item["kind"] = static_cast<Json::UInt>(unit.kind);
+    item["bootstrap"] = unit.bootstrap;
+    item["state"] = static_cast<Json::UInt>(unit.state);
+    value["units"].append(std::move(item));
+  }
   for (const auto& transition : snapshot.transitions) {
     value["transitions"].append(TransitionValue(transition));
   }
@@ -269,8 +279,8 @@ Json::Value SnapshotValue(const SystemSnapshot& snapshot) {
 Result<SystemSnapshot> DecodeSnapshot(const Json::Value& value) {
   if (!value.isObject() || !IsUnsignedInteger(value["generation"]) ||
       !IsUnsignedInteger(value["revision"]) || !value["recovering"].isBool() ||
-      !value["domains"].isArray() || !value["applications"].isArray() ||
-      !value["transitions"].isArray()) {
+      !value["domains"].isArray() || !value["units"].isArray() ||
+      !value["applications"].isArray() || !value["transitions"].isArray()) {
     return MakeError(ErrorCode::communication_error, "coordinator returned an invalid snapshot");
   }
   SystemSnapshot result;
@@ -294,6 +304,20 @@ Result<SystemSnapshot> DecodeSnapshot(const Json::Value& value) {
       }
       result.applications.push_back({ApplicationId{item["id"].asUInt64()}, item["name"].asString(),
                                      static_cast<ApplicationState>(item["state"].asUInt())});
+    }
+    for (const auto& item : value["units"]) {
+      if (!IsUnsignedInteger(item["id"]) || !item["name"].isString() ||
+          !IsUnsignedInteger(item["kind"]) ||
+          item["kind"].asUInt64() > static_cast<unsigned>(ExecutionUnitKind::external) ||
+          !item["bootstrap"].isBool() || !IsUnsignedInteger(item["state"]) ||
+          item["state"].asUInt64() > static_cast<unsigned>(ApplicationState::unavailable)) {
+        return MakeError(ErrorCode::communication_error,
+                         "coordinator returned an invalid execution unit");
+      }
+      result.units.push_back({ExecutionUnitId{item["id"].asUInt64()}, item["name"].asString(),
+                              static_cast<ExecutionUnitKind>(item["kind"].asUInt()),
+                              item["bootstrap"].asBool(),
+                              static_cast<ApplicationState>(item["state"].asUInt())});
     }
     for (const auto& item : value["transitions"]) {
       auto transition = DecodeTransition(item);

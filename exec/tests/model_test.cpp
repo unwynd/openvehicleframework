@@ -54,8 +54,8 @@ TEST(ExecutionModelTest, AcceptsOrthogonalDomainsAndSharedApplications) {
   ASSERT_TRUE(result) << result.error().message;
 
   const auto& model = result.value();
-  ASSERT_NE(model.FindApplication(ApplicationId{2}), nullptr);
-  EXPECT_EQ(model.FindApplication(ApplicationId{2})->name, "fusion");
+  ASSERT_NE(model.FindUnit(ApplicationId{2}), nullptr);
+  EXPECT_EQ(model.FindUnit(ApplicationId{2})->name, "fusion");
   ASSERT_NE(model.FindDomain(DomainId{2}), nullptr);
   EXPECT_EQ(model.FindDomain(DomainId{2})->name, "driving");
   ASSERT_NE(model.FindMode({DomainId{2}, ModeId{2}}), nullptr);
@@ -65,10 +65,10 @@ TEST(ExecutionModelTest, AcceptsOrthogonalDomainsAndSharedApplications) {
 TEST(ExecutionModelTest, ReportsEveryStaticErrorInOneInspection) {
   auto model = ValidModel();
   model.generation = {};
-  model.applications[0].id = {};
-  model.applications[0].name = "not a valid name";
-  model.applications[0].start_timeout = std::chrono::milliseconds::zero();
-  model.applications[1].dependencies = {ApplicationId{99}};
+  model.units[0].id = {};
+  model.units[0].name = "not a valid name";
+  model.units[0].start_timeout = std::chrono::milliseconds::zero();
+  model.units[1].dependencies = {ApplicationId{99}};
   model.domains[0].initial_mode = ModeId{99};
 
   const auto issues = InspectModel(model);
@@ -82,7 +82,7 @@ TEST(ExecutionModelTest, ReportsEveryStaticErrorInOneInspection) {
 
 TEST(ExecutionModelTest, DetectsDependencyCycles) {
   auto model = ValidModel();
-  model.applications[0].dependencies = {ApplicationId{2}};
+  model.units[0].dependencies = {ApplicationId{2}};
 
   const auto issues = InspectModel(model);
   EXPECT_TRUE(std::any_of(issues.begin(), issues.end(), [](const auto& issue) {

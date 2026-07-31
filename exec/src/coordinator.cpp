@@ -147,13 +147,17 @@ public:
       result.domains.push_back(std::move(snapshot));
     }
 
-    result.applications.reserve(model.applications.size());
-    for (const auto& application : model.applications) {
-      result.applications.push_back(
-          {application.id, application.name,
-           engine_snapshot.configuration.running_applications.contains(application.id)
-               ? ApplicationState::ready
-               : ApplicationState::stopped});
+    result.units.reserve(model.units.size());
+    result.applications.reserve(model.units.size());
+    for (const auto& application : model.units) {
+      const auto state = engine_snapshot.configuration.running_units.contains(application.id)
+                             ? ApplicationState::ready
+                             : ApplicationState::stopped;
+      result.units.push_back(
+          {application.id, application.name, application.kind, application.bootstrap, state});
+      if (application.kind == ExecutionUnitKind::managed_application) {
+        result.applications.push_back({application.id, application.name, state});
+      }
     }
     return result;
   }
@@ -229,10 +233,10 @@ public:
     const auto id = accepted.value().id;
     projected_.committed_modes[domain] = mode;
     for (const auto application : accepted.value().plan.stop) {
-      projected_.running_applications.erase(application);
+      projected_.running_units.erase(application);
     }
     for (const auto application : accepted.value().plan.start) {
-      projected_.running_applications.insert(application);
+      projected_.running_units.insert(application);
     }
     queue_.push_back(std::move(accepted).value());
     active_domains_[domain] = id;

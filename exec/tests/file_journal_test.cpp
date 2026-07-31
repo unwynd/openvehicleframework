@@ -229,7 +229,7 @@ TEST(FileJournalTest, RestoresCommittedConfigurationAndTransitionSequence) {
   ASSERT_TRUE(restored);
   auto snapshot = restored.value()->Snapshot();
   EXPECT_EQ(snapshot.configuration.committed_modes.at(DomainId{1}), ModeId{2});
-  EXPECT_TRUE(snapshot.configuration.running_applications.contains(ApplicationId{2}));
+  EXPECT_TRUE(snapshot.configuration.running_units.contains(ApplicationId{2}));
   EXPECT_EQ(backend_observer->operations, std::vector<std::string>({"start:2"}));
 
   auto completed =
@@ -277,7 +277,7 @@ TEST(FileJournalTest, PreservesObservedStateAndFinalizesInterruptedTransition) {
   ASSERT_TRUE(restored);
   const auto snapshot = restored.value()->Snapshot();
   EXPECT_EQ(snapshot.configuration.committed_modes.at(DomainId{1}), ModeId{1});
-  EXPECT_TRUE(snapshot.configuration.running_applications.contains(ApplicationId{2}));
+  EXPECT_TRUE(snapshot.configuration.running_units.contains(ApplicationId{2}));
   auto transition = restored.value()->GetTransition(TransitionId{5});
   ASSERT_TRUE(transition);
   EXPECT_EQ(transition.value().phase, TransitionPhase::failed);
@@ -311,7 +311,7 @@ TEST(FileJournalTest, RestoresFallbackCommitAndRecoveryApplicationEffects) {
   ASSERT_TRUE(restored) << restored.error().message;
   const auto snapshot = restored.value()->Snapshot();
   EXPECT_EQ(snapshot.configuration.committed_modes.at(DomainId{1}), ModeId{3});
-  EXPECT_TRUE(snapshot.configuration.running_applications.empty());
+  EXPECT_TRUE(snapshot.configuration.running_units.empty());
   EXPECT_TRUE(observer->operations.empty());
 }
 

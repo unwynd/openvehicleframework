@@ -16,11 +16,11 @@ Result<SystemConfiguration> TransitionPlanner::InitialConfiguration() const {
   for (const auto& domain : model_.value().domains) {
     configuration.committed_modes.emplace(domain.id, domain.initial_mode);
   }
-  auto required = RequiredApplications(configuration.committed_modes);
+  auto required = RequiredUnits(configuration.committed_modes);
   if (!required) {
     return required.error();
   }
-  configuration.running_applications = std::move(required).value();
+  configuration.running_units = std::move(required).value();
   return configuration;
 }
 
@@ -63,22 +63,22 @@ Result<TransitionPlan> TransitionPlanner::BuildPlan(const SystemConfiguration& c
   if (!constraints) {
     return constraints.error();
   }
-  auto required = RequiredApplications(proposed_modes);
+  auto required = RequiredUnits(proposed_modes);
   if (!required) {
     return required.error();
   }
 
-  std::unordered_set<ApplicationId> to_start;
-  std::unordered_set<ApplicationId> to_stop;
-  std::unordered_set<ApplicationId> retained;
+  std::unordered_set<ExecutionUnitId> to_start;
+  std::unordered_set<ExecutionUnitId> to_stop;
+  std::unordered_set<ExecutionUnitId> retained;
   for (const auto application : required.value()) {
-    if (current.running_applications.contains(application)) {
+    if (current.running_units.contains(application)) {
       retained.insert(application);
     } else {
       to_start.insert(application);
     }
   }
-  for (const auto application : current.running_applications) {
+  for (const auto application : current.running_units) {
     if (!required.value().contains(application)) {
       to_stop.insert(application);
     }
@@ -86,12 +86,12 @@ Result<TransitionPlan> TransitionPlanner::BuildPlan(const SystemConfiguration& c
 
   std::set<ResourceId> resources;
   for (const auto application : to_start) {
-    const auto* definition = model_.FindApplication(application);
+    const auto* definition = model_.FindUnit(application);
     resources.insert(definition->exclusive_resources.begin(),
                      definition->exclusive_resources.end());
   }
   for (const auto application : to_stop) {
-    const auto* definition = model_.FindApplication(application);
+    const auto* definition = model_.FindUnit(application);
     resources.insert(definition->exclusive_resources.begin(),
                      definition->exclusive_resources.end());
   }
@@ -120,41 +120,40 @@ Result<TransitionPlan> TransitionPlanner::BuildPlan(const SystemConfiguration& c
   return plan;
 }
 
-Result<std::vector<ApplicationId>>
-TransitionPlanner::StopDomainApplications(const SystemConfiguration& current,
-                                          DomainId domain) const {
+Result<std::vector<ExecutionUnitId>>
+TransitionPlanner::StopDomainUnits(const SystemConfiguration& current, DomainId domain) const {
   if (current.generation != model_.value().generation || model_.FindDomain(domain) == nullptr) {
     return MakeError(ErrorCode::configuration_error,
                      "cannot stop an unknown domain or model generation");
   }
   auto remaining_modes = current.committed_modes;
   remaining_modes.erase(domain);
-  std::unordered_set<ApplicationId> required;
+  std::unordered_set<ExecutionUnitId> required;
+  for (const auto& unit : model_.value().units) {
+    if (unit.bootstrap) {
+      required.insert(unit.id);
+    }
+  }
   for (const auto& [selected_domain, selected_mode] : remaining_modes) {
     const auto* mode = model_.FindMode({selected_domain, selected_mode});
     if (mode == nullptr) {
       return MakeError(ErrorCode::configuration_error,
                        "system configuration selects an undefined execution mode");
     }
-    required.insert(mode->applications.begin(), mode->applications.end());
+    required.insert(mode->units.begin(), mode->units.end());
   }
-  std::vector<ApplicationId> pending(required.begin(), required.end());
-  while (!pending.empty()) {
-    const auto application = pending.back();
-    pending.pop_back();
-    const auto* definition = model_.FindApplication(application);
-    if (definition == nullptr) {
+  for (const auto unit : required) {
+    const auto* definition = model_.FindUnit(unit);
+    if (definition == nullptr ||
+        std::any_of(
+            definition->dependencies.begin(), definition->dependencies.end(),
+            [&required](ExecutionUnitId dependency) { return !required.contains(dependency); })) {
       return MakeError(ErrorCode::configuration_error,
-                       "execution mode selects an undefined application");
-    }
-    for (const auto dependency : definition->dependencies) {
-      if (required.insert(dependency).second) {
-        pending.push_back(dependency);
-      }
+                       "remaining domain configuration omits a required execution unit");
     }
   }
-  std::unordered_set<ApplicationId> stopped;
-  for (const auto application : current.running_applications) {
+  std::unordered_set<ExecutionUnitId> stopped;
+  for (const auto application : current.running_units) {
     if (!required.contains(application)) {
       stopped.insert(application);
     }
@@ -162,9 +161,14 @@ TransitionPlanner::StopDomainApplications(const SystemConfiguration& current,
   return Order(stopped, true);
 }
 
-Result<std::unordered_set<ApplicationId>>
-TransitionPlanner::RequiredApplications(const std::unordered_map<DomainId, ModeId>& modes) const {
-  std::unordered_set<ApplicationId> required;
+Result<std::unordered_set<ExecutionUnitId>>
+TransitionPlanner::RequiredUnits(const std::unordered_map<DomainId, ModeId>& modes) const {
+  std::unordered_set<ExecutionUnitId> required;
+  for (const auto& unit : model_.value().units) {
+    if (unit.bootstrap) {
+      required.insert(unit.id);
+    }
+  }
   for (const auto& domain : model_.value().domains) {
     const auto selected = modes.find(domain.id);
     if (selected == modes.end()) {
@@ -176,21 +180,19 @@ TransitionPlanner::RequiredApplications(const std::unordered_map<DomainId, ModeI
       return MakeError(ErrorCode::configuration_error,
                        "system configuration selects an undefined execution mode");
     }
-    required.insert(mode->applications.begin(), mode->applications.end());
+    required.insert(mode->units.begin(), mode->units.end());
   }
 
-  std::vector<ApplicationId> pending(required.begin(), required.end());
-  while (!pending.empty()) {
-    const auto application = pending.back();
-    pending.pop_back();
-    const auto* definition = model_.FindApplication(application);
+  for (const auto unit : required) {
+    const auto* definition = model_.FindUnit(unit);
     if (definition == nullptr) {
       return MakeError(ErrorCode::configuration_error,
-                       "execution mode selects an undefined application");
+                       "execution mode selects an undefined execution unit");
     }
     for (const auto dependency : definition->dependencies) {
-      if (required.insert(dependency).second) {
-        pending.push_back(dependency);
+      if (!required.contains(dependency)) {
+        return MakeError(ErrorCode::invalid_transition,
+                         "target modes omit an explicit execution-unit dependency");
       }
     }
   }
@@ -221,17 +223,16 @@ TransitionPlanner::ValidateConstraints(const std::unordered_map<DomainId, ModeId
   return {};
 }
 
-std::vector<ApplicationId>
-TransitionPlanner::Order(const std::unordered_set<ApplicationId>& applications,
-                         bool reverse) const {
-  std::vector<ApplicationId> ordered;
-  std::unordered_set<ApplicationId> visited;
-  std::function<void(ApplicationId)> visit = [&](ApplicationId application) {
-    if (!applications.contains(application) || !visited.insert(application).second) {
+std::vector<ExecutionUnitId>
+TransitionPlanner::Order(const std::unordered_set<ExecutionUnitId>& units, bool reverse) const {
+  std::vector<ExecutionUnitId> ordered;
+  std::unordered_set<ExecutionUnitId> visited;
+  std::function<void(ExecutionUnitId)> visit = [&](ExecutionUnitId application) {
+    if (!units.contains(application) || !visited.insert(application).second) {
       return;
     }
-    const auto* definition = model_.FindApplication(application);
-    std::vector<ApplicationId> dependencies = definition->dependencies;
+    const auto* definition = model_.FindUnit(application);
+    std::vector<ExecutionUnitId> dependencies = definition->dependencies;
     std::sort(dependencies.begin(), dependencies.end());
     for (const auto dependency : dependencies) {
       visit(dependency);
@@ -239,7 +240,7 @@ TransitionPlanner::Order(const std::unordered_set<ApplicationId>& applications,
     ordered.push_back(application);
   };
 
-  std::vector<ApplicationId> stable(applications.begin(), applications.end());
+  std::vector<ExecutionUnitId> stable(units.begin(), units.end());
   std::sort(stable.begin(), stable.end());
   for (const auto application : stable) {
     visit(application);

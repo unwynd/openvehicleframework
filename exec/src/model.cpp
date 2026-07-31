@@ -39,8 +39,8 @@ void InspectIdentity(Id id, const std::string& name, const std::string& path,
   }
 }
 
-std::string ApplicationPath(const ApplicationDefinition& application) {
-  return "applications[" + std::to_string(application.id.value()) + "]";
+std::string UnitPath(const ApplicationDefinition& unit) {
+  return "units[" + std::to_string(unit.id.value()) + "]";
 }
 
 std::string DomainPath(const DomainDefinition& domain) {
@@ -80,14 +80,14 @@ void InspectDependencyCycles(
             }
             message << ' ' << dependency.value();
             issues.push_back(
-                {ModelIssueCode::dependency_cycle, ApplicationPath(application), message.str()});
+                {ModelIssueCode::dependency_cycle, UnitPath(application), message.str()});
           }
         }
         stack.pop_back();
         visits[application.id] = Visit::complete;
       };
 
-  for (const auto& application : model.applications) {
+  for (const auto& application : model.units) {
     if (visits[application.id] == Visit::unseen) {
       visit(application);
     }
@@ -192,6 +192,22 @@ std::string_view ToString(StopReason value) noexcept {
   return "unknown";
 }
 
+std::string_view ToString(ExecutionUnitKind value) noexcept {
+  switch (value) {
+  case ExecutionUnitKind::managed_application:
+    return "managed_application";
+  case ExecutionUnitKind::service:
+    return "service";
+  case ExecutionUnitKind::one_shot:
+    return "one_shot";
+  case ExecutionUnitKind::mount:
+    return "mount";
+  case ExecutionUnitKind::external:
+    return "external";
+  }
+  return "unknown";
+}
+
 std::vector<ModelIssue> InspectModel(const ExecutionModel& model) {
   std::vector<ModelIssue> issues;
   if (!model.generation.valid()) {
@@ -202,8 +218,8 @@ std::vector<ModelIssue> InspectModel(const ExecutionModel& model) {
   std::unordered_set<ApplicationId> application_ids;
   std::unordered_set<std::string> application_names;
   std::unordered_map<ApplicationId, const ApplicationDefinition*> applications;
-  for (const auto& application : model.applications) {
-    const auto path = ApplicationPath(application);
+  for (const auto& application : model.units) {
+    const auto path = UnitPath(application);
     InspectIdentity(application.id, application.name, path, application_ids, application_names,
                     issues);
     applications.emplace(application.id, &application);
@@ -216,6 +232,24 @@ std::vector<ModelIssue> InspectModel(const ExecutionModel& model) {
       issues.push_back({ModelIssueCode::invalid_retry_policy, path + ".retry",
                         "retry attempts must be 1-100 and delay must not be negative"});
     }
+    const bool valid_readiness =
+        (application.kind == ExecutionUnitKind::managed_application &&
+         (application.readiness == ReadinessPolicy::lifecycle_channel ||
+          application.readiness == ReadinessPolicy::process_started)) ||
+        (application.kind == ExecutionUnitKind::service &&
+         (application.readiness == ReadinessPolicy::process_started ||
+          application.readiness == ReadinessPolicy::supervisor_notification)) ||
+        (application.kind == ExecutionUnitKind::one_shot &&
+         application.readiness == ReadinessPolicy::successful_exit) ||
+        (application.kind == ExecutionUnitKind::mount &&
+         application.readiness == ReadinessPolicy::mount_present) ||
+        (application.kind == ExecutionUnitKind::external &&
+         (application.readiness == ReadinessPolicy::process_started ||
+          application.readiness == ReadinessPolicy::supervisor_notification));
+    if (!valid_readiness) {
+      issues.push_back({ModelIssueCode::invalid_readiness_policy, path + ".readiness",
+                        "readiness policy is incompatible with the execution unit kind"});
+    }
     std::unordered_set<ApplicationId> dependencies;
     for (const auto dependency : application.dependencies) {
       if (!dependencies.insert(dependency).second) {
@@ -225,12 +259,12 @@ std::vector<ModelIssue> InspectModel(const ExecutionModel& model) {
     }
   }
 
-  for (const auto& application : model.applications) {
+  for (const auto& application : model.units) {
     for (const auto dependency : application.dependencies) {
       if (applications.find(dependency) == applications.end()) {
         issues.push_back({ModelIssueCode::unknown_dependency,
-                          ApplicationPath(application) + ".dependencies",
-                          "dependency does not identify a managed application"});
+                          UnitPath(application) + ".dependencies",
+                          "dependency does not identify an execution unit"});
       }
     }
   }
@@ -239,6 +273,7 @@ std::vector<ModelIssue> InspectModel(const ExecutionModel& model) {
   std::unordered_set<DomainId> domain_ids;
   std::unordered_set<std::string> domain_names;
   std::unordered_map<ModeRef, const ModeDefinition*> modes;
+  std::unordered_set<ApplicationId> assigned_units;
   for (const auto& domain : model.domains) {
     const auto domain_path = DomainPath(domain);
     InspectIdentity(domain.id, domain.name, domain_path, domain_ids, domain_names, issues);
@@ -249,14 +284,15 @@ std::vector<ModelIssue> InspectModel(const ExecutionModel& model) {
       InspectIdentity(mode.id, mode.name, mode_path, mode_ids, mode_names, issues);
       modes.emplace(ModeRef{domain.id, mode.id}, &mode);
       std::unordered_set<ApplicationId> selected;
-      for (const auto application : mode.applications) {
+      for (const auto application : mode.units) {
         if (applications.find(application) == applications.end()) {
-          issues.push_back({ModelIssueCode::unknown_application, mode_path + ".applications",
-                            "mode selects an unknown application"});
+          issues.push_back({ModelIssueCode::unknown_application, mode_path + ".units",
+                            "mode selects an unknown execution unit"});
         } else if (!selected.insert(application).second) {
-          issues.push_back({ModelIssueCode::duplicate_identifier, mode_path + ".applications",
-                            "application is selected more than once"});
+          issues.push_back({ModelIssueCode::duplicate_identifier, mode_path + ".units",
+                            "execution unit is selected more than once"});
         }
+        assigned_units.insert(application);
       }
     }
     if (mode_ids.find(domain.initial_mode) == mode_ids.end()) {
@@ -272,6 +308,26 @@ std::vector<ModelIssue> InspectModel(const ExecutionModel& model) {
       issues.push_back({ModelIssueCode::invalid_fallback_mode,
                         domain_path + ".recovery.fallback_mode",
                         "fallback mode is not defined by this domain"});
+    }
+  }
+
+  for (const auto& unit : model.units) {
+    const bool assigned = assigned_units.contains(unit.id);
+    if (unit.bootstrap && assigned) {
+      issues.push_back({ModelIssueCode::invalid_unit_membership, UnitPath(unit) + ".bootstrap",
+                        "bootstrap unit must not be assigned to an execution mode"});
+    } else if (!unit.bootstrap && !assigned) {
+      issues.push_back({ModelIssueCode::invalid_unit_membership, UnitPath(unit),
+                        "non-bootstrap unit must have explicit mode membership"});
+    }
+    if (unit.bootstrap && std::any_of(unit.dependencies.begin(), unit.dependencies.end(),
+                                      [&applications](ApplicationId dependency) {
+                                        const auto found = applications.find(dependency);
+                                        return found != applications.end() &&
+                                               !found->second->bootstrap;
+                                      })) {
+      issues.push_back({ModelIssueCode::invalid_unit_membership, UnitPath(unit) + ".dependencies",
+                        "bootstrap unit cannot depend on a mode-controlled unit"});
     }
   }
 
@@ -315,11 +371,11 @@ ValidatedModel& ValidatedModel::operator=(ValidatedModel&& other) noexcept {
 }
 
 void ValidatedModel::BuildIndex() {
-  applications_.clear();
+  units_.clear();
   domains_.clear();
   modes_.clear();
-  for (std::size_t index = 0; index < model_.applications.size(); ++index) {
-    applications_.emplace(model_.applications[index].id, index);
+  for (std::size_t index = 0; index < model_.units.size(); ++index) {
+    units_.emplace(model_.units[index].id, index);
   }
   for (std::size_t index = 0; index < model_.domains.size(); ++index) {
     const auto& domain = model_.domains[index];
@@ -330,9 +386,13 @@ void ValidatedModel::BuildIndex() {
   }
 }
 
+const ExecutionUnitDefinition* ValidatedModel::FindUnit(ExecutionUnitId id) const noexcept {
+  const auto found = units_.find(id);
+  return found == units_.end() ? nullptr : &model_.units[found->second];
+}
+
 const ApplicationDefinition* ValidatedModel::FindApplication(ApplicationId id) const noexcept {
-  const auto found = applications_.find(id);
-  return found == applications_.end() ? nullptr : &model_.applications[found->second];
+  return FindUnit(id);
 }
 
 const DomainDefinition* ValidatedModel::FindDomain(DomainId id) const noexcept {

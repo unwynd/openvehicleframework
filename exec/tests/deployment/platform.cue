@@ -9,6 +9,9 @@ platform: {
 		controlSocket:        "/tmp/ovf-execd-e2e/run/dinit.sock"
 		servicesDirectory:    "/tmp/ovf-execd-e2e/daemon_deployment.dinit"
 		logBufferSize:        65536
+		mountExecutable:      "/bin/mount"
+		unmountExecutable:    "/bin/umount"
+		nativeServices:       []
 	}
 	persistence: {
 		journal:           "/tmp/ovf-execd-e2e/state/journal.v1"

@@ -20,7 +20,7 @@ application: {
 		},
 	]
 	execution: {
-		readiness: "required"
+		readiness: "lifecycle_channel"
 		startup: timeoutMs: 1000
 		shutdown: timeoutMs: 1000
 		restart: {

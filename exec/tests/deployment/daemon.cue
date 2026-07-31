@@ -12,7 +12,7 @@ application: {
 		transport: "ipc"
 	}]
 	execution: {
-		readiness: "required"
+		readiness: "lifecycle_channel"
 		startup: timeoutMs: 2000
 		shutdown: timeoutMs: 2000
 		restart: {
@@ -25,10 +25,30 @@ application: {
 allocation: {
 	schemaVersion: 1
 	generation:    17
-	applications: managed_test: {
+	units: managed_test: {
 		id:         1
+		name:       "managed_test"
+		kind:       "managed_application"
+		bootstrap:  false
 		executable: "/tmp/ovf-execd-e2e/bin/managed-test"
 		arguments:  []
+		dependencies:       ["system_test"]
+		exclusiveResources: []
+	}
+	units: system_test: {
+		id:         2
+		name:       "system_test"
+		kind:       "service"
+		bootstrap:  false
+		executable: "/tmp/ovf-execd-e2e/bin/system-test"
+		arguments:  []
+		readiness:  "supervisor_notification"
+		startTimeoutMs: 2000
+		stopTimeoutMs:  2000
+		retry: {
+			maxAttempts: 2
+			delayMs:     10
+		}
 		dependencies:       []
 		exclusiveResources: []
 	}
@@ -44,12 +64,12 @@ allocation: {
 		modes: [{
 			id:           1
 			name:         "stopped"
-			applications: []
+			units:       []
 			constraints:  []
 		}, {
 			id:           2
 			name:         "running"
-			applications: ["managed_test"]
+			units:       ["system_test", "managed_test"]
 			constraints:  []
 		}]
 	}]

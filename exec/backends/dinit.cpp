@@ -415,9 +415,8 @@ Result<DinitConfig> ParseDinitConfig(std::string_view configuration) {
   Json::Value root;
   std::string errors;
   if (!Json::parseFromStream(builder, input, &root, &errors) || !root.isObject() ||
-      !root["backendVersion"].isIntegral() || root["backendVersion"].asUInt64() != 1U ||
-      root["kind"] != "dinit" || !root["controlSocket"].isString() ||
-      !root["applications"].isArray()) {
+      !root["backendVersion"].isIntegral() || root["backendVersion"].asUInt64() != 2U ||
+      root["kind"] != "dinit" || !root["controlSocket"].isString() || !root["units"].isArray()) {
     return MakeError(ErrorCode::configuration_error,
                      "generated dinit backend configuration is invalid");
   }
@@ -428,18 +427,18 @@ Result<DinitConfig> ParseDinitConfig(std::string_view configuration) {
   }
   result.system_recovery_service = root["systemRecoveryService"].asString();
   try {
-    for (const auto& entry : root["applications"]) {
+    for (const auto& entry : root["units"]) {
       if (!entry.isObject() || !entry["id"].isIntegral() ||
           (entry["id"].isInt64() && entry["id"].asInt64() < 0) || entry["id"].asUInt64() == 0U ||
           !entry["service"].isString()) {
         return MakeError(ErrorCode::configuration_error,
-                         "generated dinit application mapping is invalid");
+                         "generated dinit execution-unit mapping is invalid");
       }
       if (!result.services
                .emplace(ApplicationId{entry["id"].asUInt64()}, entry["service"].asString())
                .second) {
         return MakeError(ErrorCode::configuration_error,
-                         "generated dinit application mapping is duplicated");
+                         "generated dinit execution-unit mapping is duplicated");
       }
     }
   } catch (...) {

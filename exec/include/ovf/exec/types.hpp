@@ -34,6 +34,7 @@ struct ResourceIdTag;
 struct TransitionIdTag;
 
 using ApplicationId = Identifier<ApplicationIdTag>;
+using ExecutionUnitId = ApplicationId;
 using DomainId = Identifier<DomainIdTag>;
 using ModeId = Identifier<ModeIdTag>;
 using ResourceId = Identifier<ResourceIdTag>;
@@ -63,6 +64,8 @@ enum class ApplicationState : std::uint8_t {
   killed,
   unavailable
 };
+
+using ExecutionUnitState = ApplicationState;
 
 enum class DomainStatus : std::uint8_t { unknown, stable, transitioning, degraded, recovering };
 
@@ -105,7 +108,15 @@ enum class FailureAction : std::uint8_t {
   request_system_recovery
 };
 
-enum class ReadinessPolicy : std::uint8_t { required, process_started };
+enum class ReadinessPolicy : std::uint8_t {
+  lifecycle_channel,
+  process_started,
+  supervisor_notification,
+  successful_exit,
+  socket_available,
+  mount_present,
+  required = lifecycle_channel
+};
 
 [[nodiscard]] std::string_view ToString(ApplicationState value) noexcept;
 [[nodiscard]] std::string_view ToString(DomainStatus value) noexcept;

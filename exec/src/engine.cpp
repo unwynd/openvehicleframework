@@ -99,9 +99,8 @@ ExecutionEngine::Create(ValidatedModel model, std::unique_ptr<ProcessBackend> ba
                          event.transition.id.value());
       }
       const auto valid_applications = [&model](const std::vector<ApplicationId>& applications) {
-        return std::all_of(applications.begin(), applications.end(), [&model](ApplicationId id) {
-          return model.FindApplication(id) != nullptr;
-        });
+        return std::all_of(applications.begin(), applications.end(),
+                           [&model](ApplicationId id) { return model.FindUnit(id) != nullptr; });
       };
       const auto valid_domains = [&model](const std::vector<DomainId>& domains) {
         return std::all_of(domains.begin(), domains.end(),
@@ -126,20 +125,20 @@ ExecutionEngine::Create(ValidatedModel model, std::unique_ptr<ProcessBackend> ba
         initial.value().committed_modes[event.transition.domain] = *failure.recovered_mode;
       }
       for (const auto application : failure.recovery_stopped_applications) {
-        if (model.FindApplication(application) == nullptr) {
+        if (model.FindUnit(application) == nullptr) {
           return MakeError(ErrorCode::persistence_error,
                            "journal recovery stop references an unknown application",
                            event.transition.id.value());
         }
-        initial.value().running_applications.erase(application);
+        initial.value().running_units.erase(application);
       }
       for (const auto application : failure.recovery_started_applications) {
-        if (model.FindApplication(application) == nullptr) {
+        if (model.FindUnit(application) == nullptr) {
           return MakeError(ErrorCode::persistence_error,
                            "journal recovery start references an unknown application",
                            event.transition.id.value());
         }
-        initial.value().running_applications.insert(application);
+        initial.value().running_units.insert(application);
       }
     }
     if (event.transition.phase == TransitionPhase::succeeded) {
@@ -151,17 +150,17 @@ ExecutionEngine::Create(ValidatedModel model, std::unique_ptr<ProcessBackend> ba
       }
       initial.value().committed_modes[plan->second.domain] = plan->second.target_mode;
       for (const auto application : plan->second.stop) {
-        initial.value().running_applications.erase(application);
+        initial.value().running_units.erase(application);
       }
       for (const auto application : plan->second.start) {
-        initial.value().running_applications.insert(application);
+        initial.value().running_units.insert(application);
       }
     }
   }
 
   std::unordered_set<ApplicationId> observed_running;
   const bool recovering = !replayed.value().empty();
-  for (const auto& application : model.value().applications) {
+  for (const auto& application : model.value().units) {
     auto observation = backend->Inspect(application.id);
     if (!observation) {
       return observation.error();
@@ -184,15 +183,15 @@ ExecutionEngine::Create(ValidatedModel model, std::unique_ptr<ProcessBackend> ba
   }
 
   if (!recovering) {
-    for (const auto application : initial.value().running_applications) {
+    for (const auto application : initial.value().running_units) {
       if (!observed_running.contains(application)) {
         return MakeError(ErrorCode::backend_unavailable,
                          "initially required application is not ready", application.value());
       }
     }
   } else if (interrupted.empty()) {
-    for (const auto& application : model.value().applications) {
-      const bool expected = initial.value().running_applications.contains(application.id);
+    for (const auto& application : model.value().units) {
+      const bool expected = initial.value().running_units.contains(application.id);
       const bool observed = observed_running.contains(application.id);
       if (expected == observed) {
         continue;
@@ -216,7 +215,7 @@ ExecutionEngine::Create(ValidatedModel model, std::unique_ptr<ProcessBackend> ba
       }
     }
   } else {
-    initial.value().running_applications = observed_running;
+    initial.value().running_units = observed_running;
   }
   auto engine = std::unique_ptr<ExecutionEngine>(new ExecutionEngine(
       std::move(model), std::move(backend), std::move(journal), std::move(initial).value()));
@@ -317,8 +316,8 @@ Result<TransitionSnapshot> ExecutionEngine::Execute(AcceptedTransition accepted)
   Result<void> recorded;
   TransitionResources resources;
   resources.domains = plan.guarded_domains;
-  resources.applications = plan.stop;
-  resources.applications.insert(resources.applications.end(), plan.start.begin(), plan.start.end());
+  resources.units = plan.stop;
+  resources.units.insert(resources.units.end(), plan.start.begin(), plan.start.end());
   resources.exclusive_resources = plan.affected_resources;
   auto lease = scheduler_.Acquire(transition.id, std::move(resources), deadline);
   if (!lease) {
@@ -350,7 +349,7 @@ Result<TransitionSnapshot> ExecutionEngine::Execute(AcceptedTransition accepted)
     if (IsCancelled(transition.id)) {
       return Fail(transition, MakeError(ErrorCode::cancelled, "transition was cancelled"));
     }
-    const auto* definition = model_.FindApplication(application);
+    const auto* definition = model_.FindUnit(application);
     const auto operation_deadline =
         std::min(deadline, std::chrono::steady_clock::now() + definition->stop_timeout);
     auto stopped = backend_->Stop(application, StopReason::mode_change, operation_deadline);
@@ -361,7 +360,7 @@ Result<TransitionSnapshot> ExecutionEngine::Execute(AcceptedTransition accepted)
       return Recover(transition, error, application, stopped ? stopped.value() : BackendEvidence{});
     }
     std::lock_guard lock(mutex_);
-    configuration_.running_applications.erase(application);
+    configuration_.running_units.erase(application);
   }
 
   if (!plan.start.empty()) {
@@ -371,7 +370,7 @@ Result<TransitionSnapshot> ExecutionEngine::Execute(AcceptedTransition accepted)
     }
     const bool requires_readiness =
         std::any_of(plan.start.begin(), plan.start.end(), [this](ApplicationId application) {
-          return model_.FindApplication(application)->readiness == ReadinessPolicy::required;
+          return model_.FindUnit(application)->readiness != ReadinessPolicy::process_started;
         });
     if (requires_readiness) {
       recorded = Record(transition, TransitionPhase::awaiting_readiness);
@@ -384,7 +383,7 @@ Result<TransitionSnapshot> ExecutionEngine::Execute(AcceptedTransition accepted)
     if (IsCancelled(transition.id)) {
       return Fail(transition, MakeError(ErrorCode::cancelled, "transition was cancelled"));
     }
-    const auto* definition = model_.FindApplication(application);
+    const auto* definition = model_.FindUnit(application);
     BackendEvidence last_evidence;
     Error last_error =
         MakeError(ErrorCode::backend_error, "application did not reach its required state");
@@ -400,7 +399,7 @@ Result<TransitionSnapshot> ExecutionEngine::Execute(AcceptedTransition accepted)
       auto started = backend_->Start(application, operation_deadline);
       if (started) {
         last_evidence = started.value();
-        const bool required_state = definition->readiness == ReadinessPolicy::required
+        const bool required_state = definition->readiness != ReadinessPolicy::process_started
                                         ? started.value().state == ApplicationState::ready
                                         : started.value().state == ApplicationState::starting ||
                                               started.value().state == ApplicationState::ready;
@@ -436,7 +435,7 @@ Result<TransitionSnapshot> ExecutionEngine::Execute(AcceptedTransition accepted)
       return Recover(transition, std::move(last_error), application, std::move(last_evidence));
     }
     std::lock_guard lock(mutex_);
-    configuration_.running_applications.insert(application);
+    configuration_.running_units.insert(application);
   }
 
   recorded = Record(transition, TransitionPhase::committing);
@@ -529,7 +528,7 @@ Result<void> ExecutionEngine::Record(TransitionSnapshot& transition,
 Result<void> ExecutionEngine::ApplyRecoveryPlan(const TransitionPlan& plan, Deadline deadline,
                                                 TransitionFailure& failure) noexcept {
   for (const auto application : plan.stop) {
-    const auto* definition = model_.FindApplication(application);
+    const auto* definition = model_.FindUnit(application);
     const auto operation_deadline =
         std::min(deadline, std::chrono::steady_clock::now() + definition->stop_timeout);
     auto stopped = backend_->Stop(application, StopReason::recovery, operation_deadline);
@@ -549,11 +548,11 @@ Result<void> ExecutionEngine::ApplyRecoveryPlan(const TransitionPlan& plan, Dead
     }
     {
       std::lock_guard lock(mutex_);
-      configuration_.running_applications.erase(application);
+      configuration_.running_units.erase(application);
     }
   }
   for (const auto application : plan.start) {
-    const auto* definition = model_.FindApplication(application);
+    const auto* definition = model_.FindUnit(application);
     bool ready = false;
     for (std::uint32_t attempt = 1U; attempt <= definition->retry.max_attempts; ++attempt) {
       const auto now = std::chrono::steady_clock::now();
@@ -604,7 +603,7 @@ Result<void> ExecutionEngine::ApplyRecoveryPlan(const TransitionPlan& plan, Dead
     }
     {
       std::lock_guard lock(mutex_);
-      configuration_.running_applications.insert(application);
+      configuration_.running_units.insert(application);
     }
   }
   return {};
@@ -661,7 +660,7 @@ Result<TransitionSnapshot> ExecutionEngine::Recover(TransitionSnapshot& transiti
       std::lock_guard lock(mutex_);
       configuration = configuration_;
     }
-    auto stopped = planner_.StopDomainApplications(configuration, domain->id);
+    auto stopped = planner_.StopDomainUnits(configuration, domain->id);
     if (!stopped) {
       recovered = stopped.error();
     } else {

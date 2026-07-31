@@ -18,7 +18,17 @@ struct RetryPolicy final {
   std::chrono::milliseconds delay{};
 };
 
-struct ApplicationDefinition final {
+enum class ExecutionUnitKind : std::uint8_t {
+  managed_application,
+  service,
+  one_shot,
+  mount,
+  external
+};
+
+[[nodiscard]] std::string_view ToString(ExecutionUnitKind value) noexcept;
+
+struct ExecutionUnitDefinition final {
   ApplicationId id;
   std::string name;
   ReadinessPolicy readiness{ReadinessPolicy::required};
@@ -27,7 +37,11 @@ struct ApplicationDefinition final {
   RetryPolicy retry;
   std::vector<ApplicationId> dependencies;
   std::vector<ResourceId> exclusive_resources;
+  ExecutionUnitKind kind{ExecutionUnitKind::managed_application};
+  bool bootstrap{};
 };
+
+using ApplicationDefinition = ExecutionUnitDefinition;
 
 enum class ConstraintKind : std::uint8_t { requires_mode, excludes_mode };
 
@@ -39,7 +53,7 @@ struct ModeConstraint final {
 struct ModeDefinition final {
   ModeId id;
   std::string name;
-  std::vector<ApplicationId> applications;
+  std::vector<ExecutionUnitId> units;
   std::vector<ModeConstraint> constraints;
 };
 
@@ -60,7 +74,7 @@ struct DomainDefinition final {
 
 struct ExecutionModel final {
   ModelGeneration generation;
-  std::vector<ApplicationDefinition> applications;
+  std::vector<ExecutionUnitDefinition> units;
   std::vector<DomainDefinition> domains;
 };
 
@@ -72,6 +86,8 @@ enum class ModelIssueCode : std::uint16_t {
   duplicate_name,
   invalid_timeout,
   invalid_retry_policy,
+  invalid_readiness_policy,
+  invalid_unit_membership,
   unknown_application,
   unknown_dependency,
   dependency_cycle,
@@ -96,6 +112,7 @@ public:
   ValidatedModel& operator=(const ValidatedModel&) = delete;
 
   [[nodiscard]] const ExecutionModel& value() const noexcept { return model_; }
+  [[nodiscard]] const ExecutionUnitDefinition* FindUnit(ExecutionUnitId id) const noexcept;
   [[nodiscard]] const ApplicationDefinition* FindApplication(ApplicationId id) const noexcept;
   [[nodiscard]] const DomainDefinition* FindDomain(DomainId id) const noexcept;
   [[nodiscard]] const ModeDefinition* FindMode(ModeRef mode) const noexcept;
@@ -106,7 +123,7 @@ private:
   void BuildIndex();
 
   ExecutionModel model_;
-  std::unordered_map<ApplicationId, std::size_t> applications_;
+  std::unordered_map<ExecutionUnitId, std::size_t> units_;
   std::unordered_map<DomainId, std::size_t> domains_;
   std::unordered_map<ModeRef, const ModeDefinition*> modes_;
 };

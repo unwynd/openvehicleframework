@@ -9,6 +9,9 @@ platform: {
 		controlSocket:     "/run/ovf/exec/dinit.sock"
 		servicesDirectory: "/etc/dinit.d"
 		logBufferSize:     65536
+		mountExecutable:   "/bin/mount"
+		unmountExecutable: "/bin/umount"
+		nativeServices:    []
 	}
 	persistence: {
 		journal:           "/var/lib/ovf/exec/journal.v1"

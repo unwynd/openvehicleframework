@@ -13,7 +13,7 @@ namespace ovf::exec::detail {
 
 struct TransitionResources final {
   std::vector<DomainId> domains;
-  std::vector<ApplicationId> applications;
+  std::vector<ExecutionUnitId> units;
   std::vector<ResourceId> exclusive_resources;
 };
 

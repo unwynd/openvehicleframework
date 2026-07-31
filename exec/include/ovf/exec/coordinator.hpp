@@ -44,6 +44,14 @@ struct ApplicationSnapshot final {
   ApplicationState state{ApplicationState::unknown};
 };
 
+struct ExecutionUnitSnapshot final {
+  ExecutionUnitId id;
+  std::string name;
+  ExecutionUnitKind kind{ExecutionUnitKind::managed_application};
+  bool bootstrap{};
+  ExecutionUnitState state{ExecutionUnitState::unknown};
+};
+
 struct TransitionFailureSnapshot final {
   Error error;
   std::optional<ApplicationId> application;
@@ -75,6 +83,7 @@ struct SystemSnapshot final {
   std::uint64_t revision{};
   bool recovering{};
   std::vector<ExecutionDomain> domains;
+  std::vector<ExecutionUnitSnapshot> units;
   std::vector<ApplicationSnapshot> applications;
   std::vector<TransitionSnapshot> transitions;
 };

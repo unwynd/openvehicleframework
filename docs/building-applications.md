@@ -121,11 +121,19 @@ C++ facades, and native mapping strings are build outputs. They are not authored
 or committed.
 
 System integration composes `*_execution_deployment` application targets with
-an execution allocation target. The allocation assigns runtime IDs,
-installation paths, dependencies, exclusive resources, and domain/mode
-membership. Execution-platform CUE supplies supervisor, persistence, and
-coordinator policy. Symbolic application names are resolved to stable numeric
-runtime references only in generated execution IR.
+an execution allocation target. The allocation defines one typed execution
+unit graph containing managed applications, external services, one-shot
+operations, mounts, and native supervisor services. It assigns runtime IDs,
+installation paths, dependencies, exclusive resources, bootstrap status, and
+domain/mode membership. Execution-platform CUE supplies supervisor,
+persistence, coordinator, and typed helper policy. Symbolic unit names are
+resolved to stable numeric runtime references only in generated execution IR.
+
+Every non-bootstrap unit has explicit mode membership. Bootstrap units are
+kept outside modes, may depend only on other bootstrap units, and are generated
+as dependencies of the supervisor boot target. Generated dinit descriptions
+repeat the validated hard dependency edges; startup is topological and
+shutdown is reverse-topological while shared units remain retained.
 
 ## Public lower-level rules
 

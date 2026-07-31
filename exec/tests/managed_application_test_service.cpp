@@ -3,8 +3,14 @@
 #include "ovf/exec/application.hpp"
 
 #include <chrono>
+#include <fstream>
+
+#include <unistd.h>
 
 int main() {
+  if (::access("/tmp/ovf-execd-e2e/state/system.started", F_OK) != 0) {
+    return 4;
+  }
   auto application = ovf::exec::Application::Create(
       {.expected_id = ovf::exec::ApplicationId{1}, .expected_name = "ovf-app-1"});
   if (!application) {
@@ -15,5 +21,9 @@ int main() {
     return 2;
   }
   auto stopped = application.value().WaitForStop(ovf::exec::Deadline::max());
-  return stopped ? 0 : 3;
+  if (!stopped) {
+    return 3;
+  }
+  std::ofstream marker{"/tmp/ovf-execd-e2e/state/managed.stopped", std::ios::trunc};
+  return marker ? 0 : 5;
 }

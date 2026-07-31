@@ -12,7 +12,7 @@ application: {
 		transport: "network"
 	}]
 	execution: {
-		readiness: "required"
+		readiness: "lifecycle_channel"
 		startup: timeoutMs: 5000
 		shutdown: timeoutMs: 3000
 		restart: {

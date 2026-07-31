@@ -202,6 +202,16 @@ def compile_execution_deployment(args: argparse.Namespace) -> int:
                 f"{allocation_export.stderr.strip()}"
             )
         allocation = json.loads(allocation_export.stdout)
+        mismatched_unit_names = sorted(
+            name
+            for name, unit in allocation.get("units", {}).items()
+            if unit.get("name") != name
+        )
+        if mismatched_unit_names:
+            raise ValueError(
+                "execution-unit allocation keys must match their names: "
+                + ", ".join(mismatched_unit_names)
+            )
         fragment_names = [application.get("name") for application in applications]
         if any(not isinstance(name, str) or not name for name in fragment_names):
             raise ValueError(
@@ -219,7 +229,11 @@ def compile_execution_deployment(args: argparse.Namespace) -> int:
                 "duplicate application deployment fragments: "
                 + ", ".join(duplicate_names)
             )
-        allocated_names = set(allocation.get("applications", {}))
+        allocated_names = {
+            name
+            for name, unit in allocation.get("units", {}).items()
+            if unit.get("kind") == "managed_application"
+        }
         supplied_names = set(fragment_names)
         if allocated_names != supplied_names:
             missing = sorted(allocated_names - supplied_names)

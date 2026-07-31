@@ -14,12 +14,30 @@ string SymbolicName
 @length(min: 1, max: 4096)
 string AbsolutePath
 
+@length(max: 4096)
+string OptionalAbsolutePath
+
+@length(max: 128)
+string OptionalSymbolicName
+
 @length(max: 256)
 string Argument
 
 enum ReadinessPolicy {
-    REQUIRED = "required"
+    LIFECYCLE_CHANNEL = "lifecycle_channel"
     PROCESS_STARTED = "process_started"
+    SUPERVISOR_NOTIFICATION = "supervisor_notification"
+    SUCCESSFUL_EXIT = "successful_exit"
+    SOCKET_AVAILABLE = "socket_available"
+    MOUNT_PRESENT = "mount_present"
+}
+
+enum ExecutionUnitKind {
+    MANAGED_APPLICATION = "managed_application"
+    SERVICE = "service"
+    ONE_SHOT = "one_shot"
+    MOUNT = "mount"
+    EXTERNAL = "external"
 }
 
 enum ReplacementPolicy {
@@ -52,6 +70,10 @@ list Arguments {
     member: Argument
 }
 
+list SymbolicNames {
+    member: SymbolicName
+}
+
 structure RetryPolicy {
     @required
     maxAttempts: Integer
@@ -60,7 +82,7 @@ structure RetryPolicy {
     delayMs: Long
 }
 
-structure Application {
+structure ExecutionUnit {
     @required
     id: StableId
 
@@ -68,10 +90,25 @@ structure Application {
     name: SymbolicName
 
     @required
-    executable: AbsolutePath
+    kind: ExecutionUnitKind
+
+    @required
+    bootstrap: Boolean
+
+    @required
+    executable: OptionalAbsolutePath
 
     @required
     arguments: Arguments
+
+    @required
+    nativeService: OptionalSymbolicName
+
+    @required
+    stopExecutable: OptionalAbsolutePath
+
+    @required
+    stopArguments: Arguments
 
     @required
     readiness: ReadinessPolicy
@@ -120,7 +157,7 @@ structure Mode {
     name: SymbolicName
 
     @required
-    applications: StableIds
+    units: StableIds
 
     @required
     constraints: ModeConstraints
@@ -162,8 +199,8 @@ structure ExecutionDomain {
 }
 
 @length(min: 1)
-list Applications {
-    member: Application
+list ExecutionUnits {
+    member: ExecutionUnit
 }
 
 @length(min: 1)
@@ -186,6 +223,15 @@ structure DinitBackend {
 
     @required
     logBufferSize: Long
+
+    @required
+    mountExecutable: AbsolutePath
+
+    @required
+    unmountExecutable: AbsolutePath
+
+    @required
+    nativeServices: SymbolicNames
 }
 
 structure Persistence {
@@ -241,7 +287,7 @@ structure ExecutionDeployment {
     generation: StableId
 
     @required
-    applications: Applications
+    units: ExecutionUnits
 
     @required
     domains: ExecutionDomains
