@@ -118,15 +118,17 @@ ovf_cc_application(
     hdrs = ["radar_logic.hpp"],
     interfaces = ["//contracts/radar"],
     deployment = "radar.deployment.cue",
-    platform = "//platform:iceoryx2",
 )
 ```
 
-It compiles both authored languages into canonical IR, resolves deployment
-references against the Smithy contract, and creates the application executable,
-generated contract library, deployment plan, validation report, and target
-bundle. Middleware binaries are delivered separately from the application
-bundle.
+It compiles the contract and application intent into portable generated code,
+an application model, and a target bundle. Provider selection belongs to system
+integration, where independent bindings such as
+`//com/deployment/bindings:iceoryx2.cue` and
+`//com/deployment/bindings:vsomeip.cue` are composed into per-application
+runtime deployments. Target platform selection remains a separate Linux, QNX,
+architecture, and toolchain concern.
+Middleware binaries are delivered separately from application bundles.
 
 See [Building applications with Bazel](docs/building-applications.md) for the
 generated targets and shipping boundary.

@@ -17,10 +17,9 @@ def main() -> None:
     with tarfile.open(bundle) as archive:
         expected = [
             "opt/radar_inproc_client/bin/radar_inproc_client",
-            "etc/ovf/radar_inproc_client/deployment.json",
-            "etc/ovf/radar_inproc_client/plan.json",
-            "share/ovf/radar_inproc_client/contract.ovf-ir.json",
-            "share/ovf/radar_inproc_client/deployment-validation.json",
+            "share/ovf/radar_inproc_client/application.json",
+            "share/ovf/radar_inproc_client/deployment.cue",
+            "share/ovf/radar_inproc_client/contract-0.ovf-ir.json",
             "share/ovf/radar_inproc_client/manifest.json",
         ]
         if archive.getnames() != expected:
@@ -36,8 +35,8 @@ def main() -> None:
         manifest = json.load(manifest_source)
         if manifest["frameworkIncluded"]:
             raise SystemExit("application bundle must not include framework middleware")
-        if manifest["requiredProviderProfiles"] != ["inproc"]:
-            raise SystemExit("required provider profile was not preserved")
+        if manifest["requiredProviderProfiles"]:
+            raise SystemExit("application bundle selected a provider implementation")
         members = {member.name: member for member in archive.getmembers()}
         for entry in manifest["files"].values():
             source = archive.extractfile(members[entry["path"]])

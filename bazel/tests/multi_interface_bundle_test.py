@@ -18,19 +18,19 @@ def main() -> None:
         if source is None:
             raise SystemExit("application manifest is missing")
         manifest = json.load(source)
-        if manifest["requiredProviderProfiles"] != ["iceoryx2", "vsomeip"]:
-            raise SystemExit("multi-transport requirements were not preserved")
+        if manifest["requiredProviderProfiles"]:
+            raise SystemExit("application bundle selected provider implementations")
         names = [interface["name"] for interface in manifest["interfaces"]]
-        expected = ["CameraService", "EnvironmentModelService", "RadarService"]
+        expected = ["camera", "environment_model", "radar"]
         if names != expected:
             raise SystemExit(f"unexpected interface inventory: {names}")
         if manifest["frameworkIncluded"]:
             raise SystemExit("application bundle must not include middleware")
         members = set(archive.getnames())
-        for interface in manifest["interfaces"]:
-            for path in interface["files"].values():
-                if path not in members:
-                    raise SystemExit(f"missing interface artifact: {path}")
+        for index in range(3):
+            path = f"share/ovf/sensor_fusion/contract-{index}.ovf-ir.json"
+            if path not in members:
+                raise SystemExit(f"missing interface artifact: {path}")
 
 
 if __name__ == "__main__":

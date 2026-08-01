@@ -34,6 +34,11 @@ struct RouteBinding {
   std::int32_t priority{};
 };
 
+struct RouteSelector {
+  Uuid service_id;
+  std::string instance;
+};
+
 struct ServiceRoute {
   RouteBinding binding;
   [[nodiscard]] auto provider() const noexcept -> std::string_view { return binding.provider; }
@@ -85,6 +90,9 @@ private:
 [[nodiscard]] auto FindService(Runtime& runtime, RouteBinding candidate,
                                std::chrono::steady_clock::duration timeout)
     -> std::shared_ptr<ClientBinding>;
+[[nodiscard]] auto FindService(Runtime& runtime, RouteSelector selector,
+                               std::chrono::steady_clock::duration timeout)
+    -> std::shared_ptr<ClientBinding>;
 
 class ProviderServerBinding final : public ServerBinding {
 public:
@@ -105,11 +113,14 @@ private:
 };
 
 [[nodiscard]] auto Offer(Runtime& runtime, RouteBinding route) -> std::shared_ptr<ServerBinding>;
+[[nodiscard]] auto Offer(Runtime& runtime, RouteSelector selector)
+    -> std::shared_ptr<ServerBinding>;
 
 namespace detail {
 class RuntimeAccess final {
 public:
   static auto find(Runtime& runtime, std::string_view name) noexcept -> ovf_com_transport_v1*;
+  static auto routes(Runtime& runtime, RouteSelector const& selector) -> std::vector<RouteBinding>;
 };
 } // namespace detail
 

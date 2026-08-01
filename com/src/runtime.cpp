@@ -3,9 +3,13 @@
 #include "ovf/com/runtime.hpp"
 #include "ovf/com/provider_binding.hpp"
 
+#include <json/json.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <fstream>
+#include <sstream>
 #include <utility>
 
 #if defined(__unix__) || defined(__APPLE__)
@@ -63,6 +67,102 @@ LogLevel ToLogLevel(ovf_com_log_level_v1 level) {
 
 std::string_view AsStringView(ovf_com_string_view_v1 value) {
   return {value.data == nullptr ? "" : value.data, value.data == nullptr ? 0U : value.size};
+}
+
+auto Hex(char value) -> std::optional<std::uint8_t> {
+  if (value >= '0' && value <= '9')
+    return static_cast<std::uint8_t>(value - '0');
+  if (value >= 'a' && value <= 'f')
+    return static_cast<std::uint8_t>(value - 'a' + 10);
+  if (value >= 'A' && value <= 'F')
+    return static_cast<std::uint8_t>(value - 'A' + 10);
+  return std::nullopt;
+}
+
+auto ParseUuid(Json::Value const& value) -> std::optional<Uuid> {
+  if (!value.isString())
+    return std::nullopt;
+  auto const text = value.asString();
+  if (text.size() != 36U || text[8] != '-' || text[13] != '-' || text[18] != '-' || text[23] != '-')
+    return std::nullopt;
+  Uuid result{};
+  std::size_t output{};
+  for (std::size_t index = 0; index < text.size();) {
+    if (text[index] == '-') {
+      ++index;
+      continue;
+    }
+    if (index + 1U >= text.size() || output >= result.bytes.size())
+      return std::nullopt;
+    auto high = Hex(text[index]);
+    auto low = Hex(text[index + 1U]);
+    if (!high || !low)
+      return std::nullopt;
+    result.bytes[output++] = static_cast<std::uint8_t>((*high << 4U) | *low);
+    index += 2U;
+  }
+  return output == result.bytes.size() ? std::optional<Uuid>{result} : std::nullopt;
+}
+
+struct ConfiguredRoute {
+  std::string instance;
+  RouteBinding binding;
+};
+
+auto ParseDeployment(std::string const& path, std::vector<TransportRegistration>& transports,
+                     std::vector<ConfiguredRoute>& routes) -> RuntimeError {
+  std::ifstream input(path, std::ios::binary);
+  if (!input)
+    return RuntimeError::not_found;
+  Json::CharReaderBuilder builder;
+  builder["allowComments"] = false;
+  builder["allowTrailingCommas"] = false;
+  builder["rejectDupKeys"] = true;
+  builder["strictRoot"] = true;
+  Json::Value root;
+  std::string errors;
+  if (!Json::parseFromStream(builder, input, &root, &errors) || !root.isObject() ||
+      root["runtimeDeploymentVersion"].asUInt64() != 1U || !root["transports"].isArray() ||
+      !root["routes"].isArray())
+    return RuntimeError::invalid_argument;
+  for (auto const& transport : root["transports"]) {
+    if (!transport.isObject() || !transport["provider"].isString() ||
+        !transport["configuration"].isString() || !transport["maxEndpoints"].isUInt() ||
+        !transport["maxOutstandingOperations"].isUInt())
+      return RuntimeError::invalid_argument;
+    transports.push_back(
+        {transport["provider"].asString(),
+         {transport["configuration"].asString(), transport["maxEndpoints"].asUInt(),
+          transport["maxOutstandingOperations"].asUInt()}});
+  }
+  for (auto const& route : root["routes"]) {
+    auto service = ParseUuid(route["serviceId"]);
+    auto instance = ParseUuid(route["instanceId"]);
+    if (!route.isObject() || !service || !instance || !route["instance"].isString() ||
+        !route["provider"].isString() || !route["nativeService"].isString() ||
+        !route["elements"].isArray() || !route["maxPayloadSize"].isUInt64() ||
+        !route["historyDepth"].isUInt() || !route["priority"].isInt())
+      return RuntimeError::invalid_argument;
+    RouteBinding binding{*service,
+                         *instance,
+                         1U,
+                         route["maxPayloadSize"].asUInt64(),
+                         route["historyDepth"].asUInt(),
+                         {},
+                         route["provider"].asString(),
+                         route["nativeService"].asString(),
+                         route["priority"].asInt()};
+    for (auto const& element : route["elements"]) {
+      auto id = ParseUuid(element["id"]);
+      if (!element.isObject() || !id || !element["event"].isString() ||
+          !element["method"].isString())
+        return RuntimeError::invalid_argument;
+      binding.native_elements.push_back(
+          {*id, element["event"].asString(), element["method"].asString()});
+    }
+    routes.push_back({route["instance"].asString(), std::move(binding)});
+  }
+  return RuntimeError::none;
 }
 
 } // namespace
@@ -136,6 +236,7 @@ public:
   RuntimeConfig config;
   ovf_com_host_api_v1 host{};
   std::vector<Transport> transports;
+  std::vector<ConfiguredRoute> routes;
   std::vector<void*> libraries;
   bool running{false};
 };
@@ -160,6 +261,30 @@ ApplicationRuntime::ApplicationRuntime(RuntimeConfig config,
     loaded.push_back(std::move(transport.provider));
   }
   error_ = runtime_.Start();
+}
+
+ApplicationRuntime::ApplicationRuntime(RuntimeConfig config, DeploymentConfig deployment)
+    : runtime_(std::move(config)) {
+  error_ = runtime_.ConfigureDeployment(deployment);
+  if (error_ == RuntimeError::none)
+    error_ = runtime_.Start();
+}
+
+RuntimeError Runtime::ConfigureDeployment(DeploymentConfig const& deployment) {
+  if (impl_->running || deployment.path.empty())
+    return RuntimeError::invalid_state;
+  std::vector<TransportRegistration> transports;
+  std::vector<ConfiguredRoute> routes;
+  auto parsed = ParseDeployment(deployment.path, transports, routes);
+  if (parsed != RuntimeError::none)
+    return parsed;
+  for (auto& transport : transports) {
+    auto loaded = LoadTransport(transport.provider, std::move(transport.config));
+    if (loaded != RuntimeError::none)
+      return loaded;
+  }
+  impl_->routes = std::move(routes);
+  return RuntimeError::none;
 }
 
 RuntimeError Runtime::AddTransport(const ovf_com_transport_factory_v1& factory,
@@ -340,6 +465,20 @@ ovf_com_transport_v1* detail::RuntimeAccess::find(Runtime& runtime,
       runtime.impl_->transports.begin(), runtime.impl_->transports.end(),
       [name](const auto& candidate) { return AsStringView(candidate.factory->name) == name; });
   return transport == runtime.impl_->transports.end() ? nullptr : transport->instance;
+}
+
+auto detail::RuntimeAccess::routes(Runtime& runtime, RouteSelector const& selector)
+    -> std::vector<RouteBinding> {
+  if (!runtime.impl_ || !runtime.impl_->running)
+    return {};
+  std::vector<RouteBinding> result;
+  for (auto const& route : runtime.impl_->routes) {
+    if (route.binding.service_id.bytes == selector.service_id.bytes &&
+        (selector.instance.empty() || selector.instance == route.instance)) {
+      result.push_back(route.binding);
+    }
+  }
+  return result;
 }
 
 } // namespace ovf::com

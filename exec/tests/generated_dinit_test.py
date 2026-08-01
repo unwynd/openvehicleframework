@@ -32,7 +32,12 @@ def main() -> int:
         raise RuntimeError(f"unexpected generated services: {names}")
     for identifier in range(1, 5):
         environment = (services / f"ovf-app-{identifier}.env").read_text(encoding="utf-8")
-        if environment != f"OVF_EXEC_APPLICATION_ID={identifier}\n":
+        lines = environment.splitlines()
+        if (
+            lines[0] != f"OVF_EXEC_APPLICATION_ID={identifier}"
+            or not lines[1].startswith("OVF_COM_DEPLOYMENT=/")
+            or not lines[1].endswith(".json")
+        ):
             raise RuntimeError(f"invalid lifecycle identity for application {identifier}")
     expected_dependencies = {
         "boot": ["depends-on = ovf-execd"],

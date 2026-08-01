@@ -58,14 +58,19 @@ Smithy service models define types, events, methods, fields, errors, and stable
 UUID identities. The generator produces codecs and the typed C++ client/server
 surface. Application-owned CUE deployment intent defines instances, roles,
 and optional requirements without selecting native identities. Platform-owned
-CUE selects provider profiles and supplies platform policy and extensions. The
-compiler derives provider-native identities, resource mappings, and routes
-from the interface IR, instance declaration, and platform policy.
+Independent binding CUE targets each select one provider profile and supply its
+policy and extensions. System integration composes only the providers
+needed by that target. The compiler derives provider-native identities,
+resource mappings, and routes from the interface IR, instance declaration, and
+composed binding policy.
 
 The deployment compiler resolves shape names to stable IDs and adds the
 contract fingerprint. Application authors never copy those generated
 identities or duplicate deployment intent for each transport. Changing a
-platform policy does not change the generated application API.
+binding policy does not change or rebuild the application API or executable.
+Generated application code contains stable service-and-instance selectors;
+concrete routes and transport registrations are loaded from the system-installed
+runtime deployment.
 
 The model distinguishes bounded and unbounded data. Providers advertise
 capabilities and resource limits and may reject endpoints that cannot meet a
@@ -74,8 +79,9 @@ the runtime does not assume that a loan can cross a transport boundary.
 
 Provider configuration is a platform artifact. The shared vSomeIP bootstrap
 contains routing and service-discovery settings but no application or service
-inventory. Validated application plans carry their provider mappings and are
-installed independently from middleware. Application authors do not maintain a
+inventory. Validated per-application runtime deployments carry provider mappings
+and are installed by system integration independently from both middleware and
+application bundles. Application authors do not maintain a
 second native middleware configuration.
 
 ## Transport coverage

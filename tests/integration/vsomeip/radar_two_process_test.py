@@ -65,6 +65,7 @@ def start_service(
     environment: dict[str, str],
     workdir: Path,
     log_path: Path,
+    deployment: Path,
 ) -> tuple[subprocess.Popen[str], object]:
     log = log_path.open("w", encoding="utf-8")
     ready_read, ready_write = os.pipe()
@@ -72,6 +73,7 @@ def start_service(
     managed_environment["OVF_EXEC_APPLICATION_ID"] = "1"
     managed_environment["OVF_EXEC_READY_FD"] = str(ready_write)
     managed_environment["DINIT_SERVICE"] = "ovf-radar-service"
+    managed_environment["OVF_COM_DEPLOYMENT"] = str(deployment)
     process = subprocess.Popen(
         [executable],
         cwd=workdir,
@@ -111,12 +113,14 @@ def run_client(
     environment: dict[str, str],
     workdir: Path,
     log_path: Path,
+    deployment: Path,
 ) -> None:
     ready_read, ready_write = os.pipe()
     managed_environment = environment.copy()
     managed_environment["OVF_EXEC_APPLICATION_ID"] = "2"
     managed_environment["OVF_EXEC_READY_FD"] = str(ready_write)
     managed_environment["DINIT_SERVICE"] = "ovf-radar-client"
+    managed_environment["OVF_COM_DEPLOYMENT"] = str(deployment)
     client = subprocess.Popen(
         [executable],
         cwd=workdir,
@@ -175,6 +179,9 @@ def main() -> int:
         environment["LD_LIBRARY_PATH"] = str(platform / "usr/lib")
         environment["OVF_COM_PROVIDER_PATH"] = str(platform / "usr/lib/ovf/providers")
         workdir = platform / "etc"
+        deployments = runfile(
+            "tests/integration/vsomeip/communication_deployment.runtime"
+        )
         routing_log = (logs / "routingmanagerd.log").open("w", encoding="utf-8")
         routing: subprocess.Popen[str] | None = None
         service: subprocess.Popen[str] | None = None
@@ -189,20 +196,22 @@ def main() -> int:
                 text=True,
             )
             routing_pid = routing.pid
-            service_executable = service_root / "bin/radar_service"
-            client_executable = client_root / "bin/radar_client"
+            service_executable = service_root / "opt/radar_service/bin/radar_service"
+            client_executable = client_root / "opt/radar_client/bin/radar_client"
             for generation in (1, 2):
                 service, service_log = start_service(
                     service_executable,
                     environment,
                     workdir,
                     logs / f"service-{generation}.log",
+                    deployments / "radar_service.json",
                 )
                 run_client(
                     client_executable,
                     environment,
                     workdir,
                     logs / f"client-{generation}.log",
+                    deployments / "radar_client.json",
                 )
                 stop(service)
                 service = None

@@ -78,7 +78,8 @@ int main() {
   auto invalid = proxy->Calibrate({-1.0F}, options).get(options);
   if (invalid.index() != 1 || std::get<InvalidTarget>(std::get<1>(invalid)).reason.view() !=
                                   "target distance must be non-negative") {
-    std::cerr << "Calibrate did not return the expected application error\n";
+    std::cerr << "Calibrate did not return the expected application error (result index "
+              << invalid.index() << ")\n";
     return 7;
   }
   std::cout << "APPLICATION_ERROR_OK" << std::endl;

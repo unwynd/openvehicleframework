@@ -2,7 +2,7 @@
 
 """Public Bazel API for validated execution deployment artifacts."""
 
-load("//bazel:application.bzl", "OvfApplicationInfo")
+load("//bazel:application.bzl", "OvfApplicationInfo", "OvfCommunicationDeploymentInfo")
 
 OvfExecutionDeploymentInfo = provider(
     doc = "Validated execution model and generated supervisor artifacts.",
@@ -183,6 +183,7 @@ def _exec_target_bundle_impl(ctx):
     arguments.add("--backend-config", deployment.backend_config)
     arguments.add("--deployment-manifest", deployment.manifest)
     arguments.add("--services", deployment.services.path)
+    arguments.add("--communication-deployment", ctx.attr.communication_deployment[OvfCommunicationDeploymentInfo].directory.path)
     arguments.add("--daemon", ctx.executable.daemon)
     arguments.add("--backend-plugin", ctx.file.backend_plugin)
     arguments.add("--dinit", ctx.executable.dinit)
@@ -201,6 +202,7 @@ def _exec_target_bundle_impl(ctx):
             deployment.backend_config,
             deployment.manifest,
             deployment.services,
+            ctx.attr.communication_deployment[OvfCommunicationDeploymentInfo].directory,
             ctx.executable.daemon,
             ctx.file.backend_plugin,
             ctx.executable.dinit,
@@ -215,6 +217,7 @@ ovf_exec_target_bundle = rule(
     implementation = _exec_target_bundle_impl,
     attrs = {
         "deployment": attr.label(mandatory = True, providers = [OvfExecutionDeploymentInfo]),
+        "communication_deployment": attr.label(mandatory = True, providers = [OvfCommunicationDeploymentInfo]),
         "application_bundles": attr.label_list(mandatory = True, allow_files = [".tar"]),
         "platform_bundles": attr.label_list(allow_files = [".tar"]),
         "providers": attr.label_list(allow_files = True),

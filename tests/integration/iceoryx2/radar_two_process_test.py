@@ -55,6 +55,7 @@ def main() -> int:
     client_binary = runfile("examples/radar/radar_iceoryx2_client")
     environment = os.environ.copy()
     environment["OVF_COM_PROVIDER_PATH"] = str(plugin.parent)
+    deployments = runfile("tests/integration/iceoryx2/communication_deployment.runtime")
     output = Path(os.environ.get("TEST_UNDECLARED_OUTPUTS_DIR", tempfile.gettempdir()))
     service_log_path = output / "iceoryx2-radar-service.log"
     client_log_path = output / "iceoryx2-radar-client.log"
@@ -66,6 +67,7 @@ def main() -> int:
         service_environment["OVF_EXEC_APPLICATION_ID"] = "1"
         service_environment["OVF_EXEC_READY_FD"] = str(service_ready_write)
         service_environment["DINIT_SERVICE"] = "ovf-radar-service"
+        service_environment["OVF_COM_DEPLOYMENT"] = str(deployments / "radar.json")
         service = subprocess.Popen(
             [service_binary],
             env=service_environment,
@@ -103,6 +105,9 @@ def main() -> int:
         client_environment["OVF_EXEC_APPLICATION_ID"] = "2"
         client_environment["OVF_EXEC_READY_FD"] = str(client_ready_write)
         client_environment["DINIT_SERVICE"] = "ovf-radar-client"
+        client_environment["OVF_COM_DEPLOYMENT"] = str(
+            deployments / "radar_iceoryx2_client.json"
+        )
         client = subprocess.Popen(
             [client_binary],
             env=client_environment,

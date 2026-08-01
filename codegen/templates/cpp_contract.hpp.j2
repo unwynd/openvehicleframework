@@ -80,7 +80,7 @@ class {{ service.name }}Proxy final {
 public:
     explicit {{ service.name }}Proxy(std::shared_ptr<ovf::com::ClientBinding> binding) noexcept
         : binding_(std::move(binding)) {}
-    static auto Find(ovf::com::Runtime& runtime, ovf::com::RouteBinding route,
+    static auto Find(ovf::com::Runtime& runtime, ovf::com::RouteSelector route,
                      std::chrono::steady_clock::duration timeout)
         -> std::optional<{{ service.name }}Proxy> {
         auto binding = ovf::com::FindService(runtime, std::move(route), timeout);
@@ -157,7 +157,7 @@ class {{ service.name }}Offer;
 class {{ service.name }}Skeleton {
 public:
     virtual ~{{ service.name }}Skeleton() = default;
-    auto OfferService(ovf::com::Runtime& runtime, ovf::com::RouteBinding route)
+    auto OfferService(ovf::com::Runtime& runtime, ovf::com::RouteSelector route)
         -> {{ service.name }}Offer;
 {% for method in service.methods|sort(attribute="tag") %}
     virtual auto {{ method.name }}({{ method.input|cpp_type }} const& request)
@@ -171,7 +171,7 @@ public:
 
 class {{ service.name }}Offer final {
 public:
-    {{ service.name }}Offer(ovf::com::Runtime& runtime, ovf::com::RouteBinding route,
+    {{ service.name }}Offer(ovf::com::Runtime& runtime, ovf::com::RouteSelector route,
                            {{ service.name }}Skeleton& implementation)
         : {{ service.name }}Offer(ovf::com::Offer(runtime, std::move(route)), implementation) {}
     {{ service.name }}Offer(std::shared_ptr<ovf::com::ServerBinding> binding,
@@ -258,7 +258,7 @@ private:
 };
 
 inline auto {{ service.name }}Skeleton::OfferService(
-    ovf::com::Runtime& runtime, ovf::com::RouteBinding route) -> {{ service.name }}Offer {
+    ovf::com::Runtime& runtime, ovf::com::RouteSelector route) -> {{ service.name }}Offer {
     return {{ service.name }}Offer(runtime, std::move(route), *this);
 }
 

@@ -1,8 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
+load("//bazel:application.bzl", "ovf_communication_deployment")
 load("//bazel:execution.bzl", "ovf_exec_deployment", "ovf_exec_target_bundle")
 
 package(default_visibility = ["//visibility:public"])
+
+ovf_communication_deployment(
+    name = "communication_deployment",
+    applications = [
+        "//examples/camera:camera_execution_deployment",
+        "//examples/driving_policy:driving_policy_execution_deployment",
+        "//examples/radar:radar_iceoryx2_service_execution_deployment",
+        "//examples/sensor_fusion:sensor_fusion_execution_deployment",
+    ],
+    bindings = [
+        "//com/deployment/bindings:iceoryx2.cue",
+        "//com/deployment/bindings:vsomeip.cue",
+    ],
+)
 
 ovf_exec_deployment(
     name = "deployment",
@@ -31,6 +46,7 @@ ovf_exec_target_bundle(
         "//examples/sensor_fusion:sensor_fusion_bundle",
     ],
     backend_plugin = "//exec:dinit_plugin",
+    communication_deployment = ":communication_deployment",
     daemon = "//exec:ovf-execd",
     deployment = ":deployment",
     dinit = "@dinit_source//:dinit",

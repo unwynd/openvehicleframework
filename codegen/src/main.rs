@@ -8,6 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 
 const CPP_CONTRACT_TEMPLATE: &str = include_str!("../templates/cpp_contract.hpp.j2");
+const CPP_APPLICATION_TEMPLATE: &str = include_str!("../templates/cpp_application.hpp.j2");
 const CPP_DEPLOYMENT_TEMPLATE: &str = include_str!("../templates/cpp_deployment.hpp.j2");
 const DINIT_BOOT_TEMPLATE: &str = include_str!("../templates/dinit_boot.j2");
 const DINIT_DAEMON_TEMPLATE: &str = include_str!("../templates/dinit_daemon.j2");
@@ -362,6 +363,27 @@ fn generate_cpp_deployment(
     Ok(())
 }
 
+fn generate_cpp_application(
+    model_path: PathBuf,
+    output: PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let model: JsonValue = serde_json::from_slice(&fs::read(model_path)?)?;
+    if model["applicationModelVersion"].as_u64() != Some(1) || !model["interfaces"].is_array() {
+        return Err("invalid application model".into());
+    }
+    let mut environment = Environment::new();
+    environment.add_filter("uuid_bytes", uuid_bytes);
+    environment.add_template("cpp_application.hpp", CPP_APPLICATION_TEMPLATE)?;
+    let rendered = environment
+        .get_template("cpp_application.hpp")?
+        .render(context! { application => Value::from_serialize(&model) })?;
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(output, rendered)?;
+    Ok(())
+}
+
 fn generate_dinit_services(
     model_path: PathBuf,
     output: PathBuf,
@@ -517,9 +539,18 @@ fn generate_dinit_services(
         let rendered = service.render(context! { unit => Value::from_serialize(&*unit) })?;
         fs::write(output.join(service_name), format!("{}\n", rendered.trim()))?;
         if unit["kind"] == "managed_application" {
+            let name = unit["name"]
+                .as_str()
+                .ok_or("managed application name is missing")?;
+            let mount_point = platform["applicationMountPoint"]
+                .as_str()
+                .ok_or("application mount point is missing")?
+                .trim_end_matches('/');
             fs::write(
                 output.join(format!("{service_name}.env")),
-                format!("OVF_EXEC_APPLICATION_ID={identifier}\n"),
+                format!(
+                    "OVF_EXEC_APPLICATION_ID={identifier}\nOVF_COM_DEPLOYMENT={mount_point}/etc/ovf/com/{name}.json\n"
+                ),
             )?;
         }
     }
@@ -548,6 +579,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             PathBuf::from(&arguments[2]),
             &arguments[4],
             PathBuf::from(&arguments[6]),
+        );
+    }
+    if arguments.first().map(String::as_str) == Some("application-cpp") {
+        if arguments.len() != 5 || arguments[1] != "--model" || arguments[3] != "--output" {
+            return Err(
+                "usage: ovf_codegen application-cpp --model <model> --output <header>".into(),
+            );
+        }
+        return generate_cpp_application(
+            PathBuf::from(&arguments[2]),
+            PathBuf::from(&arguments[4]),
         );
     }
     let (input, output) = parse_contract_arguments(&arguments)?;

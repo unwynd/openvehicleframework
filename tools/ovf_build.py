@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import uuid
 
 from tools.smithy_ast_to_ir import compile_model
 from tools.exec_deployment import (
@@ -99,7 +100,7 @@ def compile_deployment(args: argparse.Namespace) -> int:
             "export",
             str(args.schema.resolve()),
             str(args.deployment.resolve()),
-            str(args.platform.resolve()),
+            str(args.binding.resolve()),
             "--expression",
             "model",
             "--out",
@@ -134,6 +135,198 @@ def compile_deployment(args: argparse.Namespace) -> int:
     }
     write_if_changed(args.plan, json.dumps(plan, sort_keys=True, indent=2) + "\n")
     write_if_changed(args.report, json.dumps(report, sort_keys=True, indent=2) + "\n")
+    return 0
+
+
+def compile_application_model(args: argparse.Namespace) -> int:
+    with tempfile.TemporaryDirectory(prefix="ovf-application-cue-") as cue_cache:
+        environment = dict(os.environ)
+        environment["CUE_CACHE_DIR"] = cue_cache
+        environment["CUE_CONFIG_DIR"] = cue_cache
+        exported = subprocess.run(
+            [
+                str(args.cue.resolve()),
+                "export",
+                str(args.deployment.resolve()),
+                "--expression",
+                "application",
+                "--out",
+                "json",
+            ],
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        if exported.returncode != 0:
+            raise ValueError(exported.stderr.strip())
+    application = json.loads(exported.stdout)
+    contracts = []
+    for specification in args.interface:
+        name, separator, path = specification.partition("=")
+        if not separator or not name or not path:
+            raise ValueError("interface must use name=contract-path syntax")
+        contract = read(Path(path))
+        service_names = {
+            f"{contract['namespace']}#{service['name']}": service
+            for service in contract["services"]
+        }
+        matches = [
+            instance
+            for instance in application["communication"]["instances"]
+            if instance["interface"] in service_names
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                f"interface {name} must bind exactly one application instance"
+            )
+        instance = matches[0]
+        service = service_names[instance["interface"]]
+        instance_id = str(
+            uuid.uuid5(
+                uuid.UUID("91ec7c75-b53f-4b0c-a51c-876eea485f71"),
+                f"{instance['interface']}:{instance['instance']}",
+            )
+        )
+        contracts.append({
+            "name": name,
+            "serviceId": service["id"],
+            "instanceId": instance_id,
+            "instance": instance["instance"],
+            "interface": instance["interface"],
+            "role": instance["role"],
+            "transport": instance["transport"],
+        })
+    model = {
+        "applicationModelVersion": 1,
+        "name": application["name"],
+        "interfaces": sorted(contracts, key=lambda item: item["name"]),
+    }
+    write_if_changed(args.output, json.dumps(model, sort_keys=True, indent=2) + "\n")
+    return 0
+
+
+def _native_mapping(service: int, instance: int, entry: dict) -> str:
+    return (f"service={service};instance={instance};element={entry.get('id', 0)};"
+            f"eventGroup={entry.get('eventGroup', 0)};major={entry.get('major', 0)};"
+            f"minor={entry.get('minor', 0)};kind={entry.get('kind', '')};"
+            f"reliable={str(entry.get('reliable', False)).lower()}")
+
+
+def _iceoryx_event(base: str, entry: dict) -> str:
+    return (f"pattern=pubsub;service={base}/{entry.get('name', '')};type={entry.get('type', '')};"
+            f"payloadSize={entry.get('payloadSize', 0)};alignment={entry.get('alignment', 0)};"
+            f"history={entry.get('history', 0)};subscriberBuffer={entry.get('subscriberBuffer', 0)};"
+            f"maxPublishers={entry.get('maxPublishers', 0)};maxSubscribers={entry.get('maxSubscribers', 0)};"
+            f"safeOverflow={str(entry.get('safeOverflow', False)).lower()}")
+
+
+def _iceoryx_method(base: str, entry: dict) -> str:
+    return (f"pattern=requestResponse;service={base}/{entry.get('name', '')};"
+            f"requestType={entry.get('requestType', '')};responseType={entry.get('responseType', '')};"
+            f"requestPayloadSize={entry.get('requestPayloadSize', 0)};"
+            f"responsePayloadSize={entry.get('responsePayloadSize', 0)};alignment={entry.get('alignment', 0)};"
+            f"requestBuffer={entry.get('requestBuffer', 0)};responseBuffer={entry.get('responseBuffer', 0)};"
+            f"maxClients={entry.get('maxClients', 0)};maxServers={entry.get('maxServers', 0)};"
+            f"safeOverflow={str(entry.get('safeOverflow', False)).lower()}")
+
+
+def _runtime_route(plan: dict) -> tuple[dict, dict]:
+    instance = plan["instances"][0]
+    route = instance["providerRoutes"][0] if instance["providerRoutes"] else instance["consumerRoutes"][0]
+    provider = next(item for item in plan["providers"] if item["id"] == route["provider"])
+    mapping = route["mappings"]
+    profile = provider["profile"]
+    numeric = isinstance(mapping["service"], int)
+    base = f"{mapping['service']}/{mapping['instance']}"
+    elements = []
+    for element_id, value in mapping["elements"].items():
+        event = method = ""
+        if profile == "iceoryx2":
+            if "notify" in value or "get" in value or "set" in value:
+                event = _iceoryx_event(base, value["notify"]) if "notify" in value else ""
+                operation = value.get("get", value.get("set"))
+                method = _iceoryx_method(base, operation) if operation else ""
+            elif "requestType" in value:
+                method = _iceoryx_method(base, value)
+            else:
+                event = _iceoryx_event(base, value)
+        elif isinstance(value, str):
+            event = method = value
+        elif "id" in value:
+            native = _native_mapping(mapping["service"], mapping["instance"], value)
+            if value.get("kind") in {"event", "fieldNotify"}: event = native
+            else: method = native
+        else:
+            if "notify" in value: event = _native_mapping(mapping["service"], mapping["instance"], value["notify"])
+            operation = value.get("get", value.get("set"))
+            if operation: method = _native_mapping(mapping["service"], mapping["instance"], operation)
+        elements.append({"id": element_id, "event": event, "method": method})
+    service_mapping = (_native_mapping(mapping["service"], mapping["instance"],
+                                       {"kind": "method", "reliable": True, "major": 1})
+                       if numeric else base)
+    runtime_route = {
+        "serviceId": instance["serviceId"], "instanceId": instance["instanceId"],
+        "instance": instance["alias"], "provider": profile, "nativeService": service_mapping,
+        "elements": sorted(elements, key=lambda item: item["id"]),
+        "maxPayloadSize": route["limits"]["maxPayloadSize"],
+        "historyDepth": route["limits"]["maxHistoryDepth"],
+        "priority": route.get("priority", 0),
+    }
+    transport = {"provider": profile, "configuration": "", "maxEndpoints": route["limits"]["maxEndpoints"],
+                 "maxOutstandingOperations": route["limits"]["maxOutstandingOperations"]}
+    return runtime_route, transport
+
+
+def compile_communication_deployment(args: argparse.Namespace) -> int:
+    if not (len(args.application_model) == len(args.application_deployment) == len(args.application_name)):
+        raise ValueError("application communication inputs must have matching lengths")
+    args.output.mkdir(parents=True, exist_ok=True)
+    binding_values = []
+    for binding_path in args.binding:
+        with tempfile.TemporaryDirectory(prefix="ovf-com-binding-cue-") as cue_cache:
+            environment = dict(os.environ, CUE_CACHE_DIR=cue_cache, CUE_CONFIG_DIR=cue_cache)
+            completed = subprocess.run([str(args.cue.resolve()), "export", str(binding_path.resolve()),
+                "--expression", "bindings", "--out", "json"], capture_output=True, text=True,
+                env=environment)
+            if completed.returncode: raise ValueError(completed.stderr.strip())
+        binding_values.extend(json.loads(completed.stdout))
+    transports = [item["transport"] for item in binding_values]
+    if len(transports) != len(set(transports)):
+        raise ValueError("system communication deployment selects a transport more than once")
+    with tempfile.TemporaryDirectory(prefix="ovf-com-profiles-") as temporary:
+        profiles = Path(temporary)
+        for profile in args.profile: shutil.copyfile(profile, profiles / profile.name)
+        for name, model_path, deployment_path in zip(args.application_name, args.application_model,
+                                                     args.application_deployment, strict=True):
+            model = read(model_path)
+            routes, transports = [], {}
+            for specification in args.contract:
+                owner, separator, contract_path = specification.partition("=")
+                if not separator or owner != name: continue
+                contract = read(Path(contract_path))
+                with tempfile.TemporaryDirectory(prefix="ovf-com-cue-") as cue_cache:
+                    environment = dict(os.environ, CUE_CACHE_DIR=cue_cache, CUE_CONFIG_DIR=cue_cache)
+                    completed = subprocess.run([str(args.cue.resolve()), "export",
+                        str(deployment_path.resolve()), "--expression", "application", "--out", "json"],
+                        capture_output=True, text=True, env=environment)
+                    if completed.returncode: raise ValueError(completed.stderr.strip())
+                application = json.loads(completed.stdout)
+                deployment = resolve_deployment(contract, {
+                    "deployment": {"deploymentVersion": application["schemaVersion"],
+                                   "instances": application["communication"]["instances"]},
+                    "bindings": binding_values,
+                })
+                errors = validate_deployment(contract, deployment, profiles)
+                if errors: raise ValueError("\n".join(errors))
+                plan = make_plan(deployment, profiles)
+                route, transport = _runtime_route(plan)
+                routes.append(route); transports[transport["provider"]] = transport
+            if len(routes) != len(model["interfaces"]):
+                raise ValueError(f"application {name} did not resolve every interface")
+            output = {"runtimeDeploymentVersion": 1, "application": name,
+                      "transports": sorted(transports.values(), key=lambda item: item["provider"]),
+                      "routes": sorted(routes, key=lambda item: (item["serviceId"], item["instance"]))}
+            write_if_changed(args.output / f"{name}.json", json.dumps(output, sort_keys=True, indent=2) + "\n")
     return 0
 
 
@@ -372,7 +565,7 @@ def package_execution_target(args: argparse.Namespace) -> int:
                     "/manifest.json"
                 ):
                     candidate = json.loads(content)
-                    if candidate.get("applicationBundleVersion") == 1:
+                    if candidate.get("applicationBundleVersion") == 2:
                         manifest = candidate
         return manifest
 
@@ -412,6 +605,9 @@ def package_execution_target(args: argparse.Namespace) -> int:
     for service in sorted(args.services.iterdir()):
         if service.is_file():
             insert(f"etc/dinit.d/{service.name}", service.read_bytes(), 0o644)
+    for deployment in sorted(args.communication_deployment.iterdir()):
+        if deployment.is_file():
+            insert(f"etc/ovf/com/{deployment.name}", deployment.read_bytes(), 0o644)
     insert("usr/sbin/ovf-execd", args.daemon.read_bytes(), 0o755)
     insert("usr/sbin/dinit", args.dinit.read_bytes(), 0o755)
     insert("usr/lib/libovf_exec_backend_dinit.so", args.backend_plugin.read_bytes(), 0o755)
@@ -451,32 +647,12 @@ def package_application(args: argparse.Namespace) -> int:
     install_path = args.install_path
     if not valid_install_path(install_path):
         raise ValueError("application install path must be a normalized relative path")
-    plans = [read(path) for path in args.plan]
-    required = sorted({
-        provider["profile"]
-        for plan in plans
-        for provider in plan["providers"]
-        if provider["required"]
-    })
-    interfaces = []
-    for index, (contract, deployment, plan, report) in enumerate(
-        zip(args.contract, args.deployment, args.plan, args.report, strict = True)
-    ):
-        resolved_plan = plans[index]
-        resolved_contract = read(contract)
-        interfaces.append({
-            "name": resolved_contract["services"][0]["name"],
-            "contractFingerprint": resolved_plan["contractFingerprint"],
-            "deploymentFingerprint": resolved_plan["deploymentFingerprint"],
-            "contract": contract,
-            "deployment": deployment,
-            "plan": plan,
-            "report": report,
-        })
+    model = read(args.application_model)
+    contracts = [(path, read(path)) for path in args.contract]
     manifest = {
-        "applicationBundleVersion": 1,
+        "applicationBundleVersion": 2,
         "name": args.name,
-        "requiredProviderProfiles": required,
+        "requiredProviderProfiles": [],
         "frameworkIncluded": False,
         "files": {
             "executable": {
@@ -484,67 +660,27 @@ def package_application(args: argparse.Namespace) -> int:
                 "sha256": digest(args.executable),
             },
         },
-        "interfaces": [],
+        "interfaces": model["interfaces"],
     }
-    if len(interfaces) == 1:
-        interface = interfaces[0]
-        manifest["contractFingerprint"] = interface["contractFingerprint"]
-        manifest["deploymentFingerprint"] = interface["deploymentFingerprint"]
-        manifest["files"].update({
-            "contract": {
-                "path": f"share/ovf/{args.name}/contract.ovf-ir.json",
-                "sha256": digest(interface["contract"]),
-            },
-            "deployment": {
-                "path": f"etc/ovf/{args.name}/deployment.json",
-                "sha256": digest(interface["deployment"]),
-            },
-            "plan": {
-                "path": f"etc/ovf/{args.name}/plan.json",
-                "sha256": digest(interface["plan"]),
-            },
-            "validationReport": {
-                "path": f"share/ovf/{args.name}/deployment-validation.json",
-                "sha256": digest(interface["report"]),
-            },
-        })
-    for index, interface in enumerate(interfaces):
-        stem = f"interface-{index}"
-        manifest["interfaces"].append({
-            "name": interface["name"],
-            "contractFingerprint": interface["contractFingerprint"],
-            "deploymentFingerprint": interface["deploymentFingerprint"],
-            "files": {
-                "contract": f"share/ovf/{args.name}/{stem}.ovf-ir.json",
-                "deployment": f"etc/ovf/{args.name}/{stem}.deployment.json",
-                "plan": f"etc/ovf/{args.name}/{stem}.plan.json",
-                "validationReport": f"share/ovf/{args.name}/{stem}.validation.json",
-            },
-        })
+    manifest["files"]["applicationModel"] = {
+        "path": f"share/ovf/{args.name}/application.json",
+        "sha256": digest(args.application_model),
+    }
+    manifest["files"]["deploymentIntent"] = {
+        "path": f"share/ovf/{args.name}/deployment.cue",
+        "sha256": digest(args.application_deployment),
+    }
     manifest_content = json.dumps(manifest, sort_keys=True, indent=2).encode() + b"\n"
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(args.output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
         add_file(archive, args.executable, install_path, 0o755)
-        for index, interface in enumerate(interfaces):
-            if len(interfaces) == 1:
-                add_file(archive, interface["deployment"],
-                         f"etc/ovf/{args.name}/deployment.json", 0o644)
-                add_file(archive, interface["plan"],
-                         f"etc/ovf/{args.name}/plan.json", 0o644)
-                add_file(archive, interface["contract"],
-                         f"share/ovf/{args.name}/contract.ovf-ir.json", 0o644)
-                add_file(archive, interface["report"],
-                         f"share/ovf/{args.name}/deployment-validation.json", 0o644)
-            else:
-                stem = f"interface-{index}"
-                add_file(archive, interface["deployment"],
-                         f"etc/ovf/{args.name}/{stem}.deployment.json", 0o644)
-                add_file(archive, interface["plan"],
-                         f"etc/ovf/{args.name}/{stem}.plan.json", 0o644)
-                add_file(archive, interface["contract"],
-                         f"share/ovf/{args.name}/{stem}.ovf-ir.json", 0o644)
-                add_file(archive, interface["report"],
-                         f"share/ovf/{args.name}/{stem}.validation.json", 0o644)
+        add_file(archive, args.application_model,
+                 f"share/ovf/{args.name}/application.json", 0o644)
+        add_file(archive, args.application_deployment,
+                 f"share/ovf/{args.name}/deployment.cue", 0o644)
+        for index, (path, _) in enumerate(contracts):
+            add_file(archive, path,
+                     f"share/ovf/{args.name}/contract-{index}.ovf-ir.json", 0o644)
         info = tar_bytes(manifest_content, 0o644)
         info.name = f"share/ovf/{args.name}/manifest.json"
         archive.addfile(info, io.BytesIO(manifest_content))
@@ -652,7 +788,7 @@ def parser() -> argparse.ArgumentParser:
     deployment.add_argument("--schema", required=True, type=Path)
     deployment.add_argument("--contract", required=True, type=Path)
     deployment.add_argument("--deployment", required=True, type=Path)
-    deployment.add_argument("--platform", required=True, type=Path)
+    deployment.add_argument("--binding", required=True, type=Path)
     deployment.add_argument("--deployment-ir", required=True, type=Path)
     deployment.add_argument("--profile", required=True, action="append", type=Path)
     deployment.add_argument("--plan", required=True, type=Path)
@@ -684,15 +820,31 @@ def parser() -> argparse.ArgumentParser:
     execution_manifest.add_argument("--services", required=True, type=Path)
     execution_manifest.add_argument("--manifest", required=True, type=Path)
     execution_manifest.set_defaults(run=finalize_execution_deployment)
+    application_model = commands.add_parser("application-model")
+    application_model.add_argument("--cue", required=True, type=Path)
+    application_model.add_argument("--deployment", required=True, type=Path)
+    application_model.add_argument("--interface", required=True, action="append")
+    application_model.add_argument("--output", required=True, type=Path)
+    application_model.set_defaults(run=compile_application_model)
+
+    communication = commands.add_parser("communication-deployment")
+    communication.add_argument("--cue", required=True, type=Path)
+    communication.add_argument("--binding", required=True, action="append", type=Path)
+    communication.add_argument("--application-name", required=True, action="append")
+    communication.add_argument("--application-model", required=True, action="append", type=Path)
+    communication.add_argument("--application-deployment", required=True, action="append", type=Path)
+    communication.add_argument("--contract", required=True, action="append")
+    communication.add_argument("--profile", required=True, action="append", type=Path)
+    communication.add_argument("--output", required=True, type=Path)
+    communication.set_defaults(run=compile_communication_deployment)
 
     package = commands.add_parser("package")
     package.add_argument("--name", required=True)
     package.add_argument("--executable", required=True, type=Path)
     package.add_argument("--install-path", required=True)
     package.add_argument("--contract", required=True, action="append", type=Path)
-    package.add_argument("--deployment", required=True, action="append", type=Path)
-    package.add_argument("--plan", required=True, action="append", type=Path)
-    package.add_argument("--report", required=True, action="append", type=Path)
+    package.add_argument("--application-model", required=True, type=Path)
+    package.add_argument("--application-deployment", required=True, type=Path)
     package.add_argument("--output", required=True, type=Path)
     package.set_defaults(run=package_application)
 
@@ -710,6 +862,7 @@ def parser() -> argparse.ArgumentParser:
     target.add_argument("--backend-config", required=True, type=Path)
     target.add_argument("--deployment-manifest", required=True, type=Path)
     target.add_argument("--services", required=True, type=Path)
+    target.add_argument("--communication-deployment", required=True, type=Path)
     target.add_argument("--daemon", required=True, type=Path)
     target.add_argument("--backend-plugin", required=True, type=Path)
     target.add_argument("--dinit", required=True, type=Path)

@@ -3,31 +3,6 @@
 package(default_visibility = ["//visibility:public"])
 
 filegroup(
-    name = "cyclonedds",
-    srcs = ["providers/cyclonedds.cue"],
-)
-
-filegroup(
     name = "exec_dinit",
     srcs = ["execution/dinit.cue"],
-)
-
-filegroup(
-    name = "iceoryx2",
-    srcs = ["providers/iceoryx2.cue"],
-)
-
-filegroup(
-    name = "iceoryx2_vsomeip",
-    srcs = ["providers/iceoryx2-vsomeip.cue"],
-)
-
-filegroup(
-    name = "inproc",
-    srcs = ["providers/inproc.cue"],
-)
-
-filegroup(
-    name = "vsomeip",
-    srcs = ["providers/vsomeip.cue"],
 )

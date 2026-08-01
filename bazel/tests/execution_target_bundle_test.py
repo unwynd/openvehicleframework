@@ -29,7 +29,7 @@ def main() -> None:
         install_path = "opt/camera/bin/camera"
         application = root / "camera.tar"
         app_manifest = {
-            "applicationBundleVersion": 1,
+            "applicationBundleVersion": 2,
             "name": "camera",
             "files": {
                 "executable": {
@@ -66,6 +66,11 @@ def main() -> None:
         services = root / "services"
         services.mkdir()
         (services / "boot").write_text("type = internal\n", encoding="utf-8")
+        communication = root / "communication"
+        communication.mkdir()
+        (communication / "camera.json").write_text(
+            '{"runtimeDeploymentVersion":1}\n', encoding="utf-8"
+        )
         binaries = []
         for name in ("daemon", "plugin", "dinit"):
             path = root / name
@@ -77,6 +82,7 @@ def main() -> None:
             backend_config=backend,
             deployment_manifest=deployment_manifest,
             services=services,
+            communication_deployment=communication,
             daemon=binaries[0],
             backend_plugin=binaries[1],
             dinit=binaries[2],

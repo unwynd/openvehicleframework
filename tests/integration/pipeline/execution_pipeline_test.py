@@ -88,6 +88,18 @@ def service_log(service: str) -> str:
 
 
 def mount_target_filesystem(archive_path: Path) -> None:
+    subprocess.run(
+        ["sudo", "-n", "umount", str(ROOT)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["sudo", "-n", "chmod", "-R", "a+rwx", str(OVERLAY_STORAGE)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
     for path in (ROOT, LOWER, UPPER, WORK):
         shutil.rmtree(path, ignore_errors=True)
         path.mkdir(parents=True)

@@ -7,7 +7,6 @@ ovf_cc_application(
     srcs = ["main.cpp"],
     deployment = "deployment.cue",
     interfaces = ["//contracts/environment_model"],
-    platform = "//platform:vsomeip",
     tags = ["manual"],
     visibility = ["//visibility:public"],
     deps = ["//exec:application_api"],

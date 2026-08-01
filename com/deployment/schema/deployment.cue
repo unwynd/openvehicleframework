@@ -45,7 +45,7 @@ package ovf_deployment
 	}
 }
 
-#Platform: {
+#Binding: {
 	transport: "ipc" | "network"
 	profile:   "inproc" | "iceoryx2" | "vsomeip" | "cyclonedds"
 	provider:  string & =~"^[a-z][a-z0-9_-]*$"
@@ -54,12 +54,12 @@ package ovf_deployment
 }
 
 applicationValue=application: #Application
-platformValues=platforms:   [#Platform, ...#Platform]
+bindingValues=bindings: [#Binding, ...#Binding]
 
 model: {
 	deployment: {
 		deploymentVersion: applicationValue.schemaVersion
 		instances:         applicationValue.communication.instances
 	}
-	platforms:  platformValues
+	bindings: bindingValues
 }

@@ -7,5 +7,4 @@ ovf_cc_application(
     srcs = ["main.cpp"],
     deployment = "@openvehicleframework//examples/radar:client/ipc-deployment.cue",
     interfaces = ["@openvehicleframework//contracts/radar"],
-    platform = "@openvehicleframework//platform:inproc",
 )

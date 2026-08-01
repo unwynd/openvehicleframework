@@ -9,7 +9,6 @@ ovf_cc_application(
     srcs = ["client/main.cpp"],
     deployment = "client/ipc-deployment.cue",
     interfaces = ["//contracts/radar"],
-    platform = "//platform:inproc",
     tags = ["manual"],
     deps = ["//exec:application_api"],
 )
@@ -19,7 +18,6 @@ ovf_cc_application(
     srcs = ["service/main.cpp"],
     deployment = "service/deployment.cue",
     interfaces = ["//contracts/radar"],
-    platform = "//platform:vsomeip",
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:linux"],
     deps = ["//exec:application_api"],
@@ -31,7 +29,6 @@ ovf_cc_application(
     application_name = "radar",
     deployment = "service/ipc-deployment.cue",
     interfaces = ["//contracts/radar"],
-    platform = "//platform:iceoryx2",
     tags = ["manual"],
     deps = ["//exec:application_api"],
 )
@@ -41,7 +38,6 @@ ovf_cc_application(
     srcs = ["client/main.cpp"],
     deployment = "client/ipc-deployment.cue",
     interfaces = ["//contracts/radar"],
-    platform = "//platform:iceoryx2",
     tags = ["manual"],
     deps = ["//exec:application_api"],
 )
@@ -51,7 +47,6 @@ ovf_cc_application(
     srcs = ["client/main.cpp"],
     deployment = "client/deployment.cue",
     interfaces = ["//contracts/radar"],
-    platform = "//platform:vsomeip",
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:linux"],
     deps = ["//exec:application_api"],

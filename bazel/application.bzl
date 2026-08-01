@@ -33,7 +33,69 @@ OvfApplicationInfo = provider(
         "executable": "Built application executable file.",
         "executable_target": "Label of the application executable target.",
         "install_path": "Executable path relative to the deployed filesystem root.",
+        "name": "Stable application deployment name.",
+        "model": "Portable generated application communication model.",
+        "contracts": "Named contract providers consumed by this application.",
     },
+)
+
+OvfApplicationModelInfo = provider(
+    doc = "Portable application communication model and generated C++ facade.",
+    fields = {"model": "Canonical application model JSON.", "header": "Generated facade header."},
+)
+
+OvfCommunicationDeploymentInfo = provider(
+    doc = "System-resolved per-application communication runtime deployment directory.",
+    fields = {"directory": "Directory containing one runtime JSON file per application."},
+)
+
+def _communication_deployment_impl(ctx):
+    output = ctx.actions.declare_directory(ctx.label.name + ".runtime")
+    arguments = ctx.actions.args()
+    arguments.add("communication-deployment")
+    arguments.add("--cue", ctx.file._cue)
+    inputs = []
+    for binding in ctx.files.bindings:
+        arguments.add("--binding", binding)
+        inputs.append(binding)
+    for application in ctx.attr.applications:
+        info = application[OvfApplicationInfo]
+        arguments.add("--application-name", info.name)
+        arguments.add("--application-model", info.model)
+        arguments.add("--application-deployment", info.deployment)
+        inputs.extend([info.model, info.deployment])
+        for contract in info.contracts:
+            arguments.add("--contract", info.name + "=" + contract.info.ir.path)
+            inputs.append(contract.info.ir)
+    for profile in ctx.files.profiles:
+        arguments.add("--profile", profile)
+    arguments.add("--output", output.path)
+    ctx.actions.run(
+        executable = ctx.executable._builder,
+        arguments = [arguments],
+        inputs = depset(inputs + ctx.files.profiles),
+        tools = [ctx.file._cue],
+        outputs = [output],
+        mnemonic = "OvfCommunicationDeployment",
+        progress_message = "Resolving system communication deployment %{label}",
+    )
+    return [DefaultInfo(files = depset([output])), OvfCommunicationDeploymentInfo(directory = output)]
+
+ovf_communication_deployment = rule(
+    implementation = _communication_deployment_impl,
+    attrs = {
+        "applications": attr.label_list(mandatory = True, providers = [OvfApplicationInfo]),
+        "bindings": attr.label_list(mandatory = True, allow_files = [".cue"]),
+        "profiles": attr.label_list(allow_files = [".json"], default = [
+            Label("//com/deployment/profiles:inproc.json"),
+            Label("//com/deployment/profiles:iceoryx2.json"),
+            Label("//com/deployment/profiles:vsomeip.json"),
+            Label("//com/deployment/profiles:cyclonedds.json"),
+        ]),
+        "_builder": attr.label(default = Label("//tools:ovf_build"), executable = True, cfg = "exec"),
+        "_cue": attr.label(default = Label("//bazel/host_tools:cue"), allow_single_file = True, cfg = "exec"),
+    },
+    doc = "Resolves application intent against system-owned communication bindings.",
 )
 
 def _contract_impl(ctx):
@@ -130,7 +192,7 @@ def _deployment_impl(ctx):
     arguments.add("--schema", ctx.file._deployment_schema)
     arguments.add("--contract", contract.ir)
     arguments.add("--deployment", ctx.file.deployment)
-    arguments.add("--platform", ctx.file.platform)
+    arguments.add("--binding", ctx.file.binding)
     arguments.add("--deployment-ir", ctx.outputs.deployment_ir)
     for profile in ctx.files.profiles:
         arguments.add("--profile", profile)
@@ -143,7 +205,7 @@ def _deployment_impl(ctx):
             [
                 contract.ir,
                 ctx.file.deployment,
-                ctx.file.platform,
+                ctx.file.binding,
                 ctx.file._deployment_schema,
             ] + ctx.files.profiles,
         ),
@@ -204,10 +266,10 @@ ovf_deployment = rule(
             mandatory = True,
             allow_single_file = [".cue"],
         ),
-        "platform": attr.label(
+        "binding": attr.label(
             mandatory = True,
             allow_single_file = [".cue"],
-            doc = "Platform provider policy composed with deployment intent.",
+            doc = "Communication binding policy composed with deployment intent.",
         ),
         "profiles": attr.label_list(
             allow_files = [".json"],
@@ -248,27 +310,21 @@ ovf_deployment = rule(
 )
 
 def _application_package_impl(ctx):
-    deployments = [target[OvfDeploymentInfo] for target in ctx.attr.deployments]
+    contracts = [target[OvfContractInfo] for target in ctx.attr.contracts]
+    model = ctx.attr.model[OvfApplicationModelInfo]
     output = ctx.outputs.bundle
     arguments = ctx.actions.args()
     arguments.add("package")
     arguments.add("--name", ctx.attr.application_name)
     arguments.add("--executable", ctx.executable.application)
     arguments.add("--install-path", ctx.attr.install_path)
-    for deployment in deployments:
-        arguments.add("--contract", deployment.contract.ir)
-        arguments.add("--deployment", deployment.ir)
-        arguments.add("--plan", deployment.plan)
-        arguments.add("--report", deployment.report)
+    arguments.add("--application-model", model.model)
+    arguments.add("--application-deployment", ctx.file.deployment)
+    for contract in contracts:
+        arguments.add("--contract", contract.ir)
     arguments.add("--output", output)
-    inputs = [ctx.executable.application]
-    for deployment in deployments:
-        inputs.extend([
-            deployment.contract.ir,
-            deployment.ir,
-            deployment.plan,
-            deployment.report,
-        ])
+    inputs = [ctx.executable.application, model.model, ctx.file.deployment]
+    inputs.extend([contract.ir for contract in contracts])
     ctx.actions.run(
         executable = ctx.executable._builder,
         arguments = [arguments],
@@ -285,7 +341,9 @@ ovf_application_package = rule(
         "application_name": attr.string(mandatory = True),
         "install_path": attr.string(mandatory = True),
         "application": attr.label(mandatory = True, executable = True, cfg = "target"),
-        "deployments": attr.label_list(mandatory = True, providers = [OvfDeploymentInfo]),
+        "contracts": attr.label_list(mandatory = True, providers = [OvfContractInfo]),
+        "deployment": attr.label(mandatory = True, allow_single_file = [".cue"]),
+        "model": attr.label(mandatory = True, providers = [OvfApplicationModelInfo]),
         "_builder": attr.label(
             default = Label("//tools:ovf_build"),
             executable = True,
@@ -297,13 +355,23 @@ ovf_application_package = rule(
 )
 
 def _application_info_impl(ctx):
+    model = ctx.attr.model[OvfApplicationModelInfo] if ctx.attr.model else None
+    files = [ctx.file.deployment, ctx.executable.application]
+    if model:
+        files.append(model.model)
     return [
-        DefaultInfo(files = depset([ctx.file.deployment, ctx.executable.application])),
+        DefaultInfo(files = depset(files)),
         OvfApplicationInfo(
             deployment = ctx.file.deployment,
             executable = ctx.executable.application,
             executable_target = ctx.attr.executable_target,
             install_path = ctx.attr.install_path,
+            name = ctx.attr.application_name,
+            model = model.model if model else None,
+            contracts = [
+                struct(name = name, info = target[OvfContractInfo])
+                for name, target in zip(ctx.attr.interface_names, ctx.attr.contracts)
+            ],
         ),
     ]
 
@@ -325,64 +393,61 @@ ovf_application_info = rule(
         "install_path": attr.string(
             mandatory = True,
         ),
+        "application_name": attr.string(),
+        "model": attr.label(providers = [OvfApplicationModelInfo]),
+        "contracts": attr.label_list(providers = [OvfContractInfo]),
+        "interface_names": attr.string_list(),
     },
     doc = "Exports an application's deployment and executable to system integration.",
 )
 
-def _application_facade_impl(ctx):
+def _application_model_impl(ctx):
+    model = ctx.outputs.model
     header = ctx.outputs.header
-    includes = "\n".join([
-        "#include \"%s/ovf_deployment.hpp\"" % interface
-        for interface in ctx.attr.interfaces
-    ])
-    transports = ",\n        ".join([
-        "%s_deployment::Transport()" % interface
-        for interface in ctx.attr.interfaces
-    ])
-    routes = "\n\n".join([
-        """inline auto %s() -> ovf::com::RouteBinding {
-  return %s_deployment::Route();
-}""" % (interface, interface)
-        for interface in ctx.attr.interfaces
-    ])
-    ctx.actions.write(
-        header,
-        """#pragma once
-
-// SPDX-License-Identifier: Apache-2.0
-// Generated by the OVF Bazel application API; do not edit.
-
-#include <string>
-
-%s
-
-namespace %s {
-
-inline auto CreateRuntime(std::string instance_name) -> ovf::com::ApplicationRuntime {
-  return ovf::com::ApplicationRuntime(
-      {.instance_name = std::move(instance_name), .logger = {}, .dispatcher = {}},
-      {
-        %s
-      });
-}
-
-%s
-
-} // namespace %s
-""" % (includes, "ovf::app", transports, routes, "ovf::app"),
+    arguments = ctx.actions.args()
+    arguments.add("application-model")
+    arguments.add("--cue", ctx.file._cue)
+    arguments.add("--deployment", ctx.file.deployment)
+    for name, target in zip(ctx.attr.interface_names, ctx.attr.contracts):
+        arguments.add("--interface", name + "=" + target[OvfContractInfo].ir.path)
+    arguments.add("--output", model)
+    ctx.actions.run(
+        executable = ctx.executable._builder,
+        arguments = [arguments],
+        inputs = depset([ctx.file.deployment] + [target[OvfContractInfo].ir for target in ctx.attr.contracts]),
+        tools = [ctx.file._cue],
+        outputs = [model],
+        mnemonic = "OvfApplicationModel",
+    )
+    codegen_arguments = ctx.actions.args()
+    codegen_arguments.add("application-cpp")
+    codegen_arguments.add("--model", model)
+    codegen_arguments.add("--output", header)
+    ctx.actions.run(
+        executable = ctx.executable._codegen,
+        arguments = [codegen_arguments],
+        inputs = [model],
+        outputs = [header],
+        mnemonic = "OvfApplicationCpp",
     )
     return [
-        DefaultInfo(files = depset([header])),
+        DefaultInfo(files = depset([model, header])),
+        OvfApplicationModelInfo(model = model, header = header),
         OutputGroupInfo(header = depset([header])),
     ]
 
-ovf_application_facade = rule(
-    implementation = _application_facade_impl,
+ovf_application_model = rule(
+    implementation = _application_model_impl,
     attrs = {
-        "interfaces": attr.string_list(mandatory = True),
+        "deployment": attr.label(mandatory = True, allow_single_file = [".cue"]),
+        "contracts": attr.label_list(mandatory = True, providers = [OvfContractInfo]),
+        "interface_names": attr.string_list(mandatory = True),
+        "_builder": attr.label(default = Label("//tools:ovf_build"), executable = True, cfg = "exec"),
+        "_codegen": attr.label(default = Label("//codegen:ovf_codegen"), executable = True, cfg = "exec"),
+        "_cue": attr.label(default = Label("//bazel/host_tools:cue"), allow_single_file = True, cfg = "exec"),
     },
-    outputs = {"header": "generated/%{name}/ovf_application.hpp"},
-    doc = "Generates the typed runtime and instance facade for one application.",
+    outputs = {"model": "%{name}.application.json", "header": "generated/%{name}/ovf_application.hpp"},
+    doc = "Validates portable application communication intent and generates its facade.",
 )
 
 def _ovf_cc_application_impl(
@@ -401,10 +466,8 @@ def _ovf_cc_application_impl(
         **kwargs):
     """Expands interface targets into generated application dependencies.
 
-    Each interface dictionary requires `name`, `idl`, `deployment`, and `platform`.
-    It may also provide `service`, `deployment_namespace`, and `profiles`.
-    Generated headers are included as `<name>/ovf_contract.hpp` and
-    `<name>/ovf_deployment.hpp`.
+    Each interface dictionary requires `name` and `idl`.
+    Generated contract headers are included as `<name>/ovf_contract.hpp`.
 
     Args:
       name: Application target name.
@@ -422,8 +485,7 @@ def _ovf_cc_application_impl(
       **kwargs: Additional attributes forwarded to the application binary.
     """
     interface_libraries = []
-    deployment_rules = []
-    deployment_libraries = []
+    contract_rules = []
     artifacts = []
     for interface in interfaces:
         interface_name = interface["name"]
@@ -431,8 +493,6 @@ def _ovf_cc_application_impl(
         contract_rule = prefix + "_contract_codegen"
         contract_header = prefix + "_contract_header"
         contract_library = prefix + "_contract"
-        deployment_rule = prefix + "_deployment"
-        deployment_header = prefix + "_deployment_header"
 
         ovf_contract(
             name = contract_rule,
@@ -457,51 +517,16 @@ def _ovf_cc_application_impl(
             visibility = ["//visibility:private"],
         )
 
-        deployment_arguments = {
-            "name": deployment_rule,
-            "contract": ":" + contract_rule,
-            "cpp_namespace": interface.get(
-                "deployment_namespace",
-                prefix + "_deployment",
-            ),
-            "deployment": interface["deployment"],
-            "platform": interface["platform"],
-            "visibility": ["//visibility:private"],
-        }
-        if interface.get("profiles") != None:
-            deployment_arguments["profiles"] = interface["profiles"]
-        ovf_deployment(**deployment_arguments)
-        native.filegroup(
-            name = deployment_header,
-            srcs = [":" + deployment_rule],
-            output_group = "header",
-            visibility = ["//visibility:private"],
-        )
-        cc_library(
-            name = prefix + "_deployment_api",
-            hdrs = [":" + deployment_header],
-            include_prefix = interface_name,
-            strip_include_prefix = "generated/" + deployment_rule,
-            deps = [Label("//com:api")],
-            visibility = ["//visibility:private"],
-        )
-        interface_libraries.extend([
-            ":" + contract_library,
-            ":" + prefix + "_deployment_api",
-        ])
-        deployment_libraries.append(":" + prefix + "_deployment_api")
-        deployment_rules.append(":" + deployment_rule)
-        artifacts.extend([
-            ":" + contract_rule,
-            ":" + deployment_rule,
-            interface["deployment"],
-            interface["platform"],
-        ] + interface["idl"])
+        interface_libraries.append(":" + contract_library)
+        contract_rules.append(":" + contract_rule)
+        artifacts.extend([":" + contract_rule] + interface["idl"])
 
-    facade_rule = name + "_application_facade"
-    ovf_application_facade(
+    facade_rule = name + "_application_model"
+    ovf_application_model(
         name = facade_rule,
-        interfaces = [interface["name"] for interface in interfaces],
+        deployment = interfaces[0]["deployment"],
+        contracts = contract_rules,
+        interface_names = [interface["name"] for interface in interfaces],
         visibility = ["//visibility:private"],
     )
     artifacts.append(":" + facade_rule)
@@ -509,7 +534,7 @@ def _ovf_cc_application_impl(
         name = name + "_application_api",
         hdrs = [":" + facade_rule],
         includes = ["generated/" + facade_rule],
-        deps = deployment_libraries + [Label("//com:api")],
+        deps = [Label("//com:api")],
         visibility = ["//visibility:private"],
     )
     cc_binary(
@@ -537,7 +562,9 @@ def _ovf_cc_application_impl(
         name = name + "_bundle",
         application_name = application_name or name,
         application = ":" + name,
-        deployments = deployment_rules,
+        contracts = contract_rules,
+        deployment = interfaces[0]["deployment"],
+        model = ":" + facade_rule,
         install_path = execution_install_path or "opt/%s/bin/%s" % (
             application_name or name,
             application_name or name,
@@ -550,7 +577,6 @@ def ovf_cc_application(
         srcs,
         interfaces,
         deployment,
-        platform,
         application_name = None,
         hdrs = [],
         deps = [],
@@ -573,7 +599,6 @@ def ovf_cc_application(
       srcs: C++ source files owned by the application.
       interfaces: Public OVF interface targets consumed by the application.
       deployment: The application's single CUE deployment model.
-      platform: Platform policy target used to resolve logical transports.
       hdrs: Application-owned headers.
       deps: Additional C++ dependencies.
       copts: Additional compiler options.
@@ -594,9 +619,7 @@ def ovf_cc_application(
         specifications.append({
             "name": interface_name,
             "deployment": deployment,
-            "deployment_namespace": interface_name + "_deployment",
             "idl": [target],
-            "platform": platform,
         })
     _ovf_cc_application_impl(
         name = name,
@@ -617,6 +640,10 @@ def ovf_cc_application(
         name = name + "_execution_deployment",
         deployment = deployment,
         application = ":" + name,
+        application_name = application_name or name,
+        model = ":" + name + "_application_model",
+        contracts = [":" + name + "_" + interface["name"] + "_contract_codegen" for interface in specifications],
+        interface_names = names,
         executable_target = ":" + name,
         install_path = execution_install_path or "opt/%s/bin/%s" % (
             application_name or name,

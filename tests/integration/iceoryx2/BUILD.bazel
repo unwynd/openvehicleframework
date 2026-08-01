@@ -1,16 +1,28 @@
 # SPDX-License-Identifier: Apache-2.0
 
 load("@rules_python//python:defs.bzl", "py_test")
+load("//bazel:application.bzl", "ovf_communication_deployment")
 
 package(default_visibility = ["//visibility:public"])
+
+ovf_communication_deployment(
+    name = "communication_deployment",
+    applications = [
+        "//examples/radar:radar_iceoryx2_client_execution_deployment",
+        "//examples/radar:radar_iceoryx2_service_execution_deployment",
+    ],
+    bindings = ["//com/deployment/bindings:iceoryx2.cue"],
+)
 
 py_test(
     name = "radar_two_process_test",
     timeout = "short",
     srcs = ["radar_two_process_test.py"],
     data = [
+        ":communication_deployment",
         "//com/transports/iceoryx2:plugin",
         "//examples/radar:radar_iceoryx2_client",
         "//examples/radar:radar_iceoryx2_service",
     ],
+    tags = ["exclusive"],
 )

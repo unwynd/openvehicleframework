@@ -2,9 +2,9 @@
 
 package ovf_deployment
 
-platforms: [{
+bindings: [{
 	transport: "network"
-	profile:   "vsomeip"
-	provider:  "vehicle_network"
+	profile:   "cyclonedds"
+	provider:  "dds"
 	required:  true
 }]

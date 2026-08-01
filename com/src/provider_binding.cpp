@@ -448,6 +448,30 @@ auto FindService(Runtime& runtime, RouteBinding candidate,
   return selected ? Connect(runtime, std::move(*selected)) : nullptr;
 }
 
+auto FindService(Runtime& runtime, RouteSelector selector,
+                 std::chrono::steady_clock::duration timeout) -> std::shared_ptr<ClientBinding> {
+  auto candidates = detail::RuntimeAccess::routes(runtime, selector);
+  auto discovery = Discover(runtime, std::move(candidates));
+  if (!discovery)
+    return {};
+  std::mutex mutex;
+  std::condition_variable condition;
+  discovery->on_change([&](std::span<ServiceRoute const> routes) {
+    if (!routes.empty())
+      condition.notify_all();
+  });
+  std::optional<ServiceRoute> selected;
+  {
+    std::unique_lock lock(mutex);
+    condition.wait_for(lock, timeout, [&] {
+      selected = discovery->select();
+      return selected.has_value();
+    });
+  }
+  discovery->close();
+  return selected ? Connect(runtime, std::move(*selected)) : nullptr;
+}
+
 struct ProviderServerBinding::Impl {
   struct Method {
     Impl* owner{};
@@ -584,5 +608,12 @@ auto Offer(Runtime& runtime, RouteBinding route) -> std::shared_ptr<ServerBindin
   if (!provider)
     return {};
   return std::make_shared<ProviderServerBinding>(*provider, std::move(route));
+}
+
+auto Offer(Runtime& runtime, RouteSelector selector) -> std::shared_ptr<ServerBinding> {
+  auto routes = detail::RuntimeAccess::routes(runtime, selector);
+  if (routes.size() != 1U)
+    return {};
+  return Offer(runtime, std::move(routes.front()));
 }
 } // namespace ovf::com

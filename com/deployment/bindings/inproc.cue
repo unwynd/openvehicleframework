@@ -2,7 +2,7 @@
 
 package ovf_deployment
 
-platforms: [{
+bindings: [{
 	transport: "ipc"
 	profile:   "inproc"
 	provider:  "local"

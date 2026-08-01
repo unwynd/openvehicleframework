@@ -45,6 +45,7 @@ def start_until(
     log_path: Path,
     application_id: int,
     service_name: str,
+    deployment: Path,
 ) -> tuple[subprocess.Popen[str], object]:
     log = log_path.open("w", encoding="utf-8")
     ready_read, ready_write = os.pipe()
@@ -52,6 +53,7 @@ def start_until(
     managed_environment["OVF_EXEC_APPLICATION_ID"] = str(application_id)
     managed_environment["OVF_EXEC_READY_FD"] = str(ready_write)
     managed_environment["DINIT_SERVICE"] = service_name
+    managed_environment["OVF_COM_DEPLOYMENT"] = str(deployment)
     process = subprocess.Popen(
         [executable],
         cwd=workdir,
@@ -108,6 +110,9 @@ def main() -> int:
         environment.pop("VSOMEIP_CONFIGURATION", None)
         environment["LD_LIBRARY_PATH"] = str(platform / "usr/lib")
         environment["OVF_COM_PROVIDER_PATH"] = str(providers)
+        deployments = runfile(
+            "tests/integration/pipeline/communication_deployment.runtime"
+        )
         workdir = platform / "etc"
         routing_log = (logs / "routingmanagerd.log").open("w", encoding="utf-8")
         open_logs.append(routing_log)
@@ -121,12 +126,12 @@ def main() -> int:
         )
         processes.append(routing)
         try:
-            for executable, marker, name, application_id in (
+            for executable, marker, name, application_id, deployment_name in (
                 (runfile("examples/radar/radar_iceoryx2_service"),
-                 "SERVICE_READY", "radar", 2),
-                (runfile("examples/camera/camera"), "CAMERA_READY", "camera", 1),
+                 "SERVICE_READY", "radar", 2, "radar"),
+                (runfile("examples/camera/camera"), "CAMERA_READY", "camera", 1, "camera"),
                 (runfile("examples/sensor_fusion/sensor_fusion"),
-                 "SENSOR_FUSION_READY", "sensor-fusion", 3),
+                 "SENSOR_FUSION_READY", "sensor-fusion", 3, "sensor_fusion"),
             ):
                 process, log = start_until(
                     executable,
@@ -136,6 +141,7 @@ def main() -> int:
                     logs / f"{name}.log",
                     application_id,
                     f"ovf-app-{application_id}",
+                    deployments / f"{deployment_name}.json",
                 )
                 processes.append(process)
                 open_logs.append(log)
@@ -147,6 +153,7 @@ def main() -> int:
                 logs / "driving-policy.log",
                 4,
                 "ovf-app-4",
+                deployments / "driving_policy.json",
             )
             processes.append(policy)
             open_logs.append(policy_log)

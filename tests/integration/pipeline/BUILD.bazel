@@ -2,9 +2,24 @@
 
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_python//python:defs.bzl", "py_test")
+load("//bazel:application.bzl", "ovf_communication_deployment")
 load("//bazel:execution.bzl", "ovf_exec_deployment", "ovf_exec_target_bundle")
 
 package(default_visibility = ["//visibility:public"])
+
+ovf_communication_deployment(
+    name = "communication_deployment",
+    applications = [
+        "//examples/camera:camera_execution_deployment",
+        "//examples/driving_policy:driving_policy_execution_deployment",
+        "//examples/radar:radar_iceoryx2_service_execution_deployment",
+        "//examples/sensor_fusion:sensor_fusion_execution_deployment",
+    ],
+    bindings = [
+        "//com/deployment/bindings:iceoryx2.cue",
+        "//com/deployment/bindings:vsomeip.cue",
+    ],
+)
 
 ovf_exec_deployment(
     name = "execution_deployment",
@@ -57,6 +72,7 @@ ovf_exec_target_bundle(
         "//examples/sensor_fusion:sensor_fusion_bundle",
     ],
     backend_plugin = "//exec:dinit_plugin",
+    communication_deployment = ":communication_deployment",
     daemon = "//exec:ovf-execd",
     deployment = ":execution_deployment",
     dinit = "@dinit_source//:dinit",
@@ -70,6 +86,7 @@ py_test(
     timeout = "long",
     srcs = ["pipeline_test.py"],
     data = [
+        ":communication_deployment",
         "//com:vsomeip_platform_bundle",
         "//com/transports/iceoryx2:plugin",
         "//examples/camera",
@@ -77,7 +94,10 @@ py_test(
         "//examples/radar:radar_iceoryx2_service",
         "//examples/sensor_fusion",
     ],
-    tags = ["manual"],
+    tags = [
+        "exclusive",
+        "manual",
+    ],
     target_compatible_with = ["@platforms//os:linux"],
 )
 

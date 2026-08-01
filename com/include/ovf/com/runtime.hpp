@@ -38,6 +38,10 @@ struct TransportRegistration {
   TransportConfig config;
 };
 
+struct DeploymentConfig {
+  std::string path;
+};
+
 enum class RuntimeError {
   none,
   invalid_argument,
@@ -68,6 +72,8 @@ public:
 
   [[nodiscard]] RuntimeError LoadTransport(std::string_view provider, TransportConfig config = {});
 
+  [[nodiscard]] RuntimeError ConfigureDeployment(DeploymentConfig const& deployment);
+
   [[nodiscard]] RuntimeError Start();
   void Stop() noexcept;
 
@@ -83,6 +89,7 @@ private:
 class ApplicationRuntime final {
 public:
   ApplicationRuntime(RuntimeConfig config, std::vector<TransportRegistration> transports);
+  ApplicationRuntime(RuntimeConfig config, DeploymentConfig deployment);
   ~ApplicationRuntime() = default;
   ApplicationRuntime(ApplicationRuntime const&) = delete;
   ApplicationRuntime& operator=(ApplicationRuntime const&) = delete;

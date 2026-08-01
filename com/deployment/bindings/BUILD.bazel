@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "cyclonedds.cue",
+    "iceoryx2.cue",
+    "inproc.cue",
+    "vsomeip.cue",
+])

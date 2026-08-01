@@ -1,8 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 load("@rules_python//python:defs.bzl", "py_test")
+load("//bazel:application.bzl", "ovf_communication_deployment")
 
 package(default_visibility = ["//visibility:public"])
+
+ovf_communication_deployment(
+    name = "communication_deployment",
+    applications = [
+        "//examples/radar:radar_client_execution_deployment",
+        "//examples/radar:radar_service_execution_deployment",
+    ],
+    bindings = ["//com/deployment/bindings:vsomeip.cue"],
+)
 
 py_test(
     name = "platform_bundle_test",
@@ -14,7 +24,7 @@ py_test(
 
 py_test(
     name = "radar_two_process_test",
-    timeout = "short",
+    timeout = "long",
     srcs = [
         "__init__.py",
         "radar_two_process_test.py",
@@ -22,10 +32,14 @@ py_test(
         "//tests/integration:__init__.py",
     ],
     data = [
+        ":communication_deployment",
         "//com:vsomeip_platform_bundle",
         "//examples/radar:radar_client_bundle",
         "//examples/radar:radar_service_bundle",
     ],
-    tags = ["manual"],
+    tags = [
+        "exclusive",
+        "manual",
+    ],
     target_compatible_with = ["@platforms//os:linux"],
 )

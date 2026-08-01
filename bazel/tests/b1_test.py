@@ -59,9 +59,7 @@ def validate_deployment(root: Path, arguments: list[str]) -> None:
         )
 
 
-def compile_deployment(
-    root: Path, source: Path, platform: Path
-) -> dict:
+def compile_deployment(root: Path, source: Path, binding: Path) -> dict:
     cue_candidates = sorted(Path(os.environ["TEST_SRCDIR"]).glob("*cue_cli*/cue"))
     if len(cue_candidates) != 1:
         raise SystemExit(f"expected one hermetic CUE binary, found {cue_candidates}")
@@ -74,7 +72,7 @@ def compile_deployment(
             "export",
             str(root / "com/deployment/schema/deployment.cue"),
             str(source),
-            str(platform),
+            str(binding),
             "--expression",
             "model",
             "--out",
@@ -104,9 +102,9 @@ def reproducible(root: Path, arguments: list[str]) -> None:
         ]
     elif arguments[0] == "plan":
         source = root / arguments[1]
-        platform = root / arguments[2]
+        binding = root / arguments[2]
         for output in (first, second):
-            deployment = compile_deployment(root, source, platform)
+            deployment = compile_deployment(root, source, binding)
             encoded = json.dumps(
                 make_plan(deployment, root / "com/deployment/profiles"),
                 sort_keys=True,

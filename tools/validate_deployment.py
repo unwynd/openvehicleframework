@@ -173,42 +173,42 @@ def _generated_mappings(service: dict, instance_name: str, profile: str) -> dict
 
 
 def resolve_deployment(contract: dict, model: dict) -> dict:
-    """Generate a canonical deployment from app intent and platform policy."""
+    """Generate a canonical deployment from app intent and binding policy."""
     intent = model["deployment"]
-    platforms = {item["transport"]: item for item in model["platforms"]}
-    if len(platforms) != len(model["platforms"]):
-        raise ValueError("platform policy contains duplicate transport selections")
+    bindings = {item["transport"]: item for item in model["bindings"]}
+    if len(bindings) != len(model["bindings"]):
+        raise ValueError("binding policy contains duplicate transport selections")
     namespace = contract["namespace"]
     services = {
         f"{namespace}#{service['name']}": service for service in contract["services"]
     }
     instances = []
-    used_platforms = {}
+    used_bindings = {}
     for instance in intent["instances"]:
         service_name = instance["interface"]
         service = services.get(service_name)
         if service is None:
             continue
-        platform = platforms.get(instance["transport"])
-        if platform is None:
+        binding = bindings.get(instance["transport"])
+        if binding is None:
             raise ValueError(
-                f"platform policy does not provide {instance['transport']} transport"
+                f"binding policy does not provide {instance['transport']} transport"
             )
-        used_platforms[platform["provider"]] = platform
+        used_bindings[binding["provider"]] = binding
         requirements = instance.get("requirements", {})
         features = requirements.get(
-            "features", _route_features(instance["role"], platform["profile"])
+            "features", _route_features(instance["role"], binding["profile"])
         )
-        limits = _route_limits(platform["profile"])
+        limits = _route_limits(binding["profile"])
         limits.update(requirements.get("limits", {}))
         route = {
-            "provider": platform["provider"],
+            "provider": binding["provider"],
             "role": instance["role"],
-            "required": platform["required"],
+            "required": binding["required"],
             "requiredFeatures": features,
             "limits": limits,
             "mappings": _generated_mappings(
-                service, instance["instance"], platform["profile"]
+                service, instance["instance"], binding["profile"]
             ),
         }
         if instance["role"] == "consumer":
@@ -231,16 +231,16 @@ def resolve_deployment(contract: dict, model: dict) -> dict:
         "contractFingerprint": fingerprint(contract),
         "providers": [
             {
-                "id": platform["provider"],
-                "profile": platform["profile"],
-                "required": platform["required"],
+                "id": binding["provider"],
+                "profile": binding["profile"],
+                "required": binding["required"],
                 **(
-                    {"extensions": platform["extensions"]}
-                    if "extensions" in platform
+                    {"extensions": binding["extensions"]}
+                    if "extensions" in binding
                     else {}
                 ),
             }
-            for platform in used_platforms.values()
+            for binding in used_bindings.values()
         ],
         "instances": instances,
     }
