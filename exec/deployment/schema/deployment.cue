@@ -12,6 +12,7 @@ import (
 #AbsolutePath: string & =~"^/[^\\x00]*$"
 #OptionalAbsolutePath: "" | #AbsolutePath
 #OptionalName: "" | #Name
+#RelativeInstallPath: string & =~"^[a-zA-Z0-9._-]+(?:/[a-zA-Z0-9._-]+)*$"
 
 #Unit: {
 	id:         #Id
@@ -38,6 +39,7 @@ import (
 #ApplicationFragment: {
 	schemaVersion: 1
 	name:          #Name
+	executableRelativePath: #RelativeInstallPath
 	execution: {
 		readiness: *"lifecycle_channel" | "process_started"
 		startup: timeoutMs: int & >=1
@@ -112,10 +114,9 @@ import (
 	dependencies:       [...#Name]
 	exclusiveResources: [...#Id]
 	if kind == "managed_application" {
-		executable: #AbsolutePath
+		executable: ""
 	}
 	if kind != "managed_application" && kind != "external" && kind != "mount" {
-		executable:      #AbsolutePath
 		readiness:       _
 		startTimeoutMs:  _
 		stopTimeoutMs:   _
@@ -160,6 +161,10 @@ import (
 
 #Platform: {
 	dinit: {
+		daemonExecutable:    #AbsolutePath
+		executionModel:      #AbsolutePath
+		backendConfiguration: #AbsolutePath
+		deploymentManifest:  #AbsolutePath
 		backendLibrary:    #AbsolutePath
 		systemRecoveryService: #Name
 		controlSocket:     #AbsolutePath
@@ -168,6 +173,13 @@ import (
 		mountExecutable:   #AbsolutePath
 		unmountExecutable: #AbsolutePath
 		nativeServices:    [...#Name]
+		applicationMountPoint: #AbsolutePath
+		units: [#Name]: {
+			executable:     #AbsolutePath
+			arguments:      [...string]
+			stopExecutable: #OptionalAbsolutePath
+			stopArguments:  [...string]
+		}
 	}
 	persistence: {
 		journal:           #AbsolutePath
@@ -198,7 +210,7 @@ model: {
 		name:       fragment.name
 		kind:       assigned.kind
 		bootstrap:  assigned.bootstrap
-		executable: assigned.executable
+		executable: strings.TrimSuffix(platformValue.dinit.applicationMountPoint, "/") + "/" + fragment.executableRelativePath
 		arguments:  assigned.arguments
 		stopExecutable: assigned.stopExecutable
 		stopArguments:  assigned.stopArguments
@@ -225,10 +237,18 @@ model: {
 			stopArguments:  [assigned.mount.target]
 		}
 		if assigned.kind != "mount" {
-			executable:     assigned.executable
-			arguments:      assigned.arguments
-			stopExecutable: assigned.stopExecutable
-			stopArguments:  assigned.stopArguments
+			if assigned.kind == "service" || assigned.kind == "one_shot" {
+				executable:     platformValue.dinit.units[assigned.name].executable
+				arguments:      platformValue.dinit.units[assigned.name].arguments
+				stopExecutable: platformValue.dinit.units[assigned.name].stopExecutable
+				stopArguments:  platformValue.dinit.units[assigned.name].stopArguments
+			}
+			if assigned.kind == "external" {
+				executable:     ""
+				arguments:      []
+				stopExecutable: ""
+				stopArguments:  []
+			}
 		}
 		nativeService: assigned.nativeService
 		readiness:       assigned.readiness

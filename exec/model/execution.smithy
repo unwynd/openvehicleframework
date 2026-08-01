@@ -74,6 +74,25 @@ list SymbolicNames {
     member: SymbolicName
 }
 
+structure SystemUnitCommand {
+    @required
+    executable: AbsolutePath
+
+    @required
+    arguments: Arguments
+
+    @required
+    stopExecutable: OptionalAbsolutePath
+
+    @required
+    stopArguments: Arguments
+}
+
+map SystemUnitCommands {
+    key: SymbolicName
+    value: SystemUnitCommand
+}
+
 structure RetryPolicy {
     @required
     maxAttempts: Integer
@@ -210,6 +229,18 @@ list ExecutionDomains {
 
 structure DinitBackend {
     @required
+    daemonExecutable: AbsolutePath
+
+    @required
+    executionModel: AbsolutePath
+
+    @required
+    backendConfiguration: AbsolutePath
+
+    @required
+    deploymentManifest: AbsolutePath
+
+    @required
     backendLibrary: AbsolutePath
 
     @required
@@ -232,6 +263,12 @@ structure DinitBackend {
 
     @required
     nativeServices: SymbolicNames
+
+    @required
+    applicationMountPoint: AbsolutePath
+
+    @required
+    units: SystemUnitCommands
 }
 
 structure Persistence {

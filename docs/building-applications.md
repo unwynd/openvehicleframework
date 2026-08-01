@@ -55,7 +55,7 @@ mappings are invalid.
 The application tar contains:
 
 ```text
-bin/<application>
+opt/<application>/bin/<application>
 etc/ovf/<application>/deployment.json
 etc/ovf/<application>/plan.json
 share/ovf/<application>/contract.ovf-ir.json
@@ -99,7 +99,10 @@ has one `application` root. It names the application, declares communication
 roles and logical transports, and defines lifecycle requirements such as
 readiness and bounded startup, shutdown, and restart policy. It does not assign
 runtime IDs, installation paths, dependencies, resources, execution domains,
-or modes.
+or modes. The Bazel application target exports the built executable together
+with its path relative to the deployed filesystem root. The default is
+`opt/<application>/bin/<application>`; platform integration resolves that
+relative path against the application filesystem mount point.
 Platform-owned CUE selects the communication implementation and supplies
 platform policy and extensions. The compiler generates provider-native names,
 identifiers, resource mappings, stable instance identity, and the canonical
@@ -124,16 +127,37 @@ System integration composes `*_execution_deployment` application targets with
 an execution allocation target. The allocation defines one typed execution
 unit graph containing managed applications, external services, one-shot
 operations, mounts, and native supervisor services. It assigns runtime IDs,
-installation paths, dependencies, exclusive resources, bootstrap status, and
-domain/mode membership. Execution-platform CUE supplies supervisor,
-persistence, coordinator, and typed helper policy. Symbolic unit names are
-resolved to stable numeric runtime references only in generated execution IR.
+dependencies, exclusive resources, bootstrap status, and domain/mode
+membership. Execution-platform CUE supplies supervisor, persistence,
+coordinator, application mount point, and target-specific commands for system
+units. Symbolic unit names are resolved to stable numeric runtime references
+only in generated execution IR.
 
 Every non-bootstrap unit has explicit mode membership. Bootstrap units are
 kept outside modes, may depend only on other bootstrap units, and are generated
 as dependencies of the supervisor boot target. Generated dinit descriptions
 repeat the validated hard dependency edges; startup is topological and
 shutdown is reverse-topological while shared units remain retained.
+
+The execution manifest binds every managed application name, Bazel target,
+relative installation path, and executable SHA-256 digest. Target packaging
+rejects missing, additional, path-mismatched, or digest-mismatched application
+bundles. `ovf_exec_target_bundle` then produces a deterministic filesystem
+layer containing application bundles, platform middleware, dinit,
+`ovf-execd`, its backend plugin, generated supervisor descriptions, and the
+validated execution artifacts. The generated `boot` service starts the
+generated `ovf-execd` service; the daemon is no longer an undeclared external
+bootstrap step.
+
+For the example system:
+
+```text
+bazel build //examples/execution:target_filesystem
+```
+
+The resulting `target_filesystem.tar` is rooted at the target filesystem. It
+is suitable as an image layer or for extraction below the platform-selected
+mount root; application bundles remain independently replaceable inputs.
 
 ## Public lower-level rules
 

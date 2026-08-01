@@ -11,6 +11,7 @@ rust_binary(
         "templates/cpp_deployment.hpp.j2",
         "templates/cpp_contract.hpp.j2",
         "templates/dinit_boot.j2",
+        "templates/dinit_daemon.j2",
         "templates/dinit_service.j2",
         "tests/fixtures/empty.ovf-ir.json",
         "tests/golden/empty.hpp",

@@ -22,14 +22,10 @@ TEST(ExecutionDeploymentTest, LoadsGeneratedRuntimeConfiguration) {
   ASSERT_TRUE(loaded) << loaded.error().message;
   EXPECT_EQ(loaded.value().model.value().generation, ModelGeneration{1});
   EXPECT_NE(loaded.value().model.FindUnit(ApplicationId{3}), nullptr);
-  const auto* bootstrap = loaded.value().model.FindUnit(ApplicationId{10});
-  ASSERT_NE(bootstrap, nullptr);
-  EXPECT_EQ(bootstrap->kind, ExecutionUnitKind::mount);
-  EXPECT_TRUE(bootstrap->bootstrap);
   const auto* network = loaded.value().model.FindUnit(ApplicationId{11});
   ASSERT_NE(network, nullptr);
   EXPECT_EQ(network->kind, ExecutionUnitKind::service);
-  EXPECT_EQ(network->dependencies, (std::vector<ApplicationId>{ApplicationId{10}}));
+  EXPECT_TRUE(network->dependencies.empty());
   EXPECT_NE(loaded.value().model.FindMode({DomainId{2}, ModeId{2}}), nullptr);
   EXPECT_EQ(loaded.value().backend_kind, "dinit");
   EXPECT_EQ(loaded.value().backend_library, "/usr/lib/libovf_exec_backend_dinit.so");

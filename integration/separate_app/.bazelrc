@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+
+common --enable_bzlmod
+common --incompatible_default_to_explicit_init_py

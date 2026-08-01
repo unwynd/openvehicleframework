@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
 
 package(default_visibility = ["//visibility:public"])
@@ -6,7 +8,17 @@ exports_files(["LICENSE_1_0.txt"])
 
 filegroup(
     name = "source",
-    srcs = glob(["**"]),
+    srcs = glob(
+        ["**"],
+        exclude = [
+            "**/doc/**",
+            "**/docs/**",
+            "**/example/**",
+            "**/examples/**",
+            "**/test/**",
+            "**/tests/**",
+        ],
+    ),
 )
 
 cmake(
@@ -33,6 +45,7 @@ cmake(
             "utility",
         ]),
         "BUILD_SHARED_LIBS": "OFF",
+        "BUILD_TESTING": "OFF",
         "CMAKE_POSITION_INDEPENDENT_CODE": "ON",
     },
     lib_source = ":source",

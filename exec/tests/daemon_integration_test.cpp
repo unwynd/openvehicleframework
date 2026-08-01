@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <climits>
 #include <cstdlib>
@@ -25,7 +26,7 @@ namespace {
 using namespace std::chrono_literals;
 using namespace ovf::exec;
 
-constexpr const char* kRoot = "/tmp/ovf-execd-e2e";
+constexpr const char* kRoot = "/var/tmp/ovf-execd-e2e";
 
 std::string AbsolutePath(const char* path) {
   char resolved[PATH_MAX]{};
@@ -80,8 +81,8 @@ public:
     if (error) {
       throw std::runtime_error{"cannot clean target layout: " + error.message()};
     }
-    for (const auto* directory :
-         {"bin", "lib", "run", "daemon_deployment.dinit", "state", "artifacts"}) {
+    for (const auto* directory : {"bin", "lib", "opt/managed-test/bin", "run",
+                                  "daemon_deployment.dinit", "state", "artifacts"}) {
       if (!std::filesystem::create_directories(std::string{kRoot} + "/" + directory, error) ||
           error) {
         throw std::runtime_error{"cannot create target layout: " + error.message()};
@@ -131,6 +132,32 @@ ChildProcess Launch(const std::vector<std::string>& arguments) {
   return ChildProcess{process};
 }
 
+int RunCommand(const std::vector<std::string>& arguments) {
+  const pid_t process = ::fork();
+  if (process < 0) {
+    return -1;
+  }
+  if (process == 0) {
+    std::vector<char*> raw;
+    raw.reserve(arguments.size() + 1U);
+    for (const auto& argument : arguments) {
+      raw.push_back(const_cast<char*>(argument.c_str()));
+    }
+    raw.push_back(nullptr);
+    ::execv(raw.front(), raw.data());
+    _exit(127);
+  }
+  int status{};
+  pid_t waited{};
+  do {
+    waited = ::waitpid(process, &status, 0);
+  } while (waited < 0 && errno == EINTR);
+  if (waited != process) {
+    return -1;
+  }
+  return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
 bool WaitForPath(const std::string& path) {
   for (int attempt = 0; attempt < 400; ++attempt) {
     if (::access(path.c_str(), F_OK) == 0) {
@@ -159,6 +186,7 @@ TEST(ExecutionDaemonIntegrationTest, RunsTransitionAndRecoversJournalAcrossDaemo
   }
   const auto daemon = AbsolutePath(std::getenv("OVF_TEST_EXEC_DAEMON"));
   const auto dinit = AbsolutePath(std::getenv("OVF_TEST_DINIT"));
+  const auto dinitctl = AbsolutePath(std::getenv("OVF_TEST_DINITCTL"));
   const auto helper = AbsolutePath(std::getenv("OVF_TEST_MANAGED_SERVICE"));
   const auto system_service = AbsolutePath(std::getenv("OVF_TEST_SYSTEM_SERVICE"));
   const auto plugin = AbsolutePath(std::getenv("OVF_TEST_DINIT_PLUGIN"));
@@ -168,6 +196,7 @@ TEST(ExecutionDaemonIntegrationTest, RunsTransitionAndRecoversJournalAcrossDaemo
   const auto manifest = AbsolutePath(std::getenv("OVF_TEST_EXECUTION_MANIFEST"));
   ASSERT_FALSE(daemon.empty());
   ASSERT_FALSE(dinit.empty());
+  ASSERT_FALSE(dinitctl.empty());
   ASSERT_FALSE(helper.empty());
   ASSERT_FALSE(system_service.empty());
   ASSERT_FALSE(plugin.empty());
@@ -177,7 +206,8 @@ TEST(ExecutionDaemonIntegrationTest, RunsTransitionAndRecoversJournalAcrossDaemo
   ASSERT_FALSE(manifest.empty());
 
   TargetLayout target;
-  target.CopyFile(helper, "bin/managed-test");
+  target.CopyFile(daemon, "bin/ovf-execd");
+  target.CopyFile(helper, "opt/managed-test/bin/managed-test");
   target.CopyFile(system_service, "bin/system-test");
   target.CopyFile(plugin, "lib/libovf_exec_backend_dinit.so");
   target.CopyFile(model, "artifacts/deployment.execution.json");
@@ -190,18 +220,6 @@ TEST(ExecutionDaemonIntegrationTest, RunsTransitionAndRecoversJournalAcrossDaemo
               "--socket-path", TargetLayout::Path("run/dinit.sock")});
   ASSERT_TRUE(WaitForPath(TargetLayout::Path("run/dinit.sock")));
 
-  const std::vector<std::string> daemon_arguments{
-      daemon,
-      "--model",
-      TargetLayout::Path("artifacts/deployment.execution.json"),
-      "--backend",
-      TargetLayout::Path("artifacts/daemon_deployment.backend.json"),
-      "--services",
-      TargetLayout::Path("daemon_deployment.dinit"),
-      "--manifest",
-      TargetLayout::Path("artifacts/deployment.manifest.json"),
-  };
-  auto execution_daemon = Launch(daemon_arguments);
   auto coordinator = Connect();
   ASSERT_TRUE(coordinator) << coordinator.error().message;
 
@@ -229,10 +247,11 @@ TEST(ExecutionDaemonIntegrationTest, RunsTransitionAndRecoversJournalAcrossDaemo
   EXPECT_GT(event_count.load(), 0U);
 
   subscription.value().Reset();
-  execution_daemon.Stop();
+  ASSERT_EQ(RunCommand({dinitctl, "--socket-path", TargetLayout::Path("run/dinit.sock"), "restart",
+                        "--force", "ovf-execd"}),
+            0);
   ASSERT_TRUE(std::filesystem::exists(TargetLayout::Path("state/journal.v1")));
 
-  execution_daemon = Launch(daemon_arguments);
   auto recovered = Connect();
   ASSERT_TRUE(recovered) << recovered.error().message;
   auto snapshot = recovered.value().GetSnapshot();

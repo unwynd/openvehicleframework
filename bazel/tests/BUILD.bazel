@@ -337,6 +337,18 @@ py_test(
 )
 
 py_test(
+    name = "execution_target_bundle",
+    srcs = [
+        "__init__.py",
+        "execution_target_bundle_test.py",
+        "//:__init__.py",
+        "//tools:ovf_build.py",
+    ],
+    main = "execution_target_bundle_test.py",
+    deps = ["//tools:build_lib"],
+)
+
+py_test(
     name = "multi_interface_bundle",
     srcs = [
         "__init__.py",
@@ -355,6 +367,7 @@ test_suite(
         ":deployment_inproc",
         ":deployment_invalid_rejected",
         ":deployment_vsomeip",
+        ":execution_target_bundle",
         ":generation_reproducible",
         ":ir_additive_compatible",
         ":ir_breaking_rejected",

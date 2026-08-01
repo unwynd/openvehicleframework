@@ -11,6 +11,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tarfile
@@ -37,6 +38,13 @@ def write_if_changed(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists() or path.read_text(encoding="utf-8") != content:
         path.write_text(content, encoding="utf-8")
+
+
+def valid_install_path(value: str) -> bool:
+    return (
+        re.fullmatch(r"[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*", value) is not None
+        and all(part not in {".", ".."} for part in value.split("/"))
+    )
 
 
 def compile_contract(args: argparse.Namespace) -> int:
@@ -159,8 +167,16 @@ def compile_execution_deployment(args: argparse.Namespace) -> int:
         environment = dict(os.environ)
         environment["CUE_CACHE_DIR"] = cue_cache
         environment["CUE_CONFIG_DIR"] = cue_cache
+        application_inputs = list(zip(
+            args.application,
+            args.application_executable,
+            args.application_install_path,
+            args.application_target,
+            strict=True,
+        ))
         applications = []
-        for application in args.application:
+        application_artifacts = []
+        for application, executable, install_path, target in application_inputs:
             exported = subprocess.run(
                 [
                     str(args.cue.resolve()),
@@ -181,7 +197,15 @@ def compile_execution_deployment(args: argparse.Namespace) -> int:
                     f"application execution fragment is invalid: {application}\n"
                     f"{exported.stderr.strip()}"
                 )
-            applications.append(json.loads(exported.stdout))
+            fragment = json.loads(exported.stdout)
+            fragment["executableRelativePath"] = install_path
+            applications.append(fragment)
+            application_artifacts.append({
+                "name": fragment["name"],
+                "bazelTarget": target,
+                "installPath": install_path,
+                "sha256": digest(executable),
+            })
         allocation_export = subprocess.run(
             [
                 str(args.cue.resolve()),
@@ -283,6 +307,7 @@ def compile_execution_deployment(args: argparse.Namespace) -> int:
         args.execution_ir,
         args.backend_config,
         args.metadata,
+        application_artifacts,
     )
     return 0
 
@@ -315,7 +340,117 @@ def add_file(archive: tarfile.TarFile, source: Path, target: str, mode: int) -> 
     archive.addfile(info, io.BytesIO(content))
 
 
+def package_execution_target(args: argparse.Namespace) -> int:
+    entries: dict[str, tuple[bytes, int]] = {}
+
+    def insert(path: str, content: bytes, mode: int) -> None:
+        normalized = str(Path(path))
+        if path.startswith("/") or normalized == "." or ".." in Path(path).parts:
+            raise ValueError(f"unsafe target bundle path: {path}")
+        existing = entries.get(normalized)
+        value = (content, mode & 0o777)
+        if existing is not None and existing != value:
+            raise ValueError(f"conflicting target bundle path: {normalized}")
+        entries[normalized] = value
+
+    def merge(archive_path: Path) -> dict[str, Any] | None:
+        manifest: dict[str, Any] | None = None
+        with tarfile.open(archive_path) as archive:
+            for member in archive.getmembers():
+                if member.isdir():
+                    continue
+                if not member.isfile():
+                    raise ValueError(
+                        f"unsupported archive member in {archive_path}: {member.name}"
+                    )
+                source = archive.extractfile(member)
+                if source is None:
+                    raise ValueError(f"cannot read archive member: {member.name}")
+                content = source.read()
+                insert(member.name, content, member.mode)
+                if member.name.startswith("share/ovf/") and member.name.endswith(
+                    "/manifest.json"
+                ):
+                    candidate = json.loads(content)
+                    if candidate.get("applicationBundleVersion") == 1:
+                        manifest = candidate
+        return manifest
+
+    execution_manifest = read(args.deployment_manifest)
+    expected_applications = {
+        item["name"]: item for item in execution_manifest["applicationArtifacts"]
+    }
+    actual_applications: dict[str, dict[str, Any]] = {}
+    for bundle in args.application_bundle:
+        manifest = merge(bundle)
+        if manifest is None:
+            raise ValueError(f"application bundle has no manifest: {bundle}")
+        name = manifest["name"]
+        if name in actual_applications:
+            raise ValueError(f"duplicate application bundle: {name}")
+        actual_applications[name] = manifest
+    if set(actual_applications) != set(expected_applications):
+        raise ValueError("application bundles do not match the execution deployment")
+    for name, expected in expected_applications.items():
+        executable = actual_applications[name]["files"]["executable"]
+        if executable["path"] != expected["installPath"]:
+            raise ValueError(f"application install path mismatch: {name}")
+        if executable["sha256"] != expected["sha256"]:
+            raise ValueError(f"application executable digest mismatch: {name}")
+
+    for bundle in args.platform_bundle:
+        merge(bundle)
+    insert("etc/ovf/exec/deployment.execution.json", args.execution_model.read_bytes(), 0o644)
+    insert("etc/ovf/exec/deployment.backend.json", args.backend_config.read_bytes(), 0o644)
+    runtime_manifest = dict(execution_manifest)
+    runtime_manifest["backendConfiguration"] = "deployment.backend.json"
+    runtime_manifest["servicesDirectory"] = "dinit.d"
+    runtime_manifest_content = (
+        json.dumps(runtime_manifest, sort_keys=True, indent=2).encode() + b"\n"
+    )
+    insert("usr/share/ovf/exec/manifest.json", runtime_manifest_content, 0o644)
+    for service in sorted(args.services.iterdir()):
+        if service.is_file():
+            insert(f"etc/dinit.d/{service.name}", service.read_bytes(), 0o644)
+    insert("usr/sbin/ovf-execd", args.daemon.read_bytes(), 0o755)
+    insert("usr/sbin/dinit", args.dinit.read_bytes(), 0o755)
+    insert("usr/lib/libovf_exec_backend_dinit.so", args.backend_plugin.read_bytes(), 0o755)
+    for provider in args.provider:
+        insert(f"usr/lib/ovf/providers/{provider.name}", provider.read_bytes(), 0o755)
+
+    execution_model = read(args.execution_model)
+    required_base_executables = sorted({
+        executable
+        for unit in execution_model["units"]
+        for executable in (unit["executable"], unit["stopExecutable"])
+        if executable and executable.lstrip("/") not in entries
+    })
+    inventory = {
+        "targetBundleVersion": 1,
+        "executionGeneration": execution_manifest["modelGeneration"],
+        "executionManifestSha256": hashlib.sha256(runtime_manifest_content).hexdigest(),
+        "applications": sorted(expected_applications),
+        "requiredBaseExecutables": required_base_executables,
+        "files": {
+            path: {"sha256": hashlib.sha256(content).hexdigest(), "mode": f"{mode:04o}"}
+            for path, (content, mode) in sorted(entries.items())
+        },
+    }
+    inventory_content = json.dumps(inventory, sort_keys=True, indent=2).encode() + b"\n"
+    insert("usr/share/ovf/target/manifest.json", inventory_content, 0o644)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(args.output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        for path, (content, mode) in sorted(entries.items()):
+            info = tar_bytes(content, mode)
+            info.name = path
+            archive.addfile(info, io.BytesIO(content))
+    return 0
+
+
 def package_application(args: argparse.Namespace) -> int:
+    install_path = args.install_path
+    if not valid_install_path(install_path):
+        raise ValueError("application install path must be a normalized relative path")
     plans = [read(path) for path in args.plan]
     required = sorted({
         provider["profile"]
@@ -345,7 +480,7 @@ def package_application(args: argparse.Namespace) -> int:
         "frameworkIncluded": False,
         "files": {
             "executable": {
-                "path": f"bin/{args.name}",
+                "path": install_path,
                 "sha256": digest(args.executable),
             },
         },
@@ -389,7 +524,7 @@ def package_application(args: argparse.Namespace) -> int:
     manifest_content = json.dumps(manifest, sort_keys=True, indent=2).encode() + b"\n"
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(args.output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
-        add_file(archive, args.executable, f"bin/{args.name}", 0o755)
+        add_file(archive, args.executable, install_path, 0o755)
         for index, interface in enumerate(interfaces):
             if len(interfaces) == 1:
                 add_file(archive, interface["deployment"],
@@ -531,6 +666,13 @@ def parser() -> argparse.ArgumentParser:
     execution.add_argument("--schema", required=True, type=Path)
     execution.add_argument("--allocation", required=True, type=Path)
     execution.add_argument("--application", required=True, action="append", type=Path)
+    execution.add_argument(
+        "--application-executable", required=True, action="append", type=Path
+    )
+    execution.add_argument(
+        "--application-install-path", required=True, action="append"
+    )
+    execution.add_argument("--application-target", required=True, action="append")
     execution.add_argument("--platform", required=True, type=Path)
     execution.add_argument("--execution-ir", required=True, type=Path)
     execution.add_argument("--backend-config", required=True, type=Path)
@@ -546,6 +688,7 @@ def parser() -> argparse.ArgumentParser:
     package = commands.add_parser("package")
     package.add_argument("--name", required=True)
     package.add_argument("--executable", required=True, type=Path)
+    package.add_argument("--install-path", required=True)
     package.add_argument("--contract", required=True, action="append", type=Path)
     package.add_argument("--deployment", required=True, action="append", type=Path)
     package.add_argument("--plan", required=True, action="append", type=Path)
@@ -562,6 +705,19 @@ def parser() -> argparse.ArgumentParser:
     platform.add_argument("--boost-license", required=True, type=Path)
     platform.add_argument("--output", required=True, type=Path)
     platform.set_defaults(run=package_vsomeip_platform)
+    target = commands.add_parser("package-execution-target")
+    target.add_argument("--execution-model", required=True, type=Path)
+    target.add_argument("--backend-config", required=True, type=Path)
+    target.add_argument("--deployment-manifest", required=True, type=Path)
+    target.add_argument("--services", required=True, type=Path)
+    target.add_argument("--daemon", required=True, type=Path)
+    target.add_argument("--backend-plugin", required=True, type=Path)
+    target.add_argument("--dinit", required=True, type=Path)
+    target.add_argument("--application-bundle", required=True, action="append", type=Path)
+    target.add_argument("--platform-bundle", action="append", type=Path, default=[])
+    target.add_argument("--provider", action="append", type=Path, default=[])
+    target.add_argument("--output", required=True, type=Path)
+    target.set_defaults(run=package_execution_target)
     return result
 
 

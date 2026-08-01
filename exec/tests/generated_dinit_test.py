@@ -19,7 +19,7 @@ def main() -> int:
         "ovf-app-2",
         "ovf-app-3",
         "ovf-app-4",
-        "ovf-unit-10",
+        "ovf-execd",
         "ovf-unit-11",
     ]
     expected_names = service_names + [
@@ -35,9 +35,9 @@ def main() -> int:
         if environment != f"OVF_EXEC_APPLICATION_ID={identifier}\n":
             raise RuntimeError(f"invalid lifecycle identity for application {identifier}")
     expected_dependencies = {
-        "boot": ["depends-on = ovf-unit-10"],
-        "ovf-unit-10": ["type = scripted"],
-        "ovf-unit-11": ["type = process", "depends-on = ovf-unit-10"],
+        "boot": ["depends-on = ovf-execd"],
+        "ovf-execd": ["restart = true"],
+        "ovf-unit-11": ["type = process"],
         "ovf-app-1": ["depends-on = ovf-unit-11"],
         "ovf-app-2": ["depends-on = ovf-unit-11"],
         "ovf-app-3": ["depends-on = ovf-app-1", "depends-on = ovf-app-2"],
@@ -58,23 +58,14 @@ def main() -> int:
         f"Service '{service}': warning: could not stat command executable "
         f"'{executable}': No such file or directory"
         for service, executable in (
-            ("ovf-app-1", "/usr/bin/ovf-camera"),
-            ("ovf-app-2", "/usr/bin/ovf-radar"),
-            ("ovf-app-3", "/usr/bin/ovf-sensor-fusion"),
-            ("ovf-app-4", "/usr/bin/ovf-driving-policy"),
-            ("ovf-unit-11", "/usr/bin/ovf-vehicle-network"),
+            ("ovf-app-1", "/opt/camera/bin/camera"),
+            ("ovf-app-2", "/opt/radar/bin/radar"),
+            ("ovf-app-3", "/opt/sensor_fusion/bin/sensor_fusion"),
+            ("ovf-app-4", "/opt/driving_policy/bin/driving_policy"),
+            ("ovf-execd", "/usr/sbin/ovf-execd"),
+            ("ovf-unit-11", "/usr/bin/routingmanagerd"),
         )
     }
-    if not Path("/bin/mount").exists():
-        expected_missing.add(
-            "Service 'ovf-unit-10': warning: could not stat command executable "
-            "'/bin/mount': No such file or directory"
-        )
-    if not Path("/bin/umount").exists():
-        expected_missing.add(
-            "Service 'ovf-unit-10': warning: could not stat stop command executable "
-            "'/bin/umount': No such file or directory"
-        )
     diagnostics = {
         line.strip()
         for line in completed.stderr.splitlines()

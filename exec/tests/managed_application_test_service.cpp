@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 int main() {
-  if (::access("/tmp/ovf-execd-e2e/state/system.started", F_OK) != 0) {
+  if (::access("/var/tmp/ovf-execd-e2e/state/system.started", F_OK) != 0) {
     return 4;
   }
   auto application = ovf::exec::Application::Create(
@@ -24,6 +24,6 @@ int main() {
   if (!stopped) {
     return 3;
   }
-  std::ofstream marker{"/tmp/ovf-execd-e2e/state/managed.stopped", std::ios::trunc};
+  std::ofstream marker{"/var/tmp/ovf-execd-e2e/state/managed.stopped", std::ios::trunc};
   return marker ? 0 : 5;
 }

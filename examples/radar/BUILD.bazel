@@ -28,6 +28,7 @@ ovf_cc_application(
 ovf_cc_application(
     name = "radar_iceoryx2_service",
     srcs = ["service/main.cpp"],
+    application_name = "radar",
     deployment = "service/ipc-deployment.cue",
     interfaces = ["//contracts/radar"],
     platform = "//platform:iceoryx2",

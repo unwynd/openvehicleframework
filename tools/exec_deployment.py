@@ -323,6 +323,7 @@ def generate_artifacts(
     output_model: Path,
     backend_config: Path,
     metadata_path: Path,
+    application_artifacts: list[dict[str, str]] | None = None,
 ) -> None:
     model = normalized(model)
     output_model.parent.mkdir(parents=True, exist_ok=True)
@@ -345,7 +346,7 @@ def generate_artifacts(
         json.dumps(backend, sort_keys=True, indent=2) + "\n", encoding="utf-8"
     )
     metadata = {
-        "artifactVersion": 1,
+        "artifactVersion": 2,
         "modelGeneration": model["generation"],
         "modelFingerprint": fingerprint(model),
         "executionModelArtifactFingerprint": hashlib.sha256(
@@ -356,6 +357,9 @@ def generate_artifacts(
         ).hexdigest(),
         "smithySchemaFingerprint": fingerprint(schema_ast),
         "backendConfiguration": backend_config.name,
+        "applicationArtifacts": sorted(
+            application_artifacts or [], key=lambda item: item["name"]
+        ),
     }
     metadata_path.write_text(
         json.dumps(metadata, sort_keys=True, indent=2) + "\n", encoding="utf-8"

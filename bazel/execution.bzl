@@ -11,6 +11,7 @@ OvfExecutionDeploymentInfo = provider(
         "ir": "Canonical execution model JSON.",
         "manifest": "Integrity and generation manifest.",
         "services": "Generated dinit service-description directory.",
+        "applications": "Application executable identities bound into this deployment.",
     },
 )
 
@@ -31,8 +32,14 @@ def _exec_deployment_impl(ctx):
         application[OvfApplicationInfo].deployment
         for application in ctx.attr.applications
     ]
-    for application in application_deployments:
-        arguments.add("--application", application)
+    application_executables = []
+    for application in ctx.attr.applications:
+        info = application[OvfApplicationInfo]
+        arguments.add("--application", info.deployment)
+        arguments.add("--application-executable", info.executable)
+        arguments.add("--application-install-path", info.install_path)
+        arguments.add("--application-target", info.executable_target)
+        application_executables.append(info.executable)
     arguments.add("--platform", ctx.file.platform)
     arguments.add("--execution-ir", execution_ir)
     arguments.add("--backend-config", backend_config)
@@ -47,7 +54,7 @@ def _exec_deployment_impl(ctx):
             ctx.file._cue,
             ctx.file.allocation,
             ctx.file.platform,
-        ] + application_deployments,
+        ] + application_deployments + application_executables,
         tools = ctx.files._smithy_runtime,
         outputs = [
             execution_ir,
@@ -97,6 +104,13 @@ def _exec_deployment_impl(ctx):
             ir = execution_ir,
             manifest = manifest,
             services = services,
+            applications = [
+                struct(
+                    executable = application[OvfApplicationInfo].executable,
+                    install_path = application[OvfApplicationInfo].install_path,
+                )
+                for application in ctx.attr.applications
+            ],
         ),
         OutputGroupInfo(
             backend_config = depset([backend_config]),
@@ -158,4 +172,61 @@ ovf_exec_deployment = rule(
         ),
     },
     doc = "Validates Smithy+CUE execution deployment and generates runtime artifacts.",
+)
+
+def _exec_target_bundle_impl(ctx):
+    deployment = ctx.attr.deployment[OvfExecutionDeploymentInfo]
+    output = ctx.outputs.bundle
+    arguments = ctx.actions.args()
+    arguments.add("package-execution-target")
+    arguments.add("--execution-model", deployment.ir)
+    arguments.add("--backend-config", deployment.backend_config)
+    arguments.add("--deployment-manifest", deployment.manifest)
+    arguments.add("--services", deployment.services.path)
+    arguments.add("--daemon", ctx.executable.daemon)
+    arguments.add("--backend-plugin", ctx.file.backend_plugin)
+    arguments.add("--dinit", ctx.executable.dinit)
+    for bundle in ctx.files.application_bundles:
+        arguments.add("--application-bundle", bundle)
+    for bundle in ctx.files.platform_bundles:
+        arguments.add("--platform-bundle", bundle)
+    for provider in ctx.files.providers:
+        arguments.add("--provider", provider)
+    arguments.add("--output", output)
+    ctx.actions.run(
+        executable = ctx.executable._builder,
+        arguments = [arguments],
+        inputs = depset([
+            deployment.ir,
+            deployment.backend_config,
+            deployment.manifest,
+            deployment.services,
+            ctx.executable.daemon,
+            ctx.file.backend_plugin,
+            ctx.executable.dinit,
+        ] + ctx.files.application_bundles + ctx.files.platform_bundles + ctx.files.providers),
+        outputs = [output],
+        mnemonic = "OvfExecutionTargetPackage",
+        progress_message = "Packaging execution target filesystem %{label}",
+    )
+    return [DefaultInfo(files = depset([output]))]
+
+ovf_exec_target_bundle = rule(
+    implementation = _exec_target_bundle_impl,
+    attrs = {
+        "deployment": attr.label(mandatory = True, providers = [OvfExecutionDeploymentInfo]),
+        "application_bundles": attr.label_list(mandatory = True, allow_files = [".tar"]),
+        "platform_bundles": attr.label_list(allow_files = [".tar"]),
+        "providers": attr.label_list(allow_files = True),
+        "daemon": attr.label(mandatory = True, executable = True, cfg = "target"),
+        "backend_plugin": attr.label(mandatory = True, allow_single_file = True),
+        "dinit": attr.label(mandatory = True, executable = True, cfg = "target"),
+        "_builder": attr.label(
+            default = Label("//tools:ovf_build"),
+            executable = True,
+            cfg = "exec",
+        ),
+    },
+    outputs = {"bundle": "%{name}.tar"},
+    doc = "Creates a deterministic target filesystem from validated execution artifacts.",
 )

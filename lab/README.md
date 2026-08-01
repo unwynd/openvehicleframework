@@ -39,6 +39,9 @@ or ordinary bind mounts.
 docker run --rm \
   --name ovf-lab \
   --cap-add NET_RAW \
+  --cap-add SYS_ADMIN \
+  --security-opt apparmor=unconfined \
+  --tmpfs /var/tmp/ovf-overlay:uid=1000,gid=1000,mode=0755 \
   -v "$PWD:/workspace" \
   -v ovf-bazel-cache:/var/cache/ovf/bazel \
   -v "$PWD/out/lab-logs:/var/log/ovf" \
@@ -55,6 +58,13 @@ The log volume receives:
 - `environment.json`;
 - Bazel build-event JSON;
 - copied Bazel test logs and XML results.
+
+The execution pipeline test mounts its packaged target filesystem as the
+read-only lower layer of a kernel OverlayFS. Runtime state is written through
+separate upper and work directories. `SYS_ADMIN` is therefore required; the
+dedicated tmpfs prevents Docker's own OverlayFS from becoming a nested backing
+store. The test fails rather than falling back to ordinary extraction when
+OverlayFS is unavailable.
 
 ## SSH and debugging
 

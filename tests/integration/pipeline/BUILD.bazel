@@ -1,8 +1,69 @@
 # SPDX-License-Identifier: Apache-2.0
 
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_python//python:defs.bzl", "py_test")
+load("//bazel:execution.bzl", "ovf_exec_deployment", "ovf_exec_target_bundle")
 
 package(default_visibility = ["//visibility:public"])
+
+ovf_exec_deployment(
+    name = "execution_deployment",
+    allocation = "//examples/execution:allocation.cue",
+    applications = [
+        "//examples/camera:camera_execution_deployment",
+        "//examples/driving_policy:driving_policy_execution_deployment",
+        "//examples/radar:radar_iceoryx2_service_execution_deployment",
+        "//examples/sensor_fusion:sensor_fusion_execution_deployment",
+    ],
+    platform = "execution-platform.cue",
+)
+
+filegroup(
+    name = "execution_model",
+    srcs = [":execution_deployment"],
+    output_group = "ir",
+)
+
+filegroup(
+    name = "execution_backend",
+    srcs = [":execution_deployment"],
+    output_group = "backend_config",
+)
+
+filegroup(
+    name = "execution_services",
+    srcs = [":execution_deployment"],
+    output_group = "services",
+)
+
+filegroup(
+    name = "execution_manifest",
+    srcs = [":execution_deployment"],
+    output_group = "manifest",
+)
+
+cc_binary(
+    name = "mode_client",
+    srcs = ["mode_client.cpp"],
+    deps = ["//exec:coordinator"],
+)
+
+ovf_exec_target_bundle(
+    name = "execution_target_filesystem",
+    application_bundles = [
+        "//examples/camera:camera_bundle",
+        "//examples/driving_policy:driving_policy_bundle",
+        "//examples/radar:radar_iceoryx2_service_bundle",
+        "//examples/sensor_fusion:sensor_fusion_bundle",
+    ],
+    backend_plugin = "//exec:dinit_plugin",
+    daemon = "//exec:ovf-execd",
+    deployment = ":execution_deployment",
+    dinit = "@dinit_source//:dinit",
+    platform_bundles = ["//com:vsomeip_platform_bundle"],
+    providers = ["//com/transports/iceoryx2:plugin"],
+    tags = ["manual"],
+)
 
 py_test(
     name = "pipeline_test",
@@ -17,5 +78,27 @@ py_test(
         "//examples/sensor_fusion",
     ],
     tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
+py_test(
+    name = "execution_pipeline_test",
+    timeout = "long",
+    srcs = ["execution_pipeline_test.py"],
+    data = [
+        ":execution_target_filesystem",
+        ":mode_client",
+        "@dinit_source//:dinitctl",
+    ],
+    env = {
+        "OVF_TEST_DINITCTL": "$(rootpath @dinit_source//:dinitctl)",
+        "OVF_TEST_MODE_CLIENT": "$(rootpath :mode_client)",
+        "OVF_TEST_TARGET_FILESYSTEM": "$(rootpath :execution_target_filesystem)",
+    },
+    tags = [
+        "exclusive",
+        "manual",
+        "no-sandbox",
+    ],
     target_compatible_with = ["@platforms//os:linux"],
 )

@@ -7,9 +7,9 @@
 
 namespace {
 
-constexpr const char* kStarted = "/tmp/ovf-execd-e2e/state/system.started";
-constexpr const char* kManagedStopped = "/tmp/ovf-execd-e2e/state/managed.stopped";
-constexpr const char* kStopped = "/tmp/ovf-execd-e2e/state/system.stopped";
+constexpr const char* kStarted = "/var/tmp/ovf-execd-e2e/state/system.started";
+constexpr const char* kManagedStopped = "/var/tmp/ovf-execd-e2e/state/managed.stopped";
+constexpr const char* kStopped = "/var/tmp/ovf-execd-e2e/state/system.stopped";
 volatile sig_atomic_t stopping = 0;
 
 extern "C" void Stop(int) { stopping = 1; }

@@ -1,11 +1,12 @@
 # OpenVehicleFramework
 
 OpenVehicleFramework is an early-stage, modular vehicle application framework.
-Its first component, `ovf::com`, explores a typed service communication API
-that is independent of the underlying IPC or network middleware.
+It currently provides a transport-neutral typed communication API and an
+execution subsystem for validated application lifecycle and system-mode
+coordination.
 
 > [!WARNING]
-> Version 0.0.1 is experimental. It is not production-ready, safety-qualified,
+> Version 0.0.2 is experimental. It is not production-ready, safety-qualified,
 > or intended for use in a vehicle. APIs, generated artifacts, deployment
 > formats, and binary interfaces may change without compatibility guarantees.
 
@@ -18,9 +19,13 @@ The repository currently contains:
 - a versioned C transport boundary usable by C++ and Rust implementations;
 - Smithy-based service definitions and template-driven Rust C++ generation;
 - deployment schema validation and deterministic application packaging;
+- validated execution domains, modes, unit dependencies, and lifecycle policy;
+- dinit-backed process supervision through the `ovf-execd` coordinator;
+- deterministic target-filesystem assembly with executable integrity binding;
 - an in-process reference transport;
 - experimental iceoryx2 and vSomeIP transport integrations;
-- transport conformance, interoperability, and example application tests.
+- transport conformance, interoperability, lifecycle recovery, and Linux
+  end-to-end tests.
 
 DDS is represented in the deployment model, but a DDS transport implementation
 is not included in this release.
@@ -44,6 +49,12 @@ Service contracts are separate from deployment configuration. Applications use
 generated types, generated deployment facades, and `ovf::com` APIs. Deployment
 selects runtime-loaded provider plugins and generates their configuration.
 
+Application targets also export their executable identity and relative install
+path. System integration composes those targets with execution allocation and
+platform policy, generates dinit service descriptions, and packages a complete
+target filesystem. `ovf-execd` exposes system-wide execution domains and modes
+without embedding communication-specific behavior.
+
 See the [communication architecture](docs/com-architecture.md) for the public
 design principles and provider model.
 
@@ -66,6 +77,12 @@ bazel build //examples/radar:radar_inproc_client
 bazel build //examples/radar:radar_inproc_client_bundle
 ```
 
+On Linux, build the composed execution target filesystem with:
+
+```sh
+bazel build //examples/execution:target_filesystem
+```
+
 On Linux, run the generated service/client vSomeIP example as two processes:
 
 ```sh
@@ -82,7 +99,10 @@ compiler warnings using Bazel-managed tools.
 For native or QEMU-emulated Linux validation, the
 [Linux development lab](lab/README.md) provides a mountable multi-architecture
 image with persistent build cache, structured logs, optional key-only SSH,
-network diagnostics, and exportable root filesystems.
+network diagnostics, and exportable root filesystems. Its execution pipeline
+boots the packaged target through dinit from a real kernel OverlayFS mount and
+verifies application startup, service discovery, data exchange, mode
+transitions, reverse shutdown, and journal persistence.
 
 ## Building an application
 
@@ -124,6 +144,7 @@ com/            runtime, public API, deployments, transports, and tests
 contracts/      authored service contracts
 docs/           public architecture and application documentation
 examples/       example applications
+exec/           execution model, coordinator, dinit backend, and tests
 integration/    independent consumer build fixture
 lab/            Linux validation image, rootfs export, and debug entry point
 platform/       target provider selection and platform deployment policy

@@ -30,7 +30,6 @@ allocation: {
 		name:       "managed_test"
 		kind:       "managed_application"
 		bootstrap:  false
-		executable: "/tmp/ovf-execd-e2e/bin/managed-test"
 		arguments:  []
 		dependencies:       ["system_test"]
 		exclusiveResources: []
@@ -40,8 +39,6 @@ allocation: {
 		name:       "system_test"
 		kind:       "service"
 		bootstrap:  false
-		executable: "/tmp/ovf-execd-e2e/bin/system-test"
-		arguments:  []
 		readiness:  "supervisor_notification"
 		startTimeoutMs: 2000
 		stopTimeoutMs:  2000

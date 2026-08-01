@@ -26,8 +26,10 @@ cc_binary(
 
 ovf_application_info(
     name = "managed_application_deployment",
+    application = ":managed_application_test_service",
     deployment = "deployment/daemon.cue",
     executable_target = "//exec/tests:managed_application_test_service",
+    install_path = "opt/managed-test/bin/managed-test",
 )
 
 ovf_exec_deployment(
@@ -74,9 +76,11 @@ cc_test(
         "//exec:dinit_plugin",
         "//exec:ovf-execd",
         "@dinit_source//:dinit",
+        "@dinit_source//:dinitctl",
     ],
     env = {
         "OVF_TEST_DINIT": "$(rootpath @dinit_source//:dinit)",
+        "OVF_TEST_DINITCTL": "$(rootpath @dinit_source//:dinitctl)",
         "OVF_TEST_DINIT_PLUGIN": "$(rootpath //exec:dinit_plugin)",
         "OVF_TEST_EXEC_DAEMON": "$(rootpath //exec:ovf-execd)",
         "OVF_TEST_EXECUTION_BACKEND": "$(rootpath :daemon_backend_config)",

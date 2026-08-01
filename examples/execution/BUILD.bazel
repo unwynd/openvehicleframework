@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-load("//bazel:execution.bzl", "ovf_exec_deployment")
+load("//bazel:execution.bzl", "ovf_exec_deployment", "ovf_exec_target_bundle")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -20,6 +20,24 @@ filegroup(
     name = "backend_config",
     srcs = [":deployment"],
     output_group = "backend_config",
+)
+
+ovf_exec_target_bundle(
+    name = "target_filesystem",
+    application_bundles = [
+        "//examples/camera:camera_bundle",
+        "//examples/driving_policy:driving_policy_bundle",
+        "//examples/radar:radar_iceoryx2_service_bundle",
+        "//examples/sensor_fusion:sensor_fusion_bundle",
+    ],
+    backend_plugin = "//exec:dinit_plugin",
+    daemon = "//exec:ovf-execd",
+    deployment = ":deployment",
+    dinit = "@dinit_source//:dinit",
+    platform_bundles = ["//com:vsomeip_platform_bundle"],
+    providers = ["//com/transports/iceoryx2:plugin"],
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
 )
 
 filegroup(

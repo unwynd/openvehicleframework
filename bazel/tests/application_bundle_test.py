@@ -16,7 +16,7 @@ def main() -> None:
     bundle = root / "examples/radar/radar_inproc_client_bundle.tar"
     with tarfile.open(bundle) as archive:
         expected = [
-            "bin/radar_inproc_client",
+            "opt/radar_inproc_client/bin/radar_inproc_client",
             "etc/ovf/radar_inproc_client/deployment.json",
             "etc/ovf/radar_inproc_client/plan.json",
             "share/ovf/radar_inproc_client/contract.ovf-ir.json",

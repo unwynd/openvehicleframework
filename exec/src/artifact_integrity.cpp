@@ -214,7 +214,8 @@ Result<void> VerifyRuntimeArtifacts(const RuntimeArtifactPaths& paths) {
     }
     auto manifest = ParseManifest(manifest_content.value());
     if (!manifest || !manifest.value()["artifactVersion"].isIntegral() ||
-        manifest.value()["artifactVersion"].asUInt64() != 1U ||
+        manifest.value()["artifactVersion"].asUInt64() != 2U ||
+        !manifest.value()["applicationArtifacts"].isArray() ||
         !manifest.value()["backendConfiguration"].isString() ||
         !manifest.value()["servicesDirectory"].isString() ||
         manifest.value()["backendConfiguration"].asString() !=
@@ -223,6 +224,16 @@ Result<void> VerifyRuntimeArtifacts(const RuntimeArtifactPaths& paths) {
         !manifest.value()["serviceFingerprints"].isObject()) {
       return MakeError(ErrorCode::configuration_error,
                        "runtime artifact manifest does not match deployment paths");
+    }
+    for (const auto& application : manifest.value()["applicationArtifacts"]) {
+      if (!application.isObject() || !application["name"].isString() ||
+          application["name"].asString().empty() || !application["bazelTarget"].isString() ||
+          !application["installPath"].isString() || application["installPath"].asString().empty() ||
+          application["installPath"].asString().front() == '/' ||
+          !Fingerprint(application["sha256"])) {
+        return MakeError(ErrorCode::configuration_error,
+                         "runtime artifact manifest has an invalid application binding");
+      }
     }
     auto verified_model = VerifyFile(
         model.value(), manifest.value()["executionModelArtifactFingerprint"], "execution model");

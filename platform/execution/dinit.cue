@@ -4,6 +4,10 @@ package ovf_exec_deployment
 
 platform: {
 	dinit: {
+		daemonExecutable:    "/usr/sbin/ovf-execd"
+		executionModel:      "/etc/ovf/exec/deployment.execution.json"
+		backendConfiguration: "/etc/ovf/exec/deployment.backend.json"
+		deploymentManifest:  "/usr/share/ovf/exec/manifest.json"
 		backendLibrary:    "/usr/lib/libovf_exec_backend_dinit.so"
 		systemRecoveryService: "ovf-system-recovery"
 		controlSocket:     "/run/ovf/exec/dinit.sock"
@@ -12,6 +16,13 @@ platform: {
 		mountExecutable:   "/bin/mount"
 		unmountExecutable: "/bin/umount"
 		nativeServices:    []
+		applicationMountPoint: "/"
+		units: vehicle_network: {
+			executable:     "/usr/bin/routingmanagerd"
+			arguments:      []
+			stopExecutable: ""
+			stopArguments:  []
+		}
 	}
 	persistence: {
 		journal:           "/var/lib/ovf/exec/journal.v1"

@@ -6,34 +6,11 @@ allocation: {
 	schemaVersion: 1
 	generation:    1
 	units: {
-		platform_storage: {
-			id:         10
-			name:       "platform_storage"
-			kind:       "mount"
-			bootstrap:  true
-			mount: {
-				source:     "/dev/disk/by-label/vehicle-data"
-				target:     "/var/lib/vehicle"
-				filesystem: "ext4"
-				options:    ["nodev", "nosuid"]
-			}
-			readiness: "mount_present"
-			startTimeoutMs: 10000
-			stopTimeoutMs:  3000
-			retry: {
-				maxAttempts: 2
-				delayMs:     100
-			}
-			dependencies:       []
-			exclusiveResources: [110]
-		}
 		vehicle_network: {
 			id:         11
 			name:       "vehicle_network"
 			kind:       "service"
 			bootstrap:  false
-			executable: "/usr/bin/ovf-vehicle-network"
-			arguments:  []
 			readiness:  "process_started"
 			startTimeoutMs: 5000
 			stopTimeoutMs:  3000
@@ -41,7 +18,7 @@ allocation: {
 				maxAttempts: 2
 				delayMs:     100
 			}
-			dependencies:       ["platform_storage"]
+			dependencies:       []
 			exclusiveResources: [111]
 		}
 		camera: {
@@ -49,7 +26,6 @@ allocation: {
 			name:       "camera"
 			kind:       "managed_application"
 			bootstrap:  false
-			executable: "/usr/bin/ovf-camera"
 			arguments:  []
 			dependencies:       ["vehicle_network"]
 			exclusiveResources: [101]
@@ -59,7 +35,6 @@ allocation: {
 			name:       "radar"
 			kind:       "managed_application"
 			bootstrap:  false
-			executable: "/usr/bin/ovf-radar"
 			arguments:  []
 			dependencies:       ["vehicle_network"]
 			exclusiveResources: [102]
@@ -69,7 +44,6 @@ allocation: {
 			name:       "sensor_fusion"
 			kind:       "managed_application"
 			bootstrap:  false
-			executable: "/usr/bin/ovf-sensor-fusion"
 			arguments:  []
 			dependencies:       ["camera", "radar"]
 			exclusiveResources: []
@@ -79,7 +53,6 @@ allocation: {
 			name:       "driving_policy"
 			kind:       "managed_application"
 			bootstrap:  false
-			executable: "/usr/bin/ovf-driving-policy"
 			arguments:  []
 			dependencies:       ["sensor_fusion"]
 			exclusiveResources: []

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 const CPP_CONTRACT_TEMPLATE: &str = include_str!("../templates/cpp_contract.hpp.j2");
 const CPP_DEPLOYMENT_TEMPLATE: &str = include_str!("../templates/cpp_deployment.hpp.j2");
 const DINIT_BOOT_TEMPLATE: &str = include_str!("../templates/dinit_boot.j2");
+const DINIT_DAEMON_TEMPLATE: &str = include_str!("../templates/dinit_daemon.j2");
 const DINIT_SERVICE_TEMPLATE: &str = include_str!("../templates/dinit_service.j2");
 
 fn cpp_type(name: &str) -> String {
@@ -366,6 +367,7 @@ fn generate_dinit_services(
     output: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut model: JsonValue = serde_json::from_slice(&fs::read(model_path)?)?;
+    let platform = model["platform"]["dinit"].clone();
     let units = model["units"]
         .as_array_mut()
         .ok_or("execution model has no units")?;
@@ -473,6 +475,7 @@ fn generate_dinit_services(
     let mut environment = Environment::new();
     environment.add_template("dinit_service", DINIT_SERVICE_TEMPLATE)?;
     environment.add_template("dinit_boot", DINIT_BOOT_TEMPLATE)?;
+    environment.add_template("dinit_daemon", DINIT_DAEMON_TEMPLATE)?;
     fs::create_dir_all(&output)?;
     let bootstrap_services = units
         .iter()
@@ -480,9 +483,27 @@ fn generate_dinit_services(
         .filter_map(|unit| unit["id"].as_u64())
         .filter_map(|id| service_names.get(&id).cloned())
         .collect::<Vec<_>>();
+    let daemon = serde_json::json!({
+        "command": format!(
+            "{} --model {} --backend {} --services {} --manifest {}",
+            platform["daemonExecutable"].as_str().ok_or("daemon executable is missing")?,
+            platform["executionModel"].as_str().ok_or("execution model path is missing")?,
+            platform["backendConfiguration"].as_str().ok_or("backend configuration path is missing")?,
+            platform["servicesDirectory"].as_str().ok_or("services directory is missing")?,
+            platform["deploymentManifest"].as_str().ok_or("deployment manifest path is missing")?,
+        ),
+        "dependencies": bootstrap_services,
+    });
+    let daemon_service = environment
+        .get_template("dinit_daemon")?
+        .render(context! { daemon => Value::from_serialize(&daemon) })?;
+    fs::write(
+        output.join("ovf-execd"),
+        format!("{}\n", daemon_service.trim()),
+    )?;
     let boot = environment
         .get_template("dinit_boot")?
-        .render(context! { bootstrap_services })?;
+        .render(context! { bootstrap_services => vec!["ovf-execd"] })?;
     fs::write(output.join("boot"), format!("{}\n", boot.trim()))?;
     let service = environment.get_template("dinit_service")?;
     for unit in units {

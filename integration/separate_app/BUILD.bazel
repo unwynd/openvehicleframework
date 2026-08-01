@@ -5,7 +5,7 @@ load("@openvehicleframework//bazel:application.bzl", "ovf_cc_application")
 ovf_cc_application(
     name = "separate_radar_app",
     srcs = ["main.cpp"],
-    deployment = "@openvehicleframework//examples/radar:client/deployment.cue",
+    deployment = "@openvehicleframework//examples/radar:client/ipc-deployment.cue",
     interfaces = ["@openvehicleframework//contracts/radar"],
     platform = "@openvehicleframework//platform:inproc",
 )

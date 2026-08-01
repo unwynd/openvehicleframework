@@ -23,6 +23,7 @@ RUN apt-get update \
         clang-format \
         cmake \
         curl \
+        file \
         g++ \
         gdb \
         git \

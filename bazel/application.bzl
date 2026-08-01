@@ -27,10 +27,12 @@ OvfDeploymentInfo = provider(
 )
 
 OvfApplicationInfo = provider(
-    doc = "Application-owned deployment and its executable target identity.",
+    doc = "Application-owned deployment and its packaged executable identity.",
     fields = {
         "deployment": "Authored application deployment CUE.",
+        "executable": "Built application executable file.",
         "executable_target": "Label of the application executable target.",
+        "install_path": "Executable path relative to the deployed filesystem root.",
     },
 )
 
@@ -252,6 +254,7 @@ def _application_package_impl(ctx):
     arguments.add("package")
     arguments.add("--name", ctx.attr.application_name)
     arguments.add("--executable", ctx.executable.application)
+    arguments.add("--install-path", ctx.attr.install_path)
     for deployment in deployments:
         arguments.add("--contract", deployment.contract.ir)
         arguments.add("--deployment", deployment.ir)
@@ -280,6 +283,7 @@ ovf_application_package = rule(
     implementation = _application_package_impl,
     attrs = {
         "application_name": attr.string(mandatory = True),
+        "install_path": attr.string(mandatory = True),
         "application": attr.label(mandatory = True, executable = True, cfg = "target"),
         "deployments": attr.label_list(mandatory = True, providers = [OvfDeploymentInfo]),
         "_builder": attr.label(
@@ -294,10 +298,12 @@ ovf_application_package = rule(
 
 def _application_info_impl(ctx):
     return [
-        DefaultInfo(files = depset([ctx.file.deployment])),
+        DefaultInfo(files = depset([ctx.file.deployment, ctx.executable.application])),
         OvfApplicationInfo(
             deployment = ctx.file.deployment,
+            executable = ctx.executable.application,
             executable_target = ctx.attr.executable_target,
+            install_path = ctx.attr.install_path,
         ),
     ]
 
@@ -308,7 +314,15 @@ ovf_application_info = rule(
             mandatory = True,
             allow_single_file = [".cue"],
         ),
+        "application": attr.label(
+            mandatory = True,
+            executable = True,
+            cfg = "target",
+        ),
         "executable_target": attr.string(
+            mandatory = True,
+        ),
+        "install_path": attr.string(
             mandatory = True,
         ),
     },
@@ -375,6 +389,8 @@ def _ovf_cc_application_impl(
         name,
         srcs,
         interfaces,
+        application_name = None,
+        execution_install_path = None,
         hdrs = [],
         deps = [],
         copts = [],
@@ -392,6 +408,7 @@ def _ovf_cc_application_impl(
 
     Args:
       name: Application target name.
+      application_name: Stable deployment name, independent of the Bazel target variant.
       srcs: C++ source files owned by the application.
       interfaces: Interface role dictionaries composed into the process.
       hdrs: Application-owned headers.
@@ -400,6 +417,7 @@ def _ovf_cc_application_impl(
       defines: Additional preprocessor definitions.
       data: Runtime data files.
       tags: Bazel tags propagated to generated targets.
+      execution_install_path: Executable path relative to the deployed filesystem root.
       visibility: Visibility of public targets.
       **kwargs: Additional attributes forwarded to the application binary.
     """
@@ -517,9 +535,13 @@ def _ovf_cc_application_impl(
     )
     ovf_application_package(
         name = name + "_bundle",
-        application_name = name,
+        application_name = application_name or name,
         application = ":" + name,
         deployments = deployment_rules,
+        install_path = execution_install_path or "opt/%s/bin/%s" % (
+            application_name or name,
+            application_name or name,
+        ),
         visibility = visibility,
     )
 
@@ -529,12 +551,14 @@ def ovf_cc_application(
         interfaces,
         deployment,
         platform,
+        application_name = None,
         hdrs = [],
         deps = [],
         copts = [],
         defines = [],
         data = [],
         tags = [],
+        execution_install_path = None,
         visibility = None,
         **kwargs):
     """Builds a C++ application using one or more interface targets.
@@ -545,6 +569,7 @@ def ovf_cc_application(
 
     Args:
       name: Application target name.
+      application_name: Stable deployment name, independent of the Bazel target variant.
       srcs: C++ source files owned by the application.
       interfaces: Public OVF interface targets consumed by the application.
       deployment: The application's single CUE deployment model.
@@ -555,6 +580,7 @@ def ovf_cc_application(
       defines: Additional preprocessor definitions.
       data: Runtime data files.
       tags: Bazel tags propagated to generated targets.
+      execution_install_path: Executable path relative to the deployed filesystem root.
       visibility: Visibility of public targets.
       **kwargs: Additional attributes forwarded to the application binary.
     """
@@ -576,6 +602,8 @@ def ovf_cc_application(
         name = name,
         srcs = srcs,
         interfaces = specifications,
+        application_name = application_name,
+        execution_install_path = execution_install_path,
         hdrs = hdrs,
         deps = deps,
         copts = copts,
@@ -588,6 +616,11 @@ def ovf_cc_application(
     ovf_application_info(
         name = name + "_execution_deployment",
         deployment = deployment,
+        application = ":" + name,
         executable_target = ":" + name,
+        install_path = execution_install_path or "opt/%s/bin/%s" % (
+            application_name or name,
+            application_name or name,
+        ),
         visibility = visibility,
     )
