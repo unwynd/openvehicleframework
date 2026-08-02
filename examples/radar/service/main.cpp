@@ -2,6 +2,7 @@
 
 #include "ovf/exec/application.hpp"
 #include "ovf_application.hpp"
+#include "ovf_logging.hpp"
 #include "radar/ovf_contract.hpp"
 
 #include <chrono>
@@ -50,20 +51,29 @@ int main() {
     std::cerr << "failed to start the radar service runtime\n";
     return 2;
   }
+  auto logging = ovf::app::CreateLogRuntime();
+  if (!logging) {
+    std::cerr << "failed to start radar service logging runtime\n";
+    return 3;
+  }
+  auto logger = logging->CreateLogger("radar.service");
 
   RadarService implementation;
   auto service = implementation.OfferService(communication.get(), ovf::app::radar());
   if (!service.valid()) {
     std::cerr << "failed to offer RadarService\n";
-    return 3;
+    static_cast<void>(logger.Error("failed to offer RadarService"));
+    return 4;
   }
   auto ready = execution.value().ReportReady();
   if (!ready) {
     std::cerr << "failed to report radar readiness\n";
     service.close();
-    return 4;
+    static_cast<void>(logger.Error("failed to report radar readiness"));
+    return 5;
   }
 
+  static_cast<void>(logger.Info("radar service ready"));
   std::cout << "SERVICE_READY" << std::endl;
   std::uint64_t sequence{};
   while (!execution.value().StopRequested()) {
@@ -73,14 +83,21 @@ int main() {
         service.publishRadarObjectsChanged(frame)) {
       std::cerr << "failed to publish RadarObjectsChanged\n";
       service.close();
-      return 5;
+      static_cast<void>(logger.Error("failed to publish radar objects",
+                                     ovf::log::Field::Unsigned("sequence", sequence)));
+      return 6;
     }
     implementation.set_speed(13.5F + static_cast<float>(sequence));
     if (service.publishVehicleStateField(implementation.state())) {
       std::cerr << "failed to publish VehicleStateField\n";
       service.close();
-      return 6;
+      static_cast<void>(logger.Error("failed to publish vehicle state",
+                                     ovf::log::Field::Unsigned("sequence", sequence)));
+      return 7;
     }
+    static_cast<void>(logger.Debug("radar scan published",
+                                   ovf::log::Field::Unsigned("sequence", sequence),
+                                   ovf::log::Field::Unsigned("objects", frame.objects.size())));
     std::this_thread::sleep_for(100ms);
   }
 

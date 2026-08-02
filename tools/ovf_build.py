@@ -205,6 +205,68 @@ def compile_application_model(args: argparse.Namespace) -> int:
     return 0
 
 
+def _dlt_id(value: str, used: set[str]) -> str:
+    """Create a deterministic printable four-character identifier."""
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    hash_value = 2166136261
+    for byte in value.encode("utf-8"):
+        hash_value = ((hash_value ^ byte) * 16777619) & 0xFFFFFFFF
+    for salt in range(256):
+        candidate_value = (hash_value ^ (salt * 0x9E3779B9)) & 0xFFFFFFFF
+        candidate = "".join(alphabet[(candidate_value >> shift) & 31] for shift in (0, 5, 10, 15))
+        if candidate not in used:
+            used.add(candidate)
+            return candidate
+    raise ValueError(f"unable to allocate unique DLT identifier for {value}")
+
+
+def compile_log_deployment(args: argparse.Namespace) -> int:
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=".ovf-log-cue-", dir=args.output.parent
+    ) as cue_cache:
+        environment = dict(os.environ, CUE_CACHE_DIR=cue_cache, CUE_CONFIG_DIR=cue_cache)
+        completed = subprocess.run(
+            [str(args.cue.resolve()), "export", str(args.schema.resolve()),
+             str(args.deployment.resolve()), str(args.binding.resolve()),
+             "--expression", "{app: application, sink: binding}", "--out", "json"],
+            capture_output=True, text=True, env=environment,
+        )
+        if completed.returncode != 0:
+            raise ValueError(completed.stderr.strip())
+    model = json.loads(completed.stdout)
+    used: set[str] = set()
+    application = model["app"]
+    logging = application["logging"]
+    contexts = []
+    seen = set()
+    for logger in logging["loggers"]:
+        name = logger["name"]
+        if name in seen:
+            raise ValueError(f"duplicate logger name: {name}")
+        seen.add(name)
+        contexts.append({
+            "logger": name,
+            "id": _dlt_id(f"{application['name']}:{name}", used),
+            "description": logger.get("description", name),
+        })
+    output = {
+        "logDeploymentVersion": 1,
+        "application": application["name"],
+        "applicationId": _dlt_id(application["name"], used),
+        "binding": model["sink"]["provider"],
+        "verbose": model["sink"]["verbose"],
+        "queueCapacity": logging["queueCapacity"],
+        "criticalReserve": logging["criticalReserve"],
+        "producerWaitMs": logging["producerWaitMs"],
+        "shutdownFlushMs": logging["shutdownFlushMs"],
+        "initialLevel": logging["initialLevel"],
+        "contexts": contexts,
+    }
+    write_if_changed(args.output, json.dumps(output, sort_keys=True, indent=2) + "\n")
+    return 0
+
+
 def _native_mapping(service: int, instance: int, entry: dict) -> str:
     return (f"service={service};instance={instance};element={entry.get('id', 0)};"
             f"eventGroup={entry.get('eventGroup', 0)};major={entry.get('major', 0)};"
@@ -770,6 +832,37 @@ def package_vsomeip_platform(args: argparse.Namespace) -> int:
     return 0
 
 
+def package_dlt_platform(args: argparse.Namespace) -> int:
+    runtime_targets = {
+        "dlt-daemon": ("usr/bin/dlt-daemon", 0o755),
+        "libovf_log.so": ("usr/lib/libovf_log.so", 0o755),
+        "libovf_log_binding_dlt.so": ("usr/lib/libovf_log_binding_dlt.so", 0o755),
+    }
+    sources: dict[str, Path] = {}
+    for source in args.runtime:
+        if source.name in runtime_targets:
+            if source.name in sources:
+                raise ValueError(f"duplicate DLT platform artifact: {source.name}")
+            sources[source.name] = source
+    missing = sorted(set(runtime_targets) - set(sources))
+    if missing:
+        raise ValueError(f"missing DLT platform artifacts: {', '.join(missing)}")
+    entries = [
+        (target, sources[name], mode)
+        for name, (target, mode) in runtime_targets.items()
+    ]
+    entries.extend([
+        ("etc/dlt.conf", args.configuration, 0o644),
+        ("usr/share/licenses/openvehicleframework/LICENSE", args.framework_license, 0o644),
+        ("usr/share/licenses/dlt-daemon/LICENSE", args.dlt_license, 0o644),
+    ])
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(args.output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        for target, source, mode in sorted(entries):
+            add_file(archive, source, target, mode)
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser()
     commands = result.add_subparsers(dest="command", required=True)
@@ -826,6 +919,13 @@ def parser() -> argparse.ArgumentParser:
     application_model.add_argument("--interface", required=True, action="append")
     application_model.add_argument("--output", required=True, type=Path)
     application_model.set_defaults(run=compile_application_model)
+    logging = commands.add_parser("log-deployment")
+    logging.add_argument("--cue", required=True, type=Path)
+    logging.add_argument("--schema", required=True, type=Path)
+    logging.add_argument("--deployment", required=True, type=Path)
+    logging.add_argument("--binding", required=True, type=Path)
+    logging.add_argument("--output", required=True, type=Path)
+    logging.set_defaults(run=compile_log_deployment)
 
     communication = commands.add_parser("communication-deployment")
     communication.add_argument("--cue", required=True, type=Path)
@@ -857,6 +957,13 @@ def parser() -> argparse.ArgumentParser:
     platform.add_argument("--boost-license", required=True, type=Path)
     platform.add_argument("--output", required=True, type=Path)
     platform.set_defaults(run=package_vsomeip_platform)
+    dlt_platform = commands.add_parser("package-dlt-platform")
+    dlt_platform.add_argument("--runtime", required=True, action="append", type=Path)
+    dlt_platform.add_argument("--configuration", required=True, type=Path)
+    dlt_platform.add_argument("--framework-license", required=True, type=Path)
+    dlt_platform.add_argument("--dlt-license", required=True, type=Path)
+    dlt_platform.add_argument("--output", required=True, type=Path)
+    dlt_platform.set_defaults(run=package_dlt_platform)
     target = commands.add_parser("package-execution-target")
     target.add_argument("--execution-model", required=True, type=Path)
     target.add_argument("--backend-config", required=True, type=Path)

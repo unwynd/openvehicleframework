@@ -3,7 +3,8 @@
 OpenVehicleFramework is an early-stage, modular vehicle application framework.
 It currently provides a transport-neutral typed communication API and an
 execution subsystem for validated application lifecycle and system-mode
-coordination.
+coordination, and a structured logging runtime with replaceable output
+bindings.
 
 > [!WARNING]
 > Version 0.0.2 is experimental. It is not production-ready, safety-qualified,
@@ -21,6 +22,8 @@ The repository currently contains:
 - deployment schema validation and deterministic application packaging;
 - validated execution domains, modes, unit dependencies, and lifecycle policy;
 - dinit-backed process supervision through the `ovf-execd` coordinator;
+- bounded structured logging with typed fields, stable event identifiers,
+  filtering, loss accounting, and a DLT binding;
 - deterministic target-filesystem assembly with executable integrity binding;
 - an in-process reference transport;
 - experimental iceoryx2 and vSomeIP transport integrations;
@@ -54,6 +57,12 @@ path. System integration composes those targets with execution allocation and
 platform policy, generates dinit service descriptions, and packages a complete
 target filesystem. `ovf-execd` exposes system-wide execution domains and modes
 without embedding communication-specific behavior.
+
+Logging intent is defined alongside each application's deployment. The
+`ovf_log_application` Bazel rule validates that intent and generates the
+runtime factory and backend identifier mapping. Application source uses only
+`ovf::log`; backend identifiers and initialization remain outside application
+source.
 
 See the [communication architecture](docs/com-architecture.md) for the public
 design principles and provider model.
@@ -147,6 +156,7 @@ contracts/      authored service contracts
 docs/           public architecture and application documentation
 examples/       example applications
 exec/           execution model, coordinator, dinit backend, and tests
+log/            structured logging API, runtime, bindings, deployments, tests
 integration/    independent consumer build fixture
 lab/            Linux validation image, rootfs export, and debug entry point
 platform/       target provider selection and platform deployment policy
@@ -172,6 +182,7 @@ Key transport-related dependencies are retrieved under their own licenses:
 | [Boost](https://www.boost.org/) | vSomeIP dependency | [Boost Software License 1.0](https://www.boost.org/LICENSE_1_0.txt) |
 | [Buildifier](https://github.com/bazelbuild/buildtools) | Starlark formatting and linting | Apache-2.0 |
 | [CUE](https://cuelang.org/) | Deployment definition and validation | Apache-2.0 |
+| [DLT daemon](https://github.com/COVESA/dlt-daemon) | Diagnostic log binding and daemon | [MPL-2.0](https://www.mozilla.org/MPL/2.0/) |
 
 These dependencies are not relicensed under the project's Apache-2.0 license.
 Future binary distributions must include the license and notice material

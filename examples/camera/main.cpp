@@ -3,6 +3,7 @@
 #include "camera/ovf_contract.hpp"
 #include "ovf/exec/application.hpp"
 #include "ovf_application.hpp"
+#include "ovf_logging.hpp"
 
 #include <chrono>
 #include <iostream>
@@ -26,18 +27,25 @@ int main() {
     std::cerr << "failed to start camera runtime\n";
     return 2;
   }
+  auto logging = ovf::app::CreateLogRuntime();
+  if (!logging) {
+    std::cerr << "failed to start camera logging runtime\n";
+    return 3;
+  }
+  auto logger = logging->CreateLogger("camera.capture");
   CameraImplementation implementation;
   auto service = implementation.OfferService(communication.get(), ovf::app::camera());
   if (!service.valid()) {
     std::cerr << "failed to offer CameraService\n";
-    return 3;
+    return 4;
   }
   auto ready = execution.value().ReportReady();
   if (!ready) {
     std::cerr << "failed to report camera readiness\n";
     service.close();
-    return 4;
+    return 5;
   }
+  static_cast<void>(logger.Info("camera service ready"));
   std::cout << "CAMERA_READY" << std::endl;
   std::uint64_t sequence{};
   while (!execution.value().StopRequested()) {
@@ -47,9 +55,15 @@ int main() {
     if (!object.classification.assign("vehicle") || !frame.objects.push_back(object) ||
         service.publishCameraObjectsChanged(frame)) {
       std::cerr << "failed to publish camera frame\n";
+      static_cast<void>(logger.Error("failed to publish camera frame",
+                                     ovf::log::Field::Unsigned("sequence", sequence)));
       service.close();
-      return 5;
+      return 6;
     }
+    constexpr ovf::log::Event frame_published{0x125A0041U, "frame_published",
+                                              ovf::log::Level::info};
+    static_cast<void>(logger.Event(frame_published, ovf::log::Field::Unsigned("sequence", sequence),
+                                   ovf::log::Field::Unsigned("objects", frame.objects.size())));
     std::this_thread::sleep_for(100ms);
   }
   service.close();

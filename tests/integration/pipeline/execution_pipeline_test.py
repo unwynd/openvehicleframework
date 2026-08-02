@@ -151,6 +151,28 @@ def main() -> int:
     mount_target_filesystem(runfile(os.environ["OVF_TEST_TARGET_FILESYSTEM"]))
     (ROOT / "run").mkdir(parents=True, exist_ok=True)
     (ROOT / "var/lib/ovf/exec").mkdir(parents=True, exist_ok=True)
+    runtime_directory = subprocess.run(
+        [
+            "sudo",
+            "-n",
+            "install",
+            "-d",
+            "-m",
+            "0775",
+            "-o",
+            str(os.getuid()),
+            "-g",
+            str(os.getgid()),
+            "/run/dlt",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if runtime_directory.returncode != 0:
+        raise RuntimeError(
+            f"cannot provision the DLT runtime directory: {runtime_directory.stderr.strip()}"
+        )
 
     environment = os.environ.copy()
     environment["LD_LIBRARY_PATH"] = str(ROOT / "usr/lib")

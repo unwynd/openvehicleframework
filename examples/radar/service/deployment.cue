@@ -11,6 +11,15 @@ application: {
 		role:      "provider"
 		transport: "network"
 	}]
+	logging: {
+		loggers: [{
+			name:        "radar.service"
+			description: "Radar service"
+		}]
+		queueCapacity:   1024
+		criticalReserve: 32
+		initialLevel:    "info"
+	}
 	execution: {
 		readiness: "lifecycle_channel"
 		startup: timeoutMs: 5000

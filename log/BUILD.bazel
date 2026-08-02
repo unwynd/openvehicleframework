@@ -1,0 +1,105 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_shared_library.bzl", "cc_shared_library")
+load("//bazel:platform.bzl", "ovf_dlt_platform_bundle")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "runtime",
+    srcs = [
+        "src/console_sink.cpp",
+        "src/log.cpp",
+    ],
+    hdrs = [
+        "include/ovf/log/log.hpp",
+        "include/ovf/log/sink.hpp",
+    ],
+    includes = ["include"],
+)
+
+cc_shared_library(
+    name = "shared",
+    shared_lib_name = select({
+        "@platforms//os:osx": "libovf_log.dylib",
+        "//conditions:default": "libovf_log.so",
+    }),
+    deps = [":runtime"],
+)
+
+cc_library(
+    name = "public_headers",
+    hdrs = [
+        "include/ovf/log/log.hpp",
+        "include/ovf/log/sink.hpp",
+    ],
+    includes = ["include"],
+)
+
+cc_import(
+    name = "api",
+    shared_library = ":shared",
+    deps = [":public_headers"],
+)
+
+cc_library(
+    name = "dlt_binding_impl",
+    srcs = ["src/dlt_sink.cpp"],
+    hdrs = ["include/ovf/log/dlt_sink.hpp"],
+    includes = ["include"],
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        ":api",
+        "@dlt_daemon_source//:dlt_runtime",
+    ],
+)
+
+cc_shared_library(
+    name = "dlt_shared",
+    shared_lib_name = "libovf_log_binding_dlt.so",
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [":dlt_binding_impl"],
+)
+
+cc_library(
+    name = "dlt_headers",
+    hdrs = ["include/ovf/log/dlt_sink.hpp"],
+    includes = ["include"],
+    deps = [":public_headers"],
+)
+
+cc_import(
+    name = "dlt_binding",
+    shared_library = ":dlt_shared",
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        ":api",
+        ":dlt_headers",
+    ],
+)
+
+filegroup(
+    name = "dlt_platform_runtime",
+    srcs = [
+        ":dlt_shared",
+        ":shared",
+        "@dlt_daemon_source//:dlt_runtime",
+    ],
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
+ovf_dlt_platform_bundle(
+    name = "dlt_platform_bundle",
+    configuration = "//log/deployment/bindings:dlt.conf",
+    dlt_license = "@dlt_daemon_source//:LICENSE",
+    framework_license = "//:LICENSE",
+    runtime = [":dlt_platform_runtime"],
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+)

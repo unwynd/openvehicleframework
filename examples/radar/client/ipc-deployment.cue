@@ -11,6 +11,15 @@ application: {
 		role:      "consumer"
 		transport: "ipc"
 	}]
+	logging: {
+		loggers: [{
+			name:        "radar.client"
+			description: "Radar client"
+		}]
+		queueCapacity:   512
+		criticalReserve: 32
+		initialLevel:    "info"
+	}
 	execution: {
 		readiness: "lifecycle_channel"
 		startup: timeoutMs: 5000

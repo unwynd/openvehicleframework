@@ -21,6 +21,7 @@ def main() -> int:
         "ovf-app-4",
         "ovf-execd",
         "ovf-unit-11",
+        "ovf-unit-12",
     ]
     expected_names = service_names + [
         "ovf-app-1.env",
@@ -43,10 +44,15 @@ def main() -> int:
         "boot": ["depends-on = ovf-execd"],
         "ovf-execd": ["restart = true"],
         "ovf-unit-11": ["type = process"],
-        "ovf-app-1": ["depends-on = ovf-unit-11"],
-        "ovf-app-2": ["depends-on = ovf-unit-11"],
-        "ovf-app-3": ["depends-on = ovf-app-1", "depends-on = ovf-app-2"],
-        "ovf-app-4": ["depends-on = ovf-app-3"],
+        "ovf-unit-12": ["type = process"],
+        "ovf-app-1": ["depends-on = ovf-unit-11", "depends-on = ovf-unit-12"],
+        "ovf-app-2": ["depends-on = ovf-unit-11", "depends-on = ovf-unit-12"],
+        "ovf-app-3": [
+            "depends-on = ovf-app-1",
+            "depends-on = ovf-app-2",
+            "depends-on = ovf-unit-12",
+        ],
+        "ovf-app-4": ["depends-on = ovf-app-3", "depends-on = ovf-unit-12"],
     }
     for service, expected_lines in expected_dependencies.items():
         description = (services / service).read_text(encoding="utf-8")
@@ -69,6 +75,7 @@ def main() -> int:
             ("ovf-app-4", "/opt/driving_policy/bin/driving_policy"),
             ("ovf-execd", "/usr/sbin/ovf-execd"),
             ("ovf-unit-11", "/usr/bin/routingmanagerd"),
+            ("ovf-unit-12", "/usr/bin/dlt-daemon"),
         )
     }
     diagnostics = {

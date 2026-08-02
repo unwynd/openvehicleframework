@@ -23,6 +23,12 @@ platform: {
 			stopExecutable: ""
 			stopArguments:  []
 		}
+		units: diagnostic_log: {
+			executable:     "/var/tmp/ovf-exec-pipeline/usr/bin/dlt-daemon"
+			arguments:      ["-t", "/run/dlt", "-c", "/var/tmp/ovf-exec-pipeline/etc/dlt.conf"]
+			stopExecutable: ""
+			stopArguments:  []
+		}
 	}
 	persistence: {
 		journal:           "/var/tmp/ovf-exec-pipeline/var/lib/ovf/exec/journal.v1"

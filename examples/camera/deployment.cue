@@ -11,6 +11,15 @@ application: {
 		role:      "provider"
 		transport: "ipc"
 	}]
+	logging: {
+		loggers: [{
+			name:        "camera.capture"
+			description: "Camera capture pipeline"
+		}]
+		queueCapacity:   1024
+		criticalReserve: 32
+		initialLevel:    "info"
+	}
 	execution: {
 		readiness: "lifecycle_channel"
 		startup: timeoutMs: 5000

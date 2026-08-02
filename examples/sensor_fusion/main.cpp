@@ -4,6 +4,7 @@
 #include "environment_model/ovf_contract.hpp"
 #include "ovf/exec/application.hpp"
 #include "ovf_application.hpp"
+#include "ovf_logging.hpp"
 #include "radar/ovf_contract.hpp"
 
 #include <atomic>
@@ -30,12 +31,19 @@ int main() {
     std::cerr << "failed to start sensor fusion runtime\n";
     return 2;
   }
+  auto logging = ovf::app::CreateLogRuntime();
+  if (!logging) {
+    std::cerr << "failed to start sensor fusion logging runtime\n";
+    return 3;
+  }
+  auto logger = logging->CreateLogger("sensor_fusion.processing");
 
   EnvironmentImplementation implementation;
   auto output = implementation.OfferService(communication.get(), ovf::app::environment_model());
   if (!output.valid()) {
     std::cerr << "failed to offer EnvironmentModelService\n";
-    return 3;
+    static_cast<void>(logger.Error("failed to offer EnvironmentModelService"));
+    return 4;
   }
 
   std::mutex mutex;
@@ -46,14 +54,16 @@ int main() {
   if (!camera || !radar) {
     std::cerr << "timed out discovering sensor inputs\n";
     output.close();
-    return 4;
+    static_cast<void>(logger.Warning("timed out discovering sensor inputs"));
+    return 5;
   }
   auto camera_subscription = camera->subscribeCameraObjectsChanged();
   auto radar_subscription = radar->subscribeRadarObjectsChanged();
   if (!camera_subscription.valid() || !radar_subscription.valid()) {
     std::cerr << "failed to subscribe to sensor inputs\n";
     output.close();
-    return 5;
+    static_cast<void>(logger.Error("failed to subscribe to sensor inputs"));
+    return 6;
   }
 
   example::camera::CameraFrame latest_camera{};
@@ -110,8 +120,10 @@ int main() {
     radar_subscription.close();
     camera_subscription.close();
     output.close();
-    return 6;
+    static_cast<void>(logger.Error("failed to report sensor fusion readiness"));
+    return 7;
   }
+  static_cast<void>(logger.Info("sensor fusion ready"));
   std::cout << "SENSOR_FUSION_READY" << std::endl;
   while (!execution.value().StopRequested() && !communication_failed.load()) {
     std::this_thread::sleep_for(100ms);
@@ -119,5 +131,9 @@ int main() {
   radar_subscription.close();
   camera_subscription.close();
   output.close();
-  return communication_failed.load() ? 7 : 0;
+  if (communication_failed.load()) {
+    static_cast<void>(logger.Error("failed to publish fused environment model"));
+    return 8;
+  }
+  return 0;
 }

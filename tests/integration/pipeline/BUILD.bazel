@@ -76,7 +76,10 @@ ovf_exec_target_bundle(
     daemon = "//exec:ovf-execd",
     deployment = ":execution_deployment",
     dinit = "@dinit_source//:dinit",
-    platform_bundles = ["//com:vsomeip_platform_bundle"],
+    platform_bundles = [
+        "//com:vsomeip_platform_bundle",
+        "//log:dlt_platform_bundle",
+    ],
     providers = ["//com/transports/iceoryx2:plugin"],
     tags = ["manual"],
 )
@@ -93,6 +96,7 @@ py_test(
         "//examples/driving_policy",
         "//examples/radar:radar_iceoryx2_service",
         "//examples/sensor_fusion",
+        "@dlt_daemon_source//:dlt_runtime",
     ],
     tags = [
         "exclusive",

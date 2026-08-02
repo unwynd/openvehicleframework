@@ -1,8 +1,29 @@
 # SPDX-License-Identifier: Apache-2.0
 
 load("//bazel:application.bzl", "ovf_cc_application")
+load("//bazel:logging.bzl", "ovf_log_application")
 
 package(default_visibility = ["//visibility:public"])
+
+ovf_log_application(
+    name = "client_logging",
+    deployment = "client/deployment.cue",
+)
+
+ovf_log_application(
+    name = "ipc_client_logging",
+    deployment = "client/ipc-deployment.cue",
+)
+
+ovf_log_application(
+    name = "service_logging",
+    deployment = "service/deployment.cue",
+)
+
+ovf_log_application(
+    name = "ipc_service_logging",
+    deployment = "service/ipc-deployment.cue",
+)
 
 ovf_cc_application(
     name = "radar_inproc_client",
@@ -10,7 +31,10 @@ ovf_cc_application(
     deployment = "client/ipc-deployment.cue",
     interfaces = ["//contracts/radar"],
     tags = ["manual"],
-    deps = ["//exec:application_api"],
+    deps = [
+        ":ipc_client_logging",
+        "//exec:application_api",
+    ],
 )
 
 ovf_cc_application(
@@ -20,7 +44,10 @@ ovf_cc_application(
     interfaces = ["//contracts/radar"],
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:linux"],
-    deps = ["//exec:application_api"],
+    deps = [
+        ":service_logging",
+        "//exec:application_api",
+    ],
 )
 
 ovf_cc_application(
@@ -30,7 +57,10 @@ ovf_cc_application(
     deployment = "service/ipc-deployment.cue",
     interfaces = ["//contracts/radar"],
     tags = ["manual"],
-    deps = ["//exec:application_api"],
+    deps = [
+        ":ipc_service_logging",
+        "//exec:application_api",
+    ],
 )
 
 ovf_cc_application(
@@ -39,7 +69,10 @@ ovf_cc_application(
     deployment = "client/ipc-deployment.cue",
     interfaces = ["//contracts/radar"],
     tags = ["manual"],
-    deps = ["//exec:application_api"],
+    deps = [
+        ":ipc_client_logging",
+        "//exec:application_api",
+    ],
 )
 
 ovf_cc_application(
@@ -49,5 +82,8 @@ ovf_cc_application(
     interfaces = ["//contracts/radar"],
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:linux"],
-    deps = ["//exec:application_api"],
+    deps = [
+        ":client_logging",
+        "//exec:application_api",
+    ],
 )

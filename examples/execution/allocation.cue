@@ -6,6 +6,21 @@ allocation: {
 	schemaVersion: 1
 	generation:    1
 	units: {
+		diagnostic_log: {
+			id:         12
+			name:       "diagnostic_log"
+			kind:       "service"
+			bootstrap:  true
+			readiness:  "process_started"
+			startTimeoutMs: 5000
+			stopTimeoutMs:  3000
+			retry: {
+				maxAttempts: 2
+				delayMs:     100
+			}
+			dependencies:       []
+			exclusiveResources: [112]
+		}
 		vehicle_network: {
 			id:         11
 			name:       "vehicle_network"
@@ -27,7 +42,7 @@ allocation: {
 			kind:       "managed_application"
 			bootstrap:  false
 			arguments:  []
-			dependencies:       ["vehicle_network"]
+			dependencies:       ["diagnostic_log", "vehicle_network"]
 			exclusiveResources: [101]
 		}
 		radar: {
@@ -36,7 +51,7 @@ allocation: {
 			kind:       "managed_application"
 			bootstrap:  false
 			arguments:  []
-			dependencies:       ["vehicle_network"]
+			dependencies:       ["diagnostic_log", "vehicle_network"]
 			exclusiveResources: [102]
 		}
 		sensor_fusion: {
@@ -45,7 +60,7 @@ allocation: {
 			kind:       "managed_application"
 			bootstrap:  false
 			arguments:  []
-			dependencies:       ["camera", "radar"]
+			dependencies:       ["camera", "diagnostic_log", "radar"]
 			exclusiveResources: []
 		}
 		driving_policy: {
@@ -54,7 +69,7 @@ allocation: {
 			kind:       "managed_application"
 			bootstrap:  false
 			arguments:  []
-			dependencies:       ["sensor_fusion"]
+			dependencies:       ["diagnostic_log", "sensor_fusion"]
 			exclusiveResources: []
 		}
 	}

@@ -50,7 +50,10 @@ ovf_exec_target_bundle(
     daemon = "//exec:ovf-execd",
     deployment = ":deployment",
     dinit = "@dinit_source//:dinit",
-    platform_bundles = ["//com:vsomeip_platform_bundle"],
+    platform_bundles = [
+        "//com:vsomeip_platform_bundle",
+        "//log:dlt_platform_bundle",
+    ],
     providers = ["//com/transports/iceoryx2:plugin"],
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:linux"],

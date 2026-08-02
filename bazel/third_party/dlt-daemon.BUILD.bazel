@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["LICENSE"])
+
+filegroup(
+    name = "source",
+    srcs = glob(["**"]),
+)
+
+cmake(
+    name = "dlt_runtime",
+    cache_entries = {
+        "BUILD_SHARED_LIBS": "OFF",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_FLAGS": "-Wno-unknown-warning-option -Wno-error=unknown-warning-option -Wno-sign-conversion -Wno-conversion",
+        "CMAKE_CXX_FLAGS": "-Wno-unknown-warning-option -Wno-error=unknown-warning-option -Wno-sign-conversion -Wno-conversion",
+        "CMAKE_INSTALL_LIBDIR": "lib",
+        "CMAKE_POSITION_INDEPENDENT_CODE": "ON",
+        "DLT_USER_IPC_PATH": "/run/dlt",
+        "WITH_DLT_CONSOLE": "ON",
+        "WITH_DLT_CONSOLE_CONTROL": "OFF",
+        "WITH_DLT_CONSOLE_CONVERT": "OFF",
+        "WITH_DLT_CONSOLE_PASSIVE_NODE_CTRL": "OFF",
+        "WITH_DLT_DAEMON": "ON",
+        "WITH_DLT_EXAMPLES": "OFF",
+        "WITH_DLT_TESTS": "OFF",
+        "WITH_DLT_UNIT_TESTS": "OFF",
+        "WITH_SYSTEMD": "OFF",
+    },
+    lib_source = ":source",
+    out_binaries = [
+        "dlt-daemon",
+        "dlt-receive",
+    ],
+    out_include_dir = "include",
+    out_static_libs = ["static/libdlt.a"],
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+)

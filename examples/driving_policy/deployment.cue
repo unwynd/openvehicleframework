@@ -11,6 +11,15 @@ application: {
 		role:      "consumer"
 		transport: "network"
 	}]
+	logging: {
+		loggers: [{
+			name:        "driving_policy.environment"
+			description: "Driving policy environment input"
+		}]
+		queueCapacity:   512
+		criticalReserve: 32
+		initialLevel:    "info"
+	}
 	execution: {
 		readiness: "lifecycle_channel"
 		startup: timeoutMs: 5000

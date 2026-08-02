@@ -1,0 +1,30 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 2896351..5d77287 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -260,6 +260,11 @@ add_compile_options(
+     -Wundef
+     -Wcast-qual
+     -Wno-system-headers
+     -Wno-unused-function
+-    -Wno-stringop-truncation
++    $<$<C_COMPILER_ID:GNU>:-Wno-stringop-truncation>
++    $<$<C_COMPILER_ID:Clang>:-Wno-conversion>
++    $<$<C_COMPILER_ID:Clang>:-Wno-static-in-inline>
++    $<$<C_COMPILER_ID:Clang>:-Wno-strict-prototypes>
++    $<$<C_COMPILER_ID:Clang>:-Wno-gnu-folding-constant>
++    $<$<C_COMPILER_ID:Clang>:-Wno-error>
+ )
+diff --git a/src/lib/dlt_user.c b/src/lib/dlt_user.c
+index 693c26f..d4510cb 100644
+--- a/src/lib/dlt_user.c
++++ b/src/lib/dlt_user.c
+@@ -547 +547 @@ DltReturnValue dlt_init(void)
+-        dlt_log_init(logging_mode);
++        dlt_log_init((int)logging_mode);
+@@ -2413,4 +2413,4 @@
+-int dlt_get_log_state()
++int dlt_get_log_state(void)
+ {
+     return dlt_user.log_state;
+ }

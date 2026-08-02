@@ -10,6 +10,7 @@ use std::path::PathBuf;
 const CPP_CONTRACT_TEMPLATE: &str = include_str!("../templates/cpp_contract.hpp.j2");
 const CPP_APPLICATION_TEMPLATE: &str = include_str!("../templates/cpp_application.hpp.j2");
 const CPP_DEPLOYMENT_TEMPLATE: &str = include_str!("../templates/cpp_deployment.hpp.j2");
+const CPP_LOG_TEMPLATE: &str = include_str!("../templates/cpp_log.hpp.j2");
 const DINIT_BOOT_TEMPLATE: &str = include_str!("../templates/dinit_boot.j2");
 const DINIT_DAEMON_TEMPLATE: &str = include_str!("../templates/dinit_daemon.j2");
 const DINIT_SERVICE_TEMPLATE: &str = include_str!("../templates/dinit_service.j2");
@@ -23,6 +24,10 @@ fn cpp_type(name: &str) -> String {
         "string" => "std::string".into(),
         value => value.into(),
     }
+}
+
+fn cpp_string(value: &str) -> String {
+    serde_json::to_string(value).expect("string serialization cannot fail")
 }
 
 fn uuid_bytes(value: &str) -> String {
@@ -591,6 +596,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             PathBuf::from(&arguments[2]),
             PathBuf::from(&arguments[4]),
         );
+    }
+    if arguments.first().map(String::as_str) == Some("log-cpp") {
+        if arguments.len() != 5 || arguments[1] != "--model" || arguments[3] != "--output" {
+            return Err("usage: ovf_codegen log-cpp --model <model> --output <header>".into());
+        }
+        let model: JsonValue = serde_json::from_str(&fs::read_to_string(&arguments[2])?)?;
+        let mut environment = Environment::new();
+        environment.add_template("cpp_log.hpp", CPP_LOG_TEMPLATE)?;
+        environment.add_filter("cpp_string", cpp_string);
+        let rendered = environment
+            .get_template("cpp_log.hpp")?
+            .render(context! { deployment => Value::from_serialize(&model) })?;
+        fs::write(&arguments[4], rendered)?;
+        return Ok(());
     }
     let (input, output) = parse_contract_arguments(&arguments)?;
     generate_contract(input, output)

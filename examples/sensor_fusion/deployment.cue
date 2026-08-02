@@ -21,6 +21,15 @@ application: {
 		role:      "provider"
 		transport: "network"
 	}]
+	logging: {
+		loggers: [{
+			name:        "sensor_fusion.processing"
+			description: "Sensor fusion processing"
+		}]
+		queueCapacity:   1024
+		criticalReserve: 32
+		initialLevel:    "info"
+	}
 	execution: {
 		readiness: "lifecycle_channel"
 		startup: timeoutMs: 7000

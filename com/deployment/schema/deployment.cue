@@ -43,6 +43,7 @@ package ovf_deployment
 			delayMs:     int & >=0
 		}
 	}
+	...
 }
 
 #Binding: {

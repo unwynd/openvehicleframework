@@ -1,6 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 load("//bazel:application.bzl", "ovf_cc_application")
+load("//bazel:logging.bzl", "ovf_log_application")
+
+ovf_log_application(
+    name = "logging",
+    deployment = "deployment.cue",
+)
 
 ovf_cc_application(
     name = "driving_policy",
@@ -9,5 +15,8 @@ ovf_cc_application(
     interfaces = ["//contracts/environment_model"],
     tags = ["manual"],
     visibility = ["//visibility:public"],
-    deps = ["//exec:application_api"],
+    deps = [
+        ":logging",
+        "//exec:application_api",
+    ],
 )

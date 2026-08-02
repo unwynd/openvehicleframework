@@ -113,6 +113,16 @@ http_archive(
     urls = ["https://github.com/COVESA/vsomeip/archive/7bcc1e06f16a774e70931ed641f475fbba9c8c64.tar.gz"],
 )
 
+http_archive(
+    name = "dlt_daemon_source",
+    build_file = "//bazel/third_party:dlt-daemon.BUILD.bazel",
+    patch_strip = 1,
+    patches = ["//bazel/third_party:dlt-daemon-clang.patch"],
+    sha256 = "cfebc25c6546d26edbeefcb60f40b5d3b6295e9db78c4e4b261aca4ec3d05d04",
+    strip_prefix = "dlt-daemon-b84dbc0d1ab35f686dd225956d33c003b5917ab6",
+    urls = ["https://github.com/COVESA/dlt-daemon/archive/b84dbc0d1ab35f686dd225956d33c003b5917ab6.tar.gz"],
+)
+
 archive_override(
     module_name = "iceoryx2",
     integrity = "sha256-MgxwcmhCcVHSgIlkXENyEM4PSHBM3rdgj9hapNRdCjI=",

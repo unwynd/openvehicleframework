@@ -40,7 +40,7 @@ def runfile(relative: str) -> Path:
 
 
 def extract(bundle: Path, destination: Path) -> None:
-    destination.mkdir(parents=True)
+    destination.mkdir(parents=True, exist_ok=True)
     with tarfile.open(bundle) as archive:
         for member in archive.getmembers():
             target = (destination / member.name).resolve()
@@ -161,16 +161,20 @@ def run_client(
 
 
 def main() -> int:
-    outputs = Path(os.environ.get("TEST_UNDECLARED_OUTPUTS_DIR", tempfile.gettempdir()))
+    outputs_value = os.environ.get("TEST_UNDECLARED_OUTPUTS_DIR")
+    if not outputs_value:
+        raise RuntimeError("TEST_UNDECLARED_OUTPUTS_DIR is required")
+    outputs = Path(outputs_value)
     logs = outputs / "vsomeip-lifecycle"
     logs.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.TemporaryDirectory(prefix="ovf-vsomeip-bundles-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="ovf-vsomeip-bundles-", dir=outputs) as temporary:
         root = Path(temporary)
         platform = root / "platform"
         service_root = root / "service"
         client_root = root / "client"
         extract(runfile("com/vsomeip_platform_bundle.tar"), platform)
+        extract(runfile("log/dlt_platform_bundle.tar"), platform)
         extract(runfile("examples/radar/radar_service_bundle.tar"), service_root)
         extract(runfile("examples/radar/radar_client_bundle.tar"), client_root)
 
@@ -178,12 +182,16 @@ def main() -> int:
         environment.pop("VSOMEIP_CONFIGURATION", None)
         environment["LD_LIBRARY_PATH"] = str(platform / "usr/lib")
         environment["OVF_COM_PROVIDER_PATH"] = str(platform / "usr/lib/ovf/providers")
+        dlt_runtime = root / "run/dlt"
+        dlt_runtime.mkdir(parents=True)
+        environment["DLT_PIPE_DIR"] = str(dlt_runtime)
         workdir = platform / "etc"
         deployments = runfile(
             "tests/integration/vsomeip/communication_deployment.runtime"
         )
         routing_log = (logs / "routingmanagerd.log").open("w", encoding="utf-8")
         routing: subprocess.Popen[str] | None = None
+        dlt: subprocess.Popen[str] | None = None
         service: subprocess.Popen[str] | None = None
         service_log = None
         try:
@@ -192,6 +200,15 @@ def main() -> int:
                 cwd=workdir,
                 env=environment,
                 stdout=routing_log,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            dlt_log = (logs / "dlt-daemon.log").open("w", encoding="utf-8")
+            dlt = subprocess.Popen(
+                [platform / "usr/bin/dlt-daemon", "-t", dlt_runtime],
+                cwd=workdir,
+                env=environment,
+                stdout=dlt_log,
                 stderr=subprocess.STDOUT,
                 text=True,
             )
@@ -229,7 +246,10 @@ def main() -> int:
             if service_log:
                 service_log.close()
             stop(routing)
+            stop(dlt)
             routing_log.close()
+            if dlt is not None:
+                dlt_log.close()
 
 
 if __name__ == "__main__":

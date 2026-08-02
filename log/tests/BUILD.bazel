@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+cc_test(
+    name = "runtime_test",
+    srcs = ["runtime_test.cpp"],
+    deps = [
+        "//log:api",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "dlt_e2e_test",
+    srcs = ["dlt_e2e_test.cpp"],
+    data = ["@dlt_daemon_source//:dlt_runtime"],
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        "//log:api",
+        "//log:dlt_binding",
+        "@googletest//:gtest_main",
+    ],
+)
+
+test_suite(
+    name = "all_tests",
+    tests = [
+        ":dlt_e2e_test",
+        ":runtime_test",
+    ],
+)

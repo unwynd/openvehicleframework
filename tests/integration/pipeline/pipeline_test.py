@@ -26,6 +26,18 @@ def runfile(relative: str) -> Path:
     raise FileNotFoundError(relative)
 
 
+def executable_runfile(name: str) -> Path:
+    root = Path(os.environ["RUNFILES_DIR"])
+    matches = [
+        candidate
+        for candidate in root.rglob(name)
+        if candidate.is_file() and os.access(candidate, os.X_OK)
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(f"expected exactly one executable runfile named {name}: {matches}")
+    return matches[0]
+
+
 def stop(process: subprocess.Popen[str] | None) -> None:
     if process is None or process.poll() is not None:
         return
@@ -87,12 +99,17 @@ def start_until(
 
 
 def main() -> int:
-    outputs = Path(os.environ.get("TEST_UNDECLARED_OUTPUTS_DIR", tempfile.gettempdir()))
+    outputs_value = os.environ.get("TEST_UNDECLARED_OUTPUTS_DIR")
+    if not outputs_value:
+        raise RuntimeError("TEST_UNDECLARED_OUTPUTS_DIR is required")
+    outputs = Path(outputs_value)
     logs = outputs / "sensor-fusion-pipeline"
     logs.mkdir(parents=True, exist_ok=True)
     processes: list[subprocess.Popen[str]] = []
     open_logs: list[object] = []
-    with tempfile.TemporaryDirectory(prefix="ovf-sensor-fusion-") as temporary:
+    with tempfile.TemporaryDirectory(
+        prefix="ovf-sensor-fusion-", dir=outputs
+    ) as temporary:
         root = Path(temporary)
         platform = root / "platform"
         providers = root / "providers"
@@ -110,6 +127,9 @@ def main() -> int:
         environment.pop("VSOMEIP_CONFIGURATION", None)
         environment["LD_LIBRARY_PATH"] = str(platform / "usr/lib")
         environment["OVF_COM_PROVIDER_PATH"] = str(providers)
+        dlt_ipc = root / "run" / "dlt"
+        dlt_ipc.mkdir(parents=True)
+        environment["DLT_PIPE_DIR"] = str(dlt_ipc)
         deployments = runfile(
             "tests/integration/pipeline/communication_deployment.runtime"
         )
@@ -125,6 +145,17 @@ def main() -> int:
             text=True,
         )
         processes.append(routing)
+        dlt_log = (logs / "dlt-daemon.log").open("w", encoding="utf-8")
+        open_logs.append(dlt_log)
+        dlt_daemon = subprocess.Popen(
+            [executable_runfile("dlt-daemon"), "-t", dlt_ipc],
+            cwd=workdir,
+            env=environment,
+            stdout=dlt_log,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        processes.append(dlt_daemon)
         try:
             for executable, marker, name, application_id, deployment_name in (
                 (runfile("examples/radar/radar_iceoryx2_service"),

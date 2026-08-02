@@ -10,6 +10,7 @@ import selectors
 import signal
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 
@@ -46,6 +47,12 @@ def stop(process: subprocess.Popen[str] | None) -> None:
         process.wait()
 
 
+def extract(bundle: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(bundle) as archive:
+        archive.extractall(destination, filter="data")
+
+
 def main() -> int:
     plugin = runfile(
         "com/transports/iceoryx2/libovf_com_provider_iceoryx2"
@@ -56,12 +63,30 @@ def main() -> int:
     environment = os.environ.copy()
     environment["OVF_COM_PROVIDER_PATH"] = str(plugin.parent)
     deployments = runfile("tests/integration/iceoryx2/communication_deployment.runtime")
-    output = Path(os.environ.get("TEST_UNDECLARED_OUTPUTS_DIR", tempfile.gettempdir()))
+    output_value = os.environ.get("TEST_UNDECLARED_OUTPUTS_DIR")
+    if not output_value:
+        raise RuntimeError("TEST_UNDECLARED_OUTPUTS_DIR is required")
+    output = Path(output_value)
     service_log_path = output / "iceoryx2-radar-service.log"
     client_log_path = output / "iceoryx2-radar-client.log"
-    service: subprocess.Popen[str] | None = None
-    service_log = service_log_path.open("w", encoding="utf-8")
-    try:
+    with tempfile.TemporaryDirectory(prefix="ovf-iceoryx2-platform-", dir=output) as temporary:
+      platform = Path(temporary)
+      extract(runfile("log/dlt_platform_bundle.tar"), platform)
+      environment["LD_LIBRARY_PATH"] = str(platform / "usr/lib")
+      dlt_runtime = platform / "run/dlt"
+      dlt_runtime.mkdir(parents=True)
+      environment["DLT_PIPE_DIR"] = str(dlt_runtime)
+      dlt_log = (output / "iceoryx2-dlt-daemon.log").open("w", encoding="utf-8")
+      dlt = subprocess.Popen(
+          [platform / "usr/bin/dlt-daemon", "-t", dlt_runtime],
+          env=environment,
+          stdout=dlt_log,
+          stderr=subprocess.STDOUT,
+          text=True,
+      )
+      service: subprocess.Popen[str] | None = None
+      service_log = service_log_path.open("w", encoding="utf-8")
+      try:
         service_ready_read, service_ready_write = os.pipe()
         service_environment = environment.copy()
         service_environment["OVF_EXEC_APPLICATION_ID"] = "1"
@@ -143,11 +168,13 @@ def main() -> int:
         if client_ready != b"\x01" or client.returncode != 0 or not EXPECTED.issubset(observed):
             raise RuntimeError(f"client exchange failed:\n{content}")
         return 0
-    finally:
-        stop(service)
-        if service and service.stdout:
-            service_log.write(service.stdout.read())
-        service_log.close()
+      finally:
+          stop(service)
+          stop(dlt)
+          if service and service.stdout:
+              service_log.write(service.stdout.read())
+          service_log.close()
+          dlt_log.close()
 
 
 if __name__ == "__main__":

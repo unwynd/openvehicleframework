@@ -36,6 +36,7 @@ py_test(
         "//com:vsomeip_platform_bundle",
         "//examples/radar:radar_client_bundle",
         "//examples/radar:radar_service_bundle",
+        "//log:dlt_platform_bundle",
     ],
     tags = [
         "exclusive",

@@ -49,3 +49,42 @@ ovf_vsomeip_platform_bundle = rule(
     outputs = {"bundle": "%{name}.tar"},
     doc = "Creates a deterministic vSomeIP middleware filesystem bundle.",
 )
+
+def _dlt_platform_bundle_impl(ctx):
+    arguments = ctx.actions.args()
+    arguments.add("package-dlt-platform")
+    arguments.add_all(ctx.files.runtime, before_each = "--runtime")
+    arguments.add("--configuration", ctx.file.configuration)
+    arguments.add("--framework-license", ctx.file.framework_license)
+    arguments.add("--dlt-license", ctx.file.dlt_license)
+    arguments.add("--output", ctx.outputs.bundle)
+    ctx.actions.run(
+        executable = ctx.executable._builder,
+        arguments = [arguments],
+        inputs = depset(ctx.files.runtime + [
+            ctx.file.configuration,
+            ctx.file.framework_license,
+            ctx.file.dlt_license,
+        ]),
+        outputs = [ctx.outputs.bundle],
+        mnemonic = "OvfDltPlatformPackage",
+        progress_message = "Packaging DLT platform middleware %{label}",
+    )
+    return [DefaultInfo(files = depset([ctx.outputs.bundle]))]
+
+ovf_dlt_platform_bundle = rule(
+    implementation = _dlt_platform_bundle_impl,
+    attrs = {
+        "configuration": attr.label(allow_single_file = True, mandatory = True),
+        "dlt_license": attr.label(allow_single_file = True, mandatory = True),
+        "framework_license": attr.label(allow_single_file = True, mandatory = True),
+        "runtime": attr.label_list(allow_files = True, mandatory = True),
+        "_builder": attr.label(
+            default = Label("//tools:ovf_build"),
+            executable = True,
+            cfg = "exec",
+        ),
+    },
+    outputs = {"bundle": "%{name}.tar"},
+    doc = "Creates a deterministic DLT middleware filesystem bundle.",
+)
