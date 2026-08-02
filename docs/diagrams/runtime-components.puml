@@ -1,0 +1,89 @@
+' SPDX-License-Identifier: Apache-2.0
+@startuml runtime-components
+!pragma layout smetana
+title OpenVehicleFramework — Runtime Components and Backend Boundaries
+
+left to right direction
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam componentStyle uml2
+skinparam packageStyle rectangle
+skinparam defaultFontName Helvetica
+skinparam defaultFontSize 13
+skinparam ArrowColor #455A64
+skinparam ArrowThickness 1.2
+skinparam ComponentBorderColor #37474F
+skinparam ComponentBackgroundColor #FAFAFA
+skinparam InterfaceBorderColor #1565C0
+skinparam InterfaceBackgroundColor #E3F2FD
+skinparam PackageBorderColor #90A4AE
+skinparam PackageBackgroundColor #F7F9FA
+skinparam NoteBorderColor #78909C
+skinparam NoteBackgroundColor #FFFDE7
+
+package "Application process" as application #F3F8FC {
+  component "Application logic" as app
+  component "Generated contract API\nand deployment facades" as generated <<generated>>
+  app --> generated : typed service calls
+}
+
+package "Public framework API" as public_api #F3F8FC {
+  interface "ovf::com" as icom
+  interface "ovf::exec" as iexec
+  interface "ovf::log" as ilog
+}
+
+package "Framework runtime" as framework #F7F9FA {
+  component "Communication\nruntime" as com_runtime
+  component "Execution\ncoordinator" as exec_runtime
+  component "Bounded logging\nruntime" as log_runtime
+}
+
+package "Versioned backend contracts" as contracts #FFF8E1 {
+  interface "Transport ABI v1\nC" as transport_abi
+  interface "Execution backend ABI v1\nC" as execution_abi
+  interface "Sink interface\nC++ / internal" as sink_interface
+}
+
+package "Backend implementations" as backends #F5F5F5 {
+  component "In-process" as inproc <<reference>>
+  component "iceoryx2" as iceoryx2 <<experimental IPC>>
+  component "vSomeIP" as vsomeip <<experimental network>>
+  component "Cyclone DDS" as dds <<model only>>
+  component "dinit backend" as dinit <<experimental>>
+  component "Console sink" as console
+  component "DLT sink" as dlt <<experimental>>
+}
+
+generated --> icom
+app --> iexec
+app --> ilog
+
+icom -- com_runtime
+iexec -- exec_runtime
+ilog -- log_runtime
+
+com_runtime ..> transport_abi : loads provider
+exec_runtime ..> execution_abi : loads backend
+log_runtime ..> sink_interface : owns sink
+
+transport_abi <|.. inproc
+transport_abi <|.. iceoryx2
+transport_abi <|.. vsomeip
+transport_abi <|.. dds
+execution_abi <|.. dinit
+sink_interface <|.. console
+sink_interface <|.. dlt
+
+note bottom of dds
+  Provider not implemented
+  in this release
+end note
+
+legend bottom
+  |= Stereotype |= Meaning |
+  | <<reference>> | Validation implementation |
+  | <<experimental>> | Available for evaluation; compatibility may change |
+  | <<model only>> | Represented in deployment; backend is absent |
+endlegend
+@enduml

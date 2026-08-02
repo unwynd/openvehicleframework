@@ -1,0 +1,89 @@
+' SPDX-License-Identifier: Apache-2.0
+@startuml target-deployment
+!pragma layout smetana
+title OpenVehicleFramework — Generated Target and Runtime Deployment
+
+top to bottom direction
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam componentStyle uml2
+skinparam packageStyle rectangle
+skinparam defaultFontName Helvetica
+skinparam defaultFontSize 13
+skinparam ArrowColor #455A64
+skinparam ArrowThickness 1.2
+skinparam NodeBorderColor #37474F
+skinparam NodeBackgroundColor #FAFAFA
+skinparam ArtifactBorderColor #546E7A
+skinparam ArtifactBackgroundColor #ECEFF1
+skinparam ComponentBorderColor #37474F
+skinparam ComponentBackgroundColor #FAFAFA
+skinparam DatabaseBorderColor #546E7A
+skinparam DatabaseBackgroundColor #ECEFF1
+
+package "Authored and selected inputs" as inputs #F3F8FC {
+  artifact "Smithy service\ncontracts" as smithy
+  artifact "Application CUE\ndeployment" as app_cue
+  artifact "Platform CUE\npolicy" as platform_cue
+  artifact "Execution allocation\ndomains and modes" as allocation
+}
+
+component "Validated Bazel generation\nand system resolution" as generator <<build time>>
+
+package "Separately shippable artifacts" as artifacts #FFF8E1 {
+  artifact "Application bundles\n/opt/<application>" as app_bundles
+  artifact "Communication runtime\ndeployments" as com_deployments
+  artifact "Execution model and\ndinit service descriptions" as exec_deployment
+  artifact "Middleware bundles\nproviders, routing manager, DLT" as middleware
+}
+
+artifact "Deterministic target\nfilesystem" as rootfs <<assembled>>
+
+smithy --> generator
+app_cue --> generator
+platform_cue --> generator
+allocation --> generator
+generator --> app_bundles
+generator --> com_deployments
+generator --> exec_deployment
+generator --> middleware
+app_bundles --> rootfs
+com_deployments --> rootfs
+exec_deployment --> rootfs
+middleware --> rootfs
+
+node "Target ECU" as ecu #F7F9FA {
+  node "Linux target" as linux {
+    artifact "Read-only base filesystem" as lower
+    folder "Writable runtime and\npersistent state" as writable
+
+    node "dinit\nPID 1 / supervisor" as supervisor <<execution environment>> {
+      component "Platform services" as services {
+        component "routingmanagerd" as routing
+        component "dlt-daemon" as dlt_daemon
+      }
+      component "ovf-execd" as execd
+      component "Managed application\nprocesses" as applications
+    }
+
+    database "/run\nruntime endpoints" as run
+    database "/var/lib/ovf\nexecution journal" as journal
+  }
+}
+
+rootfs --> lower : installed or mounted
+supervisor --> services : start first
+supervisor --> execd : start after bootstrap units
+execd --> applications : mode transitions and lifecycle
+applications --> routing : communication
+applications --> dlt_daemon : structured logs
+services --> run : sockets and IPC
+execd --> run : control sockets
+execd --> journal : recovery evidence
+applications ..> lower : binaries and deployment artifacts
+
+note right of supervisor
+  Startup follows generated dependencies.
+  Shutdown reverses the dependency order.
+end note
+@enduml

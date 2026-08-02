@@ -1,10 +1,9 @@
 # OpenVehicleFramework
 
-OpenVehicleFramework is an early-stage, modular vehicle application framework.
-It currently provides a transport-neutral typed communication API and an
-execution subsystem for validated application lifecycle and system-mode
-coordination, and a structured logging runtime with replaceable output
-bindings.
+OpenVehicleFramework is an experimental, early-stage vehicle application
+framework. It is a development and evaluation project for transport-neutral
+communication, application execution, deployment generation, and structured
+logging. It is not a finished vehicle software platform.
 
 > [!WARNING]
 > Version 0.0.2 is experimental. It is not production-ready, safety-qualified,
@@ -35,18 +34,23 @@ is not included in this release.
 
 ## Architecture
 
-```text
-Application
-    │
-Generated C++ contract API
-    │
-Transport-neutral runtime
-    │
-Versioned C transport boundary
-    ├── in-process reference transport
-    ├── experimental iceoryx2 transport
-    └── experimental vSomeIP transport
-```
+[![Runtime components and backend boundaries](docs/diagrams/runtime-components.svg)](docs/diagrams/runtime-components.puml)
+
+Backend status is intentionally explicit:
+
+| Cluster | Backend | Boundary | Status |
+|---|---|---|---|
+| Communication | in-process | versioned C transport ABI | Reference implementation |
+| Communication | iceoryx2 | versioned C transport ABI | Experimental IPC integration |
+| Communication | vSomeIP | versioned C transport ABI | Experimental SOME/IP integration |
+| Communication | Cyclone DDS | versioned C transport ABI | Deployment model only; provider not implemented |
+| Execution | dinit | versioned C execution-backend ABI | Experimental Linux integration |
+| Logging | console | internal C++ sink interface | Implemented |
+| Logging | DLT | internal C++ sink interface | Experimental Linux integration |
+
+The logging sink interface is not currently a stable binary plugin contract.
+Only the communication transport ABI and execution backend ABI are versioned C
+boundaries in this release.
 
 Service contracts are separate from deployment configuration. Applications use
 generated types, generated deployment facades, and `ovf::com` APIs. Deployment
@@ -63,6 +67,20 @@ Logging intent is defined alongside each application's deployment. The
 runtime factory and backend identifier mapping. Application source uses only
 `ovf::log`; backend identifiers and initialization remain outside application
 source.
+
+### Build and deployment flow
+
+Contracts, application intent, provider policy, and machine allocation remain
+separate inputs. System integration resolves them into independently shippable
+application and middleware artifacts before assembling a target filesystem.
+
+[![Generated target and runtime deployment](docs/diagrams/target-deployment.svg)](docs/diagrams/target-deployment.puml)
+
+Application bundles contain application code and generated application
+artifacts. Middleware binaries and platform configuration are packaged
+separately and are combined only by target integration. On boot, dinit starts
+the declared platform services; `ovf-execd` then coordinates execution domains,
+modes, dependency ordering, readiness, recovery, and reverse shutdown.
 
 See the [communication architecture](docs/com-architecture.md) for the public
 design principles and provider model.
@@ -173,7 +191,7 @@ release.
 
 ## Third-party dependencies
 
-Key transport-related dependencies are retrieved under their own licenses:
+Key build and runtime dependencies are retrieved under their own licenses:
 
 | Dependency | Purpose | License |
 |---|---|---|
@@ -183,6 +201,7 @@ Key transport-related dependencies are retrieved under their own licenses:
 | [Buildifier](https://github.com/bazelbuild/buildtools) | Starlark formatting and linting | Apache-2.0 |
 | [CUE](https://cuelang.org/) | Deployment definition and validation | Apache-2.0 |
 | [DLT daemon](https://github.com/COVESA/dlt-daemon) | Diagnostic log binding and daemon | [MPL-2.0](https://www.mozilla.org/MPL/2.0/) |
+| [dinit](https://github.com/davmac314/dinit) | Process supervision and generated execution backend | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) |
 
 These dependencies are not relicensed under the project's Apache-2.0 license.
 Future binary distributions must include the license and notice material
