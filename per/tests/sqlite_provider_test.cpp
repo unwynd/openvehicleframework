@@ -9,13 +9,18 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
-extern "C" const ovf_per_backend_factory_v1* ovf_per_sqlite_backend_query_v1(void);
+extern "C" const ovf_per_backend_factory_v1* ovf_per_backend_query_v1(void);
 
 namespace {
 
 std::span<const std::byte> Bytes(std::string_view value) {
   return {reinterpret_cast<const std::byte*>(value.data()), value.size()};
+}
+
+std::string Text(const std::vector<std::byte>& value) {
+  return {reinterpret_cast<const char*>(value.data()), value.size()};
 }
 
 std::string TestRoot(std::string_view name) {
@@ -42,7 +47,7 @@ ovf::per::StoreOptions Options(std::uint64_t capacity = 1024) {
 TEST(PerSqliteProviderTest, PersistsCommittedGenerationAcrossRuntimeRestart) {
   const auto root = TestRoot("restart");
   {
-    auto runtime_result = ovf::per::Runtime::Create(*ovf_per_sqlite_backend_query_v1(),
+    auto runtime_result = ovf::per::Runtime::Create(*ovf_per_backend_query_v1(),
                                                     {.configuration = Configuration(root)});
     ASSERT_TRUE(runtime_result) << runtime_result.error().message;
     auto runtime = std::move(runtime_result).value();
@@ -65,7 +70,7 @@ TEST(PerSqliteProviderTest, PersistsCommittedGenerationAcrossRuntimeRestart) {
     EXPECT_EQ(commit.value().achieved_durability, ovf::per::Durability::process_crash);
   }
 
-  auto runtime_result = ovf::per::Runtime::Create(*ovf_per_sqlite_backend_query_v1(),
+  auto runtime_result = ovf::per::Runtime::Create(*ovf_per_backend_query_v1(),
                                                   {.configuration = Configuration(root)});
   ASSERT_TRUE(runtime_result) << runtime_result.error().message;
   auto runtime = std::move(runtime_result).value();
@@ -84,7 +89,7 @@ TEST(PerSqliteProviderTest, PersistsCommittedGenerationAcrossRuntimeRestart) {
 
 TEST(PerSqliteProviderTest, FailedMutationDoesNotChangeTransactionOrCommittedState) {
   auto runtime_result = ovf::per::Runtime::Create(
-      *ovf_per_sqlite_backend_query_v1(), {.configuration = Configuration(TestRoot("quota"))});
+      *ovf_per_backend_query_v1(), {.configuration = Configuration(TestRoot("quota"))});
   ASSERT_TRUE(runtime_result) << runtime_result.error().message;
   auto runtime = std::move(runtime_result).value();
   auto store_result = runtime->OpenStore(Options(8));
@@ -106,7 +111,7 @@ TEST(PerSqliteProviderTest, FailedMutationDoesNotChangeTransactionOrCommittedSta
 
 TEST(PerSqliteProviderTest, DeploymentMismatchCannotReinterpretExistingStore) {
   const auto root = TestRoot("deployment-mismatch");
-  auto runtime_result = ovf::per::Runtime::Create(*ovf_per_sqlite_backend_query_v1(),
+  auto runtime_result = ovf::per::Runtime::Create(*ovf_per_backend_query_v1(),
                                                   {.configuration = Configuration(root)});
   ASSERT_TRUE(runtime_result);
   auto runtime = std::move(runtime_result).value();
@@ -122,7 +127,7 @@ TEST(PerSqliteProviderTest, DeploymentMismatchCannotReinterpretExistingStore) {
 TEST(PerSqliteProviderTest, StreamsAndPersistsAtomicBlobReplacement) {
   const auto root = TestRoot("blob");
   {
-    auto runtime_result = ovf::per::Runtime::Create(*ovf_per_sqlite_backend_query_v1(),
+    auto runtime_result = ovf::per::Runtime::Create(*ovf_per_backend_query_v1(),
                                                     {.configuration = Configuration(root)});
     ASSERT_TRUE(runtime_result);
     auto runtime = std::move(runtime_result).value();
@@ -138,7 +143,7 @@ TEST(PerSqliteProviderTest, StreamsAndPersistsAtomicBlobReplacement) {
     ASSERT_TRUE(writer.Commit());
   }
 
-  auto runtime_result = ovf::per::Runtime::Create(*ovf_per_sqlite_backend_query_v1(),
+  auto runtime_result = ovf::per::Runtime::Create(*ovf_per_backend_query_v1(),
                                                   {.configuration = Configuration(root)});
   ASSERT_TRUE(runtime_result);
   auto runtime = std::move(runtime_result).value();
@@ -152,6 +157,56 @@ TEST(PerSqliteProviderTest, StreamsAndPersistsAtomicBlobReplacement) {
   ASSERT_TRUE(reader.Read(0, bytes));
   EXPECT_EQ(bytes.front(), std::byte{'g'});
   EXPECT_EQ(bytes.back(), std::byte{'a'});
+}
+
+TEST(PerSqliteProviderTest, ReadSnapshotRemainsStableWhileWalWriterCommits) {
+  auto runtime_result = ovf::per::Runtime::Create(
+      *ovf_per_backend_query_v1(), {.configuration = Configuration(TestRoot("snapshot"), "wal")});
+  ASSERT_TRUE(runtime_result) << runtime_result.error().message;
+  auto runtime = std::move(runtime_result).value();
+  auto first_store_result = runtime->OpenStore(Options());
+  auto second_store_result = runtime->OpenStore(Options());
+  ASSERT_TRUE(first_store_result);
+  ASSERT_TRUE(second_store_result);
+  auto first_store = std::move(first_store_result).value();
+  auto second_store = std::move(second_store_result).value();
+
+  auto initial_result = first_store.BeginWrite();
+  ASSERT_TRUE(initial_result);
+  auto initial = std::move(initial_result).value();
+  ASSERT_TRUE(initial.Put(Bytes("mode"), Bytes("ready")));
+  ASSERT_TRUE(initial.Commit());
+
+  auto snapshot_result = first_store.BeginRead();
+  ASSERT_TRUE(snapshot_result);
+  auto snapshot = std::move(snapshot_result).value();
+  const auto old_generation = snapshot.generation();
+  const auto before = snapshot.Get(Bytes("mode"));
+  ASSERT_TRUE(before);
+  ASSERT_TRUE(before.value());
+  EXPECT_EQ(Text(*before.value()), "ready");
+
+  auto update_result = second_store.BeginWrite();
+  ASSERT_TRUE(update_result) << update_result.error().message;
+  auto update = std::move(update_result).value();
+  ASSERT_TRUE(update.Put(Bytes("mode"), Bytes("active")));
+  const auto commit = update.Commit();
+  ASSERT_TRUE(commit) << commit.error().message;
+  EXPECT_GT(commit.value().generation, old_generation);
+
+  const auto still_old = snapshot.Get(Bytes("mode"));
+  ASSERT_TRUE(still_old);
+  ASSERT_TRUE(still_old.value());
+  EXPECT_EQ(Text(*still_old.value()), "ready");
+  snapshot.Close();
+
+  auto current_result = first_store.BeginRead();
+  ASSERT_TRUE(current_result);
+  auto current = std::move(current_result).value();
+  const auto after = current.Get(Bytes("mode"));
+  ASSERT_TRUE(after);
+  ASSERT_TRUE(after.value());
+  EXPECT_EQ(Text(*after.value()), "active");
 }
 
 } // namespace

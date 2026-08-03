@@ -26,6 +26,9 @@ The repository currently contains:
 - a versioned cryptographic provider ABI with opaque policy-bound keys,
   certificate validation, key agreement, bounded streaming and asynchronous
   operations, and a checksum-pinned Botan software provider;
+- transactional persistent key/value and streaming large-object APIs with a
+  versioned provider ABI, generated deployment facades, and SQLite and
+  in-memory providers;
 - deterministic target-filesystem assembly with executable integrity binding;
 - an in-process reference transport;
 - experimental iceoryx2 and vSomeIP transport integrations;
@@ -51,10 +54,12 @@ Backend status is intentionally explicit:
 | Logging | console | internal C++ sink interface | Implemented |
 | Logging | DLT | internal C++ sink interface | Experimental Linux integration |
 | Cryptography | Botan | versioned C cryptographic-provider ABI | Experimental software provider |
+| Persistence | SQLite | versioned C persistence-provider ABI | Experimental durable provider |
+| Persistence | in-memory | versioned C persistence-provider ABI | Reference implementation |
 
 The logging sink interface is not currently a stable binary plugin contract.
-The communication transport, execution backend, and cryptographic provider
-ABIs are versioned C boundaries in this release.
+The communication transport, execution backend, cryptographic provider, and
+persistence provider ABIs are versioned C boundaries in this release.
 
 The cryptographic API keeps provider-owned key material behind opaque handles
 and enforces algorithm and usage policy at the provider boundary. It supports
@@ -81,6 +86,15 @@ Logging intent is defined alongside each application's deployment. The
 runtime factory and backend identifier mapping. Application source uses only
 `ovf::log`; backend identifiers and initialization remain outside application
 source.
+
+Persistence intent is defined in application CUE deployment, while physical
+storage roots, journal policy, and provider choice remain platform-owned. The
+`ovf_per_application` Bazel rule validates the composed model and generates
+named store factories. Applications use only `ovf::per` transactions and blob
+streams. The SQLite provider enforces deployment compatibility, shared quotas,
+cross-process writer exclusion, snapshot generations, explicit durability,
+and rollback of interrupted changes. These mechanisms are tested on Linux but
+do not constitute a storage-hardware or power-loss qualification claim.
 
 ### Build and deployment flow
 
@@ -190,6 +204,7 @@ examples/       example applications
 exec/           execution model, coordinator, dinit backend, and tests
 log/            structured logging API, runtime, bindings, deployments, tests
 crypto/         cryptographic API, provider ABI, Botan binding, and tests
+per/            persistence API, provider ABI, deployments, providers, tests
 integration/    independent consumer build fixture
 lab/            Linux validation image, rootfs export, and debug entry point
 platform/       target provider selection and platform deployment policy
@@ -214,6 +229,7 @@ Key build and runtime dependencies are retrieved under their own licenses:
 | [iceoryx2](https://github.com/eclipse-iceoryx/iceoryx2) | shared-memory transport | Apache-2.0 OR MIT |
 | [Boost](https://www.boost.org/) | vSomeIP dependency | [Boost Software License 1.0](https://www.boost.org/LICENSE_1_0.txt) |
 | [Botan](https://botan.randombit.net/) | software cryptographic provider | [Simplified BSD](https://botan.randombit.net/license.html) |
+| [SQLite](https://sqlite.org/) | durable persistence provider | [Public domain](https://sqlite.org/copyright.html) |
 | [Buildifier](https://github.com/bazelbuild/buildtools) | Starlark formatting and linting | Apache-2.0 |
 | [CUE](https://cuelang.org/) | Deployment definition and validation | Apache-2.0 |
 | [DLT daemon](https://github.com/COVESA/dlt-daemon) | Diagnostic log binding and daemon | [MPL-2.0](https://www.mozilla.org/MPL/2.0/) |

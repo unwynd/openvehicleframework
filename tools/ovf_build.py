@@ -267,6 +267,85 @@ def compile_log_deployment(args: argparse.Namespace) -> int:
     return 0
 
 
+def compile_per_deployment(args: argparse.Namespace) -> int:
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=".ovf-per-cue-", dir=args.output.parent
+    ) as cue_cache:
+        environment = dict(os.environ, CUE_CACHE_DIR=cue_cache, CUE_CONFIG_DIR=cue_cache)
+        completed = subprocess.run(
+            [
+                str(args.cue.resolve()),
+                "export",
+                str(args.schema.resolve()),
+                str(args.deployment.resolve()),
+                str(args.binding.resolve()),
+                "--expression",
+                "{app: application, provider: binding}",
+                "--out",
+                "json",
+            ],
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        if completed.returncode != 0:
+            raise ValueError(completed.stderr.strip())
+    source = json.loads(completed.stdout)
+    stores = source["app"]["persistence"]["stores"]
+    names = [store["name"] for store in stores]
+    if len(names) != len(set(names)):
+        raise ValueError("persistence store names must be unique within an application")
+    binding = source["provider"]
+    root = binding["configuration"]["root"]
+    if not root.startswith("/") or ".." in Path(root).parts:
+        raise ValueError("SQLite persistence root must be an absolute normalized target path")
+
+    def cpp_name(name: str) -> str:
+        words = re.findall(r"[A-Za-z0-9]+", name)
+        result = "".join(word[:1].upper() + word[1:] for word in words)
+        if not result or result[0].isdigit():
+            raise ValueError(f"store name cannot form a C++ identifier: {name}")
+        return result
+
+    access = {"read_only": "read_only", "read_write": "read_write"}
+    durability = {
+        "buffered": "buffered",
+        "process_crash": "process_crash",
+        "media": "media",
+    }
+    rendered_stores = []
+    identifiers: set[str] = set()
+    for store in stores:
+        identifier = cpp_name(store["name"])
+        if identifier in identifiers:
+            raise ValueError("persistence store names must generate unique C++ identifiers")
+        identifiers.add(identifier)
+        rendered_stores.append(
+            {
+                **store,
+                "cppName": identifier,
+                "access": access[store["access"]],
+                "durability": durability[store["minimumDurability"]],
+            }
+        )
+    configuration = {
+        "root": root,
+        "journal_mode": binding["configuration"]["journalMode"],
+        "busy_timeout_ms": binding["configuration"]["busyTimeoutMs"],
+    }
+    model = {
+        "modelVersion": 1,
+        "application": source["app"]["name"],
+        "namespace": args.namespace,
+        "provider": binding["provider"],
+        "configuration": json.dumps(configuration, sort_keys=True, separators=(",", ":")),
+        "stores": sorted(rendered_stores, key=lambda store: store["name"]),
+    }
+    write_if_changed(args.output, json.dumps(model, sort_keys=True, indent=2) + "\n")
+    return 0
+
+
 def _native_mapping(service: int, instance: int, entry: dict) -> str:
     return (f"service={service};instance={instance};element={entry.get('id', 0)};"
             f"eventGroup={entry.get('eventGroup', 0)};major={entry.get('major', 0)};"
@@ -926,6 +1005,14 @@ def parser() -> argparse.ArgumentParser:
     logging.add_argument("--binding", required=True, type=Path)
     logging.add_argument("--output", required=True, type=Path)
     logging.set_defaults(run=compile_log_deployment)
+    persistence = commands.add_parser("per-deployment")
+    persistence.add_argument("--cue", required=True, type=Path)
+    persistence.add_argument("--schema", required=True, type=Path)
+    persistence.add_argument("--deployment", required=True, type=Path)
+    persistence.add_argument("--binding", required=True, type=Path)
+    persistence.add_argument("--namespace", required=True)
+    persistence.add_argument("--output", required=True, type=Path)
+    persistence.set_defaults(run=compile_per_deployment)
 
     communication = commands.add_parser("communication-deployment")
     communication.add_argument("--cue", required=True, type=Path)

@@ -10,6 +10,7 @@ rust_binary(
     compile_data = [
         "templates/cpp_deployment.hpp.j2",
         "templates/cpp_log.hpp.j2",
+        "templates/cpp_per.hpp.j2",
         "templates/cpp_contract.hpp.j2",
         "templates/cpp_application.hpp.j2",
         "templates/dinit_boot.j2",

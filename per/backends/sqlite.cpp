@@ -1066,6 +1066,4 @@ const ovf_per_backend_factory_v1 kFactory{sizeof(ovf_per_backend_factory_v1),
 
 } // namespace
 
-extern "C" const ovf_per_backend_factory_v1* ovf_per_sqlite_backend_query_v1(void) {
-  return &kFactory;
-}
+extern "C" const ovf_per_backend_factory_v1* ovf_per_backend_query_v1(void) { return &kFactory; }

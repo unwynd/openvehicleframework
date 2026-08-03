@@ -1,8 +1,37 @@
 # SPDX-License-Identifier: Apache-2.0
 
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
+load("@rules_python//python:defs.bzl", "py_test")
+load("//bazel:persistency.bzl", "ovf_per_application")
 
 package(default_visibility = ["//visibility:public"])
+
+exports_files(["deployment.cue"])
+
+ovf_per_application(
+    name = "e2e_deployment",
+    cpp_namespace = "ovf::deployment::per_e2e",
+    deployment = "deployment.cue",
+)
+
+cc_binary(
+    name = "e2e_app",
+    srcs = ["e2e_app.cpp"],
+    deps = [
+        ":e2e_deployment",
+        "//per:sqlite_provider",
+    ],
+)
+
+py_test(
+    name = "process_e2e_test",
+    size = "medium",
+    srcs = ["e2e_test.py"],
+    args = ["$(rootpath :e2e_app)"],
+    data = [":e2e_app"],
+    main = "e2e_test.py",
+)
 
 cc_test(
     name = "c_abi_test",
@@ -36,6 +65,7 @@ test_suite(
     tests = [
         ":c_abi_test",
         ":memory_provider_test",
+        ":process_e2e_test",
         ":sqlite_provider_test",
     ],
 )

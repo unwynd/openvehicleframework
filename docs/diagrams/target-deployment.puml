@@ -34,7 +34,7 @@ package "Separately shippable artifacts" as artifacts #FFF8E1 {
   artifact "Application bundles\n/opt/<application>" as app_bundles
   artifact "Communication runtime\ndeployments" as com_deployments
   artifact "Execution model and\ndinit service descriptions" as exec_deployment
-  artifact "Middleware bundles\ntransport, routing, logging, crypto" as middleware
+  artifact "Middleware bundles\ntransport, routing, logging, crypto, persistence" as middleware
 }
 
 artifact "Deterministic target\nfilesystem" as rootfs <<assembled>>
@@ -67,8 +67,10 @@ node "Target ECU" as ecu #F7F9FA {
     }
 
     artifact "Botan provider\nlibrary" as botan
+    artifact "SQLite persistence\nprovider library" as sqlite
     database "/run\nruntime endpoints" as run
     database "/var/lib/ovf\nexecution journal" as journal
+    database "/var/lib/ovf/per\napplication state" as persistent_state
   }
 }
 
@@ -79,10 +81,12 @@ execd --> applications : mode transitions and lifecycle
 applications --> routing : communication
 applications --> dlt_daemon : structured logs
 applications ..> botan : loads provider ABI
+applications ..> sqlite : loads provider ABI
 services --> run : sockets and IPC
 execd --> run : control sockets
 execd --> journal : recovery evidence
 applications ..> lower : binaries and deployment artifacts
+sqlite --> persistent_state : transactional state
 
 note right of supervisor
   Startup follows generated dependencies.

@@ -11,6 +11,7 @@ const CPP_CONTRACT_TEMPLATE: &str = include_str!("../templates/cpp_contract.hpp.
 const CPP_APPLICATION_TEMPLATE: &str = include_str!("../templates/cpp_application.hpp.j2");
 const CPP_DEPLOYMENT_TEMPLATE: &str = include_str!("../templates/cpp_deployment.hpp.j2");
 const CPP_LOG_TEMPLATE: &str = include_str!("../templates/cpp_log.hpp.j2");
+const CPP_PER_TEMPLATE: &str = include_str!("../templates/cpp_per.hpp.j2");
 const DINIT_BOOT_TEMPLATE: &str = include_str!("../templates/dinit_boot.j2");
 const DINIT_DAEMON_TEMPLATE: &str = include_str!("../templates/dinit_daemon.j2");
 const DINIT_SERVICE_TEMPLATE: &str = include_str!("../templates/dinit_service.j2");
@@ -607,6 +608,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         environment.add_filter("cpp_string", cpp_string);
         let rendered = environment
             .get_template("cpp_log.hpp")?
+            .render(context! { deployment => Value::from_serialize(&model) })?;
+        fs::write(&arguments[4], rendered)?;
+        return Ok(());
+    }
+    if arguments.first().map(String::as_str) == Some("per-cpp") {
+        if arguments.len() != 5 || arguments[1] != "--model" || arguments[3] != "--output" {
+            return Err("usage: ovf_codegen per-cpp --model <model> --output <header>".into());
+        }
+        let model: JsonValue = serde_json::from_str(&fs::read_to_string(&arguments[2])?)?;
+        let mut environment = Environment::new();
+        environment.add_template("cpp_per.hpp", CPP_PER_TEMPLATE)?;
+        environment.add_filter("cpp_string", cpp_string);
+        let rendered = environment
+            .get_template("cpp_per.hpp")?
             .render(context! { deployment => Value::from_serialize(&model) })?;
         fs::write(&arguments[4], rendered)?;
         return Ok(());

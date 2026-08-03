@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_shared_library.bzl", "cc_shared_library")
 
@@ -46,4 +47,45 @@ cc_shared_library(
         "//conditions:default": "libovf_per.so",
     }),
     deps = [":runtime"],
+)
+
+cc_library(
+    name = "public_headers",
+    hdrs = [
+        "include/ovf/per/backend_abi.h",
+        "include/ovf/per/per.hpp",
+    ],
+    includes = ["include"],
+)
+
+cc_import(
+    name = "api",
+    shared_library = ":shared",
+    deps = [":public_headers"],
+)
+
+cc_shared_library(
+    name = "memory_provider_plugin",
+    shared_lib_name = select({
+        "@platforms//os:osx": "libovf_per_provider_memory.dylib",
+        "//conditions:default": "libovf_per_provider_memory.so",
+    }),
+    deps = [":memory_provider"],
+)
+
+cc_shared_library(
+    name = "sqlite_provider_plugin",
+    shared_lib_name = select({
+        "@platforms//os:osx": "libovf_per_provider_sqlite.dylib",
+        "//conditions:default": "libovf_per_provider_sqlite.so",
+    }),
+    deps = [":sqlite_provider"],
+)
+
+filegroup(
+    name = "sqlite_runtime",
+    srcs = [
+        ":shared",
+        ":sqlite_provider_plugin",
+    ],
 )
