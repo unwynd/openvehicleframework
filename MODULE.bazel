@@ -98,6 +98,14 @@ git_repository(
 )
 
 http_archive(
+    name = "botan_source",
+    build_file = "//bazel/third_party:botan.BUILD.bazel",
+    sha256 = "36e900748945899f5f50793dce5ee6898f1656a88aea75fc959fb267e4642571",
+    strip_prefix = "botan-45d6f286c320b2f2efd5373d195ec88c367e3071",
+    urls = ["https://github.com/randombit/botan/archive/45d6f286c320b2f2efd5373d195ec88c367e3071.tar.gz"],
+)
+
+http_archive(
     name = "boost_source",
     build_file = "//bazel/third_party:boost.BUILD.bazel",
     sha256 = "0a9cc56ceae46986f5f4d43fe0311d90cf6d2fa9028258a95cab49ffdacf92ad",

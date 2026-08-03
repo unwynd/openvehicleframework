@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "configure_make")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "license.txt",
+    "src/lib/base/secmem.h",
+    "src/lib/hash/hash.h",
+    "src/lib/kdf/kdf.h",
+    "src/lib/mac/mac.h",
+    "src/lib/modes/aead/aead.h",
+    "src/lib/modes/cipher_mode.h",
+    "src/lib/pubkey/pk_algs.h",
+    "src/lib/pubkey/pk_keys.h",
+    "src/lib/pubkey/pkcs8.h",
+    "src/lib/pubkey/pubkey.h",
+    "src/lib/pubkey/x509_key.h",
+    "src/lib/rng/auto_rng/auto_rng.h",
+])
+
+filegroup(
+    name = "source",
+    srcs = glob(
+        ["**"],
+        exclude = [
+            "doc/**",
+            "src/examples/**",
+            "src/scripts/dev_tools/**",
+            "src/tests/**",
+        ],
+    ),
+)
+
+filegroup(
+    name = "provider_api_headers",
+    srcs = [
+        "src/lib/base/secmem.h",
+        "src/lib/hash/hash.h",
+        "src/lib/kdf/kdf.h",
+        "src/lib/mac/mac.h",
+        "src/lib/modes/aead/aead.h",
+        "src/lib/modes/cipher_mode.h",
+        "src/lib/pubkey/pk_algs.h",
+        "src/lib/pubkey/pk_keys.h",
+        "src/lib/pubkey/pkcs8.h",
+        "src/lib/pubkey/pubkey.h",
+        "src/lib/pubkey/x509_key.h",
+        "src/lib/rng/auto_rng/auto_rng.h",
+    ],
+)
+
+configure_make(
+    name = "botan",
+    build_data = ["@python_3_12//:python3"],
+    configure_command = "configure.py",
+    configure_options = [
+        "--build-targets=static",
+        "--disable-shared-library",
+        "--enable-modules=ffi,sha2_32,sha2_64,hmac,aes,gcm,hkdf,ecdsa,ecdh,rsa,ed25519,auto_rng,system_rng,emsa_pssr,pcurves_secp256r1,x509",
+        "--minimized-build",
+        "--without-documentation",
+    ] + select({
+        "@platforms//os:osx": [
+            "--ar-options=-static\\ -o",
+            "--cc=xcode",
+        ],
+        "//conditions:default": [],
+    }),
+    configure_prefix = "$$PYTHON",
+    env = {
+        "PYTHON": "$(execpath @python_3_12//:python3)",
+    },
+    lib_source = ":source",
+    out_include_dir = "include/botan-3",
+    out_static_libs = ["libbotan-3.a"],
+)

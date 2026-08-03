@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_test(
+    name = "botan_provider_test",
+    size = "medium",
+    srcs = ["botan_provider_test.cpp"],
+    deps = [
+        "//crypto:botan_provider_impl",
+        "//crypto:runtime",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "dynamic_provider_test",
+    srcs = ["dynamic_provider_test.cpp"],
+    data = ["//crypto:botan_provider"],
+    deps = [
+        "//crypto:runtime",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "c_abi_test",
+    srcs = ["c_abi_test.c"],
+    deps = ["//crypto:provider_abi"],
+)
+
+cc_test(
+    name = "runtime_test",
+    srcs = ["runtime_test.cpp"],
+    deps = [
+        "//crypto:runtime",
+        "@googletest//:gtest_main",
+    ],
+)
+
+test_suite(
+    name = "all_tests",
+    tests = [
+        ":botan_provider_test",
+        ":c_abi_test",
+        ":dynamic_provider_test",
+        ":runtime_test",
+    ],
+)

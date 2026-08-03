@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_shared_library.bzl", "cc_shared_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "provider_abi",
+    hdrs = ["include/ovf/crypto/backend_abi.h"],
+    includes = ["include"],
+)
+
+cc_library(
+    name = "runtime",
+    srcs = ["src/runtime.cpp"],
+    hdrs = ["include/ovf/crypto/crypto.hpp"],
+    includes = ["include"],
+    linkopts = select({
+        "@platforms//os:linux": ["-ldl"],
+        "//conditions:default": [],
+    }),
+    deps = [":provider_abi"],
+)
+
+cc_shared_library(
+    name = "shared",
+    shared_lib_name = select({
+        "@platforms//os:osx": "libovf_crypto.dylib",
+        "//conditions:default": "libovf_crypto.so",
+    }),
+    deps = [":runtime"],
+)
+
+filegroup(
+    name = "botan_license",
+    srcs = ["@botan_source//:license.txt"],
+)
+
+filegroup(
+    name = "botan_runtime",
+    srcs = [
+        ":botan_license",
+        ":botan_provider",
+        ":shared",
+    ],
+)
+
+cc_library(
+    name = "public_headers",
+    hdrs = [
+        "include/ovf/crypto/backend_abi.h",
+        "include/ovf/crypto/crypto.hpp",
+    ],
+    includes = ["include"],
+)
+
+cc_import(
+    name = "api",
+    shared_library = ":shared",
+    deps = [":public_headers"],
+)
+
+cc_library(
+    name = "botan_provider_impl",
+    srcs = ["backends/botan.cpp"],
+    tags = ["manual"],
+    deps = [
+        ":provider_abi",
+        "@botan_source//:botan",
+    ],
+)
+
+cc_shared_library(
+    name = "botan_provider",
+    shared_lib_name = select({
+        "@platforms//os:osx": "libovf_crypto_provider_botan.dylib",
+        "//conditions:default": "libovf_crypto_provider_botan.so",
+    }),
+    tags = ["manual"],
+    deps = [":botan_provider_impl"],
+)

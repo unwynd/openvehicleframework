@@ -23,6 +23,8 @@ The repository currently contains:
 - dinit-backed process supervision through the `ovf-execd` coordinator;
 - bounded structured logging with typed fields, stable event identifiers,
   filtering, loss accounting, and a DLT binding;
+- a versioned cryptographic provider ABI, opaque policy-bound keys, and a
+  checksum-pinned Botan software provider;
 - deterministic target-filesystem assembly with executable integrity binding;
 - an in-process reference transport;
 - experimental iceoryx2 and vSomeIP transport integrations;
@@ -47,6 +49,7 @@ Backend status is intentionally explicit:
 | Execution | dinit | versioned C execution-backend ABI | Experimental Linux integration |
 | Logging | console | internal C++ sink interface | Implemented |
 | Logging | DLT | internal C++ sink interface | Experimental Linux integration |
+| Cryptography | Botan | versioned C cryptographic-provider ABI | Experimental software provider |
 
 The logging sink interface is not currently a stable binary plugin contract.
 Only the communication transport ABI and execution backend ABI are versioned C
@@ -175,6 +178,7 @@ docs/           public architecture and application documentation
 examples/       example applications
 exec/           execution model, coordinator, dinit backend, and tests
 log/            structured logging API, runtime, bindings, deployments, tests
+crypto/         cryptographic API, provider ABI, Botan binding, and tests
 integration/    independent consumer build fixture
 lab/            Linux validation image, rootfs export, and debug entry point
 platform/       target provider selection and platform deployment policy
@@ -198,6 +202,7 @@ Key build and runtime dependencies are retrieved under their own licenses:
 | [vSomeIP](https://github.com/COVESA/vsomeip) | SOME/IP transport | [MPL-2.0](https://www.mozilla.org/MPL/2.0/) |
 | [iceoryx2](https://github.com/eclipse-iceoryx/iceoryx2) | shared-memory transport | Apache-2.0 OR MIT |
 | [Boost](https://www.boost.org/) | vSomeIP dependency | [Boost Software License 1.0](https://www.boost.org/LICENSE_1_0.txt) |
+| [Botan](https://botan.randombit.net/) | software cryptographic provider | [Simplified BSD](https://botan.randombit.net/license.html) |
 | [Buildifier](https://github.com/bazelbuild/buildtools) | Starlark formatting and linting | Apache-2.0 |
 | [CUE](https://cuelang.org/) | Deployment definition and validation | Apache-2.0 |
 | [DLT daemon](https://github.com/COVESA/dlt-daemon) | Diagnostic log binding and daemon | [MPL-2.0](https://www.mozilla.org/MPL/2.0/) |

@@ -24,6 +24,7 @@ test_suite(
     tests = [
         "//codegen:rustfmt_test",
         "//com/tests:all_tests",
+        "//crypto/tests:all_tests",
         "//exec/tests:all_tests",
         "//log/tests:all_tests",
     ],
