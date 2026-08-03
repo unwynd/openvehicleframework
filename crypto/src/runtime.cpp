@@ -409,20 +409,22 @@ Result<std::unique_ptr<Runtime>> Runtime::Create(const ovf_crypto_backend_factor
     }
     constexpr auto required_backend_size =
         offsetof(ovf_crypto_backend_v1, last_error) + sizeof(backend->last_error);
-    const bool valid =
-        backend->struct_size >= required_backend_size &&
-        backend->abi_version == OVF_CRYPTO_BACKEND_ABI_VERSION_1 && backend->start != nullptr &&
-        backend->stop != nullptr && backend->get_capabilities != nullptr &&
-        backend->random_bytes != nullptr && backend->key_import != nullptr &&
-        backend->key_generate != nullptr && backend->key_destroy != nullptr &&
-        backend->hash != nullptr && backend->mac != nullptr && backend->aead_encrypt != nullptr &&
-        backend->aead_decrypt != nullptr && backend->sign != nullptr &&
-        backend->verify != nullptr && backend->derive != nullptr &&
-        backend->key_public_value != nullptr && backend->key_agree != nullptr &&
-        backend->certificate_validate != nullptr && backend->stream_create != nullptr &&
-        backend->stream_update != nullptr && backend->stream_finish != nullptr &&
-        backend->stream_destroy != nullptr && backend->stream_process_record != nullptr &&
-        backend->query_extension != nullptr && backend->last_error != nullptr;
+    const bool valid = backend->struct_size >= required_backend_size &&
+                       backend->abi_version == OVF_CRYPTO_BACKEND_ABI_VERSION_1 &&
+                       backend->start != nullptr && backend->stop != nullptr &&
+                       backend->get_capabilities != nullptr && backend->random_bytes != nullptr &&
+                       backend->key_import != nullptr && backend->key_generate != nullptr &&
+                       backend->key_destroy != nullptr && backend->hash != nullptr &&
+                       backend->mac != nullptr && backend->aead_encrypt != nullptr &&
+                       backend->aead_decrypt != nullptr && backend->sign != nullptr &&
+                       backend->verify != nullptr && backend->derive != nullptr &&
+                       backend->key_public_value != nullptr && backend->key_agree != nullptr &&
+                       backend->certificate_validate != nullptr &&
+                       backend->certificate_validate_and_import_public_key != nullptr &&
+                       backend->stream_create != nullptr && backend->stream_update != nullptr &&
+                       backend->stream_finish != nullptr && backend->stream_destroy != nullptr &&
+                       backend->stream_process_record != nullptr &&
+                       backend->query_extension != nullptr && backend->last_error != nullptr;
     if (!valid) {
       factory.destroy(backend);
       return Error{ErrorCode::incompatible_abi, "incomplete cryptographic provider ABI"};
@@ -867,6 +869,80 @@ Runtime::ValidateCertificate(const CertificateValidationRequest& request) const 
                                        abi_result.verified_chain_length, abi_result.native_status};
   } catch (...) {
     return Error{ErrorCode::resource_exhausted, "cannot allocate certificate-validation input"};
+  }
+}
+
+Result<CertificatePublicKeyResult>
+Runtime::ValidateAndImportPublicKey(const CertificateValidationRequest& request,
+                                    KeyPolicy policy) const noexcept {
+  constexpr std::size_t maximum_chain_entries = 32;
+  if (request.leaf.empty() || request.trust_anchors.empty() ||
+      request.intermediates.size() > maximum_chain_entries ||
+      request.trust_anchors.size() > maximum_chain_entries ||
+      request.crls.size() > maximum_chain_entries || request.validation_time_unix_seconds == 0 ||
+      request.minimum_security_bits < 80 || policy.persistent ||
+      static_cast<std::uint32_t>(policy.usage) != OVF_CRYPTO_KEY_USAGE_VERIFY) {
+    return Error{ErrorCode::invalid_argument, "invalid certificate public-key request"};
+  }
+  try {
+    const auto make_views = [](std::span<const std::span<const std::byte>> inputs) {
+      std::vector<ovf_crypto_bytes_view_v1> output;
+      output.reserve(inputs.size());
+      for (const auto input : inputs) {
+        output.push_back(View(input));
+      }
+      return output;
+    };
+    const auto intermediates = make_views(request.intermediates);
+    const auto anchors = make_views(request.trust_anchors);
+    const auto crls = make_views(request.crls);
+    const ovf_crypto_certificate_validation_request_v1 abi_request{
+        sizeof(abi_request),
+        View(request.leaf),
+        intermediates.data(),
+        intermediates.size(),
+        anchors.data(),
+        anchors.size(),
+        crls.data(),
+        crls.size(),
+        {request.expected_name.data(), request.expected_name.size()},
+        request.validation_time_unix_seconds,
+        request.minimum_security_bits,
+        static_cast<ovf_crypto_certificate_usage_v1>(request.usage),
+        static_cast<std::uint8_t>(request.require_revocation),
+        static_cast<std::uint8_t>(request.require_self_signed_anchor),
+        {}};
+    const ovf_crypto_key_descriptor_v1 descriptor{sizeof(descriptor),
+                                                  static_cast<std::uint32_t>(policy.algorithm),
+                                                  static_cast<std::uint32_t>(policy.usage),
+                                                  static_cast<std::uint8_t>(policy.exportable),
+                                                  static_cast<std::uint8_t>(policy.persistent),
+                                                  {}};
+    ovf_crypto_certificate_validation_result_v1 abi_result{};
+    abi_result.struct_size = sizeof(abi_result);
+    ovf_crypto_handle_v1 handle{};
+    std::scoped_lock lock(state_->mutex_);
+    const auto status = state_->backend_->certificate_validate_and_import_public_key(
+        state_->backend_, &abi_request, &descriptor, &abi_result, &handle);
+    if (status != OVF_CRYPTO_STATUS_OK) {
+      return state_->MakeError(status);
+    }
+    if (abi_result.struct_size < sizeof(abi_result) ||
+        abi_result.verdict > OVF_CRYPTO_CERTIFICATE_VERDICT_POLICY_REJECTED) {
+      return Error{ErrorCode::incompatible_abi, "provider returned an invalid certificate result"};
+    }
+    CertificateValidationResult validation{
+        abi_result.valid != 0, static_cast<CertificateVerdict>(abi_result.verdict),
+        abi_result.verified_chain_length, abi_result.native_status};
+    if (!validation.valid) {
+      return CertificatePublicKeyResult{validation, Key{}};
+    }
+    if (handle == OVF_CRYPTO_INVALID_HANDLE_V1) {
+      return Error{ErrorCode::incompatible_abi, "provider returned an invalid public-key handle"};
+    }
+    return CertificatePublicKeyResult{validation, Key{state_, handle}};
+  } catch (...) {
+    return Error{ErrorCode::resource_exhausted, "cannot allocate certificate public-key input"};
   }
 }
 

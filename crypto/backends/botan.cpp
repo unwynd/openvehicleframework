@@ -841,6 +841,47 @@ ValidateCertificate(ovf_crypto_backend_v1* self,
   }
 }
 
+ovf_crypto_status_v1 ValidateAndImportCertificatePublicKey(
+    ovf_crypto_backend_v1* self, const ovf_crypto_certificate_validation_request_v1* request,
+    const ovf_crypto_key_descriptor_v1* descriptor,
+    ovf_crypto_certificate_validation_result_v1* validation, ovf_crypto_handle_v1* output) {
+  if (descriptor == nullptr || descriptor->struct_size < sizeof(*descriptor) || output == nullptr ||
+      descriptor->permitted_usage != OVF_CRYPTO_KEY_USAGE_VERIFY || descriptor->persistent != 0) {
+    return OVF_CRYPTO_STATUS_INVALID_ARGUMENT;
+  }
+  *output = OVF_CRYPTO_INVALID_HANDLE_V1;
+  const auto status = ValidateCertificate(self, request, validation);
+  if (status != OVF_CRYPTO_STATUS_OK || validation->valid == 0) {
+    return status;
+  }
+  auto& backend = *Self(self);
+  std::scoped_lock lock(backend.mutex);
+  if (!backend.running) {
+    return Fail(backend, OVF_CRYPTO_STATUS_SHUTTING_DOWN, "provider is stopping");
+  }
+  try {
+    Botan::X509_Certificate certificate(Span(request->leaf));
+    auto public_key = certificate.subject_public_key();
+    const auto algorithm = public_key->algo_name();
+    const bool matches =
+        (descriptor->algorithm == OVF_CRYPTO_ALGORITHM_ECDSA_P256_SHA2_256 &&
+         algorithm == "ECDSA") ||
+        (descriptor->algorithm == OVF_CRYPTO_ALGORITHM_RSA_PSS_SHA2_256 && algorithm == "RSA") ||
+        (descriptor->algorithm == OVF_CRYPTO_ALGORITHM_ED25519 && algorithm == "Ed25519");
+    if (!matches) {
+      return Fail(backend, OVF_CRYPTO_STATUS_INVALID_ARGUMENT,
+                  "certificate key does not match the requested algorithm");
+    }
+    KeyEntry entry;
+    entry.algorithm = descriptor->algorithm;
+    entry.usage = descriptor->permitted_usage;
+    entry.public_key = std::move(public_key);
+    return StoreKey(backend, std::move(entry), output);
+  } catch (const std::exception& exception) {
+    return BotanFailure(backend, exception);
+  }
+}
+
 ovf_crypto_status_v1 StoreStream(Backend& backend, StreamEntry entry,
                                  ovf_crypto_handle_v1* output) {
   if (output == nullptr) {
@@ -1281,6 +1322,7 @@ ovf_crypto_status_v1 Create(const ovf_crypto_host_api_v1* host,
                     PublicValue,
                     Agree,
                     ValidateCertificate,
+                    ValidateAndImportCertificatePublicKey,
                     CreateStream,
                     UpdateStream,
                     FinishStream,

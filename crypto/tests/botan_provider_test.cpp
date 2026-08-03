@@ -2,6 +2,12 @@
 
 #include "ovf/crypto/crypto.hpp"
 
+#include <botan/auto_rng.h>
+#include <botan/pk_algs.h>
+#include <botan/pubkey.h>
+#include <botan/x509_ca.h>
+#include <botan/x509self.h>
+
 #include <gtest/gtest.h>
 
 #include <array>
@@ -19,6 +25,10 @@ extern "C" const ovf_crypto_backend_factory_v1* ovf_crypto_backend_query_v1(void
 namespace {
 
 std::span<const std::byte> Bytes(std::string_view value) {
+  return {reinterpret_cast<const std::byte*>(value.data()), value.size()};
+}
+
+std::span<const std::byte> Bytes(const std::vector<std::uint8_t>& value) {
   return {reinterpret_cast<const std::byte*>(value.data()), value.size()};
 }
 
@@ -192,6 +202,74 @@ TEST(BotanProviderTest, AgreesOnTheSameKeyAndRejectsMalformedCertificates) {
   ASSERT_TRUE(validation) << validation.error().message;
   EXPECT_FALSE(validation.value().valid);
   EXPECT_EQ(validation.value().verdict, ovf::crypto::CertificateVerdict::malformed);
+  const auto imported = runtime->ValidateAndImportPublicKey(
+      request, {ovf::crypto::Algorithm::ecdsa_p256_sha2_256, ovf::crypto::KeyUsage::verify});
+  ASSERT_TRUE(imported);
+  EXPECT_FALSE(imported.value().validation.valid);
+  EXPECT_EQ(imported.value().validation.verdict, ovf::crypto::CertificateVerdict::malformed);
+  EXPECT_FALSE(imported.value().key.valid());
+}
+
+TEST(BotanProviderTest, ValidatesAChainAndImportsOnlyItsTrustedPublicKey) {
+  Botan::AutoSeeded_RNG rng;
+  auto root_key = Botan::create_private_key("ECDSA", rng, "secp256r1");
+  auto leaf_key = Botan::create_private_key("ECDSA", rng, "secp256r1");
+  ASSERT_NE(root_key, nullptr);
+  ASSERT_NE(leaf_key, nullptr);
+  Botan::X509_Cert_Options root_options("OVF Test Root");
+  root_options.CA_key();
+  const auto root = Botan::X509::create_self_signed_cert(root_options, *root_key, "SHA-256", rng);
+  Botan::X509_Cert_Options leaf_options("radar.local");
+  leaf_options.dns = "radar.local";
+  const auto request = Botan::X509::create_cert_req(leaf_options, *leaf_key, "SHA-256", rng);
+  const Botan::X509_CA authority(root, *root_key, "SHA-256", rng);
+  const auto leaf = authority.sign_request(request, rng, Botan::X509_Time("250101000000Z"),
+                                           Botan::X509_Time("300101000000Z"));
+  const auto root_der = root.BER_encode();
+  const auto leaf_der = leaf.BER_encode();
+  const std::array<std::span<const std::byte>, 1> anchors{Bytes(root_der)};
+  const auto validation_time =
+      static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                     std::chrono::system_clock::now().time_since_epoch())
+                                     .count());
+  const ovf::crypto::CertificateValidationRequest validation_request{
+      .leaf = Bytes(leaf_der),
+      .intermediates = {},
+      .trust_anchors = anchors,
+      .crls = {},
+      .expected_name = "radar.local",
+      .validation_time_unix_seconds = validation_time,
+      .minimum_security_bits = 128,
+      .usage = ovf::crypto::CertificateUsage::server_authentication,
+      .require_revocation = false,
+      .require_self_signed_anchor = true,
+  };
+  auto runtime = CreateRuntime();
+  ASSERT_NE(runtime, nullptr);
+  auto imported_result = runtime->ValidateAndImportPublicKey(
+      validation_request,
+      {ovf::crypto::Algorithm::ecdsa_p256_sha2_256, ovf::crypto::KeyUsage::verify});
+  ASSERT_TRUE(imported_result) << imported_result.error().message;
+  auto imported = std::move(imported_result).value();
+  EXPECT_TRUE(imported.validation.valid) << imported.validation.native_status;
+  EXPECT_EQ(imported.validation.verdict, ovf::crypto::CertificateVerdict::trusted);
+  ASSERT_TRUE(imported.key.valid());
+
+  Botan::PK_Signer signer(*leaf_key, rng, "EMSA1(SHA-256)", Botan::Signature_Format::DerSequence);
+  const auto signature = signer.sign_message(
+      std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>("trusted message"), 15),
+      rng);
+  const auto verified = runtime->Verify(ovf::crypto::Algorithm::ecdsa_p256_sha2_256, imported.key,
+                                        Bytes("trusted message"), Bytes(signature));
+  ASSERT_TRUE(verified);
+  EXPECT_TRUE(verified.value());
+
+  auto wrong_name_request = validation_request;
+  wrong_name_request.expected_name = "other.local";
+  const auto rejected = runtime->ValidateCertificate(wrong_name_request);
+  ASSERT_TRUE(rejected);
+  EXPECT_FALSE(rejected.value().valid);
+  EXPECT_EQ(rejected.value().verdict, ovf::crypto::CertificateVerdict::name_mismatch);
 }
 
 TEST(BotanProviderTest, StreamsHashMacSignAndVerifyWithoutBufferingMessages) {

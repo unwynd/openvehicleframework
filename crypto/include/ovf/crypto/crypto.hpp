@@ -169,6 +169,11 @@ private:
   ovf_crypto_handle_v1 handle_{};
 };
 
+struct CertificatePublicKeyResult final {
+  CertificateValidationResult validation;
+  Key key;
+};
+
 class InputStream final {
 public:
   InputStream() = default;
@@ -279,6 +284,9 @@ public:
                                   KeyPolicy derived_key) const noexcept;
   [[nodiscard]] Result<CertificateValidationResult>
   ValidateCertificate(const CertificateValidationRequest& request) const noexcept;
+  [[nodiscard]] Result<CertificatePublicKeyResult>
+  ValidateAndImportPublicKey(const CertificateValidationRequest& request,
+                             KeyPolicy policy) const noexcept;
   [[nodiscard]] Result<InputStream> BeginHash(Algorithm algorithm) const noexcept;
   [[nodiscard]] Result<InputStream> BeginMac(Algorithm algorithm, const Key& key) const noexcept;
   [[nodiscard]] Result<InputStream> BeginSign(Algorithm algorithm, const Key& key) const noexcept;

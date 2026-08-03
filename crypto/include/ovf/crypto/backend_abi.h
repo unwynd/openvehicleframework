@@ -276,6 +276,10 @@ struct ovf_crypto_backend_v1 {
   ovf_crypto_status_v1 (*certificate_validate)(ovf_crypto_backend_v1*,
                                                const ovf_crypto_certificate_validation_request_v1*,
                                                ovf_crypto_certificate_validation_result_v1*);
+  ovf_crypto_status_v1 (*certificate_validate_and_import_public_key)(
+      ovf_crypto_backend_v1*, const ovf_crypto_certificate_validation_request_v1*,
+      const ovf_crypto_key_descriptor_v1*, ovf_crypto_certificate_validation_result_v1*,
+      ovf_crypto_handle_v1*);
   ovf_crypto_status_v1 (*stream_create)(ovf_crypto_backend_v1*,
                                         const ovf_crypto_stream_descriptor_v1*,
                                         ovf_crypto_handle_v1*);
