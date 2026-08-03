@@ -29,7 +29,7 @@ ovf_per_application(
     name = "e2e_deployment",
     cpp_namespace = "ovf::deployment::per_e2e",
     deployment = "deployment.cue",
-    schemas = [":typed_state_model"],
+    schemas = [":typed_state"],
 )
 
 cc_binary(

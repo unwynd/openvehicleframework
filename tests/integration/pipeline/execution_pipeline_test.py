@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import sqlite3
 import subprocess
 import tarfile
 import time
@@ -19,6 +20,8 @@ OVERLAY_STORAGE = Path("/var/tmp/ovf-overlay")
 LOWER = OVERLAY_STORAGE / "lower"
 UPPER = OVERLAY_STORAGE / "upper"
 WORK = OVERLAY_STORAGE / "work"
+PERSISTENCE_PROVIDER_MOUNT = Path("/usr/lib/ovf/providers")
+PERSISTENCE_STORAGE_MOUNT = Path("/var/lib/ovf/per")
 
 
 def runfile(relative: str) -> Path:
@@ -144,6 +147,57 @@ def unmount_target_filesystem() -> None:
         shutil.rmtree(path, ignore_errors=True)
 
 
+def mount_persistence_paths() -> None:
+    for source, target in (
+        (ROOT / "usr/lib/ovf/providers", PERSISTENCE_PROVIDER_MOUNT),
+        (ROOT / "var/lib/ovf/per", PERSISTENCE_STORAGE_MOUNT),
+    ):
+        provision = subprocess.run(
+            ["sudo", "-n", "install", "-d", "-m", "0750", str(target)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if provision.returncode != 0:
+            raise RuntimeError(f"cannot provision {target}: {provision.stderr.strip()}")
+        mounted = subprocess.run(
+            ["sudo", "-n", "mount", "--bind", str(source), str(target)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if mounted.returncode != 0:
+            raise RuntimeError(f"cannot bind {source} to {target}: {mounted.stderr.strip()}")
+    ownership = subprocess.run(
+        [
+            "sudo",
+            "-n",
+            "chown",
+            f"{os.getuid()}:{os.getgid()}",
+            str(PERSISTENCE_STORAGE_MOUNT),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if ownership.returncode != 0:
+        raise RuntimeError(f"cannot assign persistence storage: {ownership.stderr.strip()}")
+
+
+def unmount_persistence_paths() -> None:
+    for target in (PERSISTENCE_STORAGE_MOUNT, PERSISTENCE_PROVIDER_MOUNT):
+        result = subprocess.run(
+            ["sudo", "-n", "umount", target], check=False, capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            subprocess.run(
+                ["sudo", "-n", "umount", "--lazy", target],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+
 def main() -> int:
     outputs = Path(os.environ["TEST_UNDECLARED_OUTPUTS_DIR"])
     logs = outputs / "execution-pipeline"
@@ -175,6 +229,7 @@ def main() -> int:
         or "PERSISTENCE_INSTALLED_PROVIDER_VERIFIED" not in persistence.stdout
     ):
         raise RuntimeError(f"installed persistence provider failed: {persistence.stderr}")
+    mount_persistence_paths()
     (ROOT / "run").mkdir(parents=True, exist_ok=True)
     (ROOT / "var/lib/ovf/exec").mkdir(parents=True, exist_ok=True)
     runtime_directory = subprocess.run(
@@ -233,6 +288,47 @@ def main() -> int:
             time.sleep(0.2)
         if "ENVIRONMENT_MODEL_RECEIVED" not in policy_log:
             raise RuntimeError("driving policy did not receive fused camera and radar data")
+        (logs / "ovf-app-4-initial.log").write_text(policy_log, encoding="utf-8")
+        if "POLICY_STATE_COMMITTED" not in policy_log:
+            raise RuntimeError("driving policy did not commit its persistent Smithy record")
+        transition(2, 1, logs)
+        persisted_files = sorted(
+            path.name for path in PERSISTENCE_STORAGE_MOUNT.iterdir() if path.is_file()
+        )
+        (logs / "persistence-files.log").write_text(
+            "\n".join(persisted_files) + "\n", encoding="utf-8"
+        )
+        if not any(name.endswith(".db") for name in persisted_files):
+            raise RuntimeError("driving policy did not create a persistent database")
+        policy_database = PERSISTENCE_STORAGE_MOUNT / ("policy-state".encode().hex() + ".db")
+        with sqlite3.connect(policy_database) as database:
+            generation = database.execute(
+                "SELECT generation FROM ovf_meta WHERE id=1"
+            ).fetchone()[0]
+            value_count = database.execute("SELECT count(*) FROM ovf_values").fetchone()[0]
+        (logs / "persistence-state.log").write_text(
+            f"generation={generation} values={value_count}\n", encoding="utf-8"
+        )
+        if generation == 0 or value_count == 0:
+            raise RuntimeError("driving policy commit was not durable after shutdown")
+        transition(2, 2, logs)
+        deadline = time.monotonic() + 20
+        restarted_generation = generation
+        while time.monotonic() < deadline:
+            with sqlite3.connect(policy_database) as database:
+                restarted_generation = database.execute(
+                    "SELECT generation FROM ovf_meta WHERE id=1"
+                ).fetchone()[0]
+            if restarted_generation > generation:
+                break
+            time.sleep(0.2)
+        recovered_log = service_log("ovf-app-4")
+        (logs / "ovf-app-4-restarted.log").write_text(recovered_log, encoding="utf-8")
+        (logs / "persistence-restart.log").write_text(
+            f"before={generation} after={restarted_generation}\n", encoding="utf-8"
+        )
+        if restarted_generation <= generation:
+            raise RuntimeError("restarted driving policy did not update recovered state")
         transition(2, 1, logs)
         transition(1, 1, logs)
         for service in (
@@ -259,6 +355,7 @@ def main() -> int:
                 dinit.kill()
                 dinit.wait()
         console.close()
+        unmount_persistence_paths()
         unmount_target_filesystem()
 
 

@@ -3,6 +3,7 @@
 """Validated persistence deployment and generated application facade."""
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 
 OvfPerContractInfo = provider(
     doc = "Generated persistent-record contract artifacts.",
@@ -59,6 +60,26 @@ _ovf_per_contract = rule(
     },
 )
 
+def _per_contract_export_impl(ctx):
+    model = ctx.attr.model[OvfPerContractInfo]
+    return [
+        DefaultInfo(files = ctx.attr.library[DefaultInfo].files),
+        CcInfo(
+            compilation_context = ctx.attr.library[CcInfo].compilation_context,
+            linking_context = ctx.attr.library[CcInfo].linking_context,
+        ),
+        OvfPerContractInfo(header = model.header, ir = model.ir),
+        OutputGroupInfo(header = depset([model.header]), ir = depset([model.ir])),
+    ]
+
+_per_contract_export = rule(
+    implementation = _per_contract_export_impl,
+    attrs = {
+        "library": attr.label(mandatory = True, providers = [CcInfo]),
+        "model": attr.label(mandatory = True, providers = [OvfPerContractInfo]),
+    },
+)
+
 def ovf_per_contract(name, idl, output_name, visibility = None):
     """Compiles typed persistent records and exposes generated C++ codecs.
 
@@ -75,13 +96,19 @@ def ovf_per_contract(name, idl, output_name, visibility = None):
         srcs = [":" + model],
         output_group = "header",
     )
+    library = name + "_cc"
     cc_library(
-        name = name,
+        name = library,
         hdrs = [":" + name + "_header"],
         include_prefix = "",
         strip_include_prefix = "generated/" + model,
+        deps = ["//per:api"],
+    )
+    _per_contract_export(
+        name = name,
+        library = ":" + library,
+        model = ":" + model,
         visibility = visibility,
-        deps = ["//per:codec"],
     )
 
 def _per_model_impl(ctx):
@@ -167,5 +194,5 @@ def ovf_per_application(name, deployment, cpp_namespace, schemas = [], binding =
         include_prefix = "",
         strip_include_prefix = "generated/" + model,
         visibility = visibility,
-        deps = ["//per:runtime"],
+        deps = ["//per:api"],
     )
