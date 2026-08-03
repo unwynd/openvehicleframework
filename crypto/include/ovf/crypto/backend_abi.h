@@ -29,7 +29,9 @@ typedef enum ovf_crypto_status_v1 {
   OVF_CRYPTO_STATUS_AUTHENTICATION_FAILED = 9,
   OVF_CRYPTO_STATUS_ENTROPY_FAILURE = 10,
   OVF_CRYPTO_STATUS_BACKEND_ERROR = 11,
-  OVF_CRYPTO_STATUS_SHUTTING_DOWN = 12
+  OVF_CRYPTO_STATUS_SHUTTING_DOWN = 12,
+  OVF_CRYPTO_STATUS_CANCELLED = 13,
+  OVF_CRYPTO_STATUS_DEADLINE_EXCEEDED = 14
 } ovf_crypto_status_v1;
 
 typedef enum ovf_crypto_algorithm_v1 {
@@ -188,6 +190,49 @@ typedef struct ovf_crypto_host_api_v1 {
 
 typedef struct ovf_crypto_backend_v1 ovf_crypto_backend_v1;
 
+#define OVF_CRYPTO_EXTENSION_ASYNC_V1 UINT64_C(0x4F56464341535931)
+
+typedef enum ovf_crypto_async_operation_v1 {
+  OVF_CRYPTO_ASYNC_HASH = 1,
+  OVF_CRYPTO_ASYNC_SIGN = 2,
+  OVF_CRYPTO_ASYNC_VERIFY = 3
+} ovf_crypto_async_operation_v1;
+
+typedef struct ovf_crypto_async_result_v1 {
+  size_t struct_size;
+  ovf_crypto_status_v1 status;
+  ovf_crypto_bytes_view_v1 bytes;
+  uint8_t valid;
+  uint8_t reserved[7];
+} ovf_crypto_async_result_v1;
+
+typedef void (*ovf_crypto_async_completion_fn_v1)(void* user_data, ovf_crypto_handle_v1 ticket,
+                                                  const ovf_crypto_async_result_v1* result);
+
+typedef struct ovf_crypto_async_request_v1 {
+  size_t struct_size;
+  ovf_crypto_async_operation_v1 operation;
+  uint32_t algorithm;
+  ovf_crypto_handle_v1 key;
+  ovf_crypto_bytes_view_v1 input;
+  ovf_crypto_bytes_view_v1 auxiliary;
+  uint64_t deadline_monotonic_ns;
+  void* user_data;
+  ovf_crypto_async_completion_fn_v1 completion;
+  uint8_t reserved[8];
+} ovf_crypto_async_request_v1;
+
+typedef struct ovf_crypto_async_extension_v1 ovf_crypto_async_extension_v1;
+struct ovf_crypto_async_extension_v1 {
+  size_t struct_size;
+  uint32_t version;
+  uint32_t max_outstanding;
+  void* implementation;
+  ovf_crypto_status_v1 (*submit)(ovf_crypto_async_extension_v1*, const ovf_crypto_async_request_v1*,
+                                 ovf_crypto_handle_v1* ticket);
+  ovf_crypto_status_v1 (*cancel)(ovf_crypto_async_extension_v1*, ovf_crypto_handle_v1 ticket);
+};
+
 struct ovf_crypto_backend_v1 {
   size_t struct_size;
   uint32_t abi_version;
@@ -243,6 +288,8 @@ struct ovf_crypto_backend_v1 {
   ovf_crypto_status_v1 (*stream_process_record)(ovf_crypto_backend_v1*, ovf_crypto_handle_v1,
                                                 ovf_crypto_bytes_view_v1,
                                                 ovf_crypto_mutable_bytes_v1*);
+  ovf_crypto_status_v1 (*query_extension)(ovf_crypto_backend_v1*, uint64_t extension_id,
+                                          uint32_t minimum_version, void** extension);
   ovf_crypto_status_v1 (*last_error)(ovf_crypto_backend_v1*, ovf_crypto_mutable_bytes_v1* message);
 };
 

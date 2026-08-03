@@ -4,6 +4,7 @@
 
 #include "ovf/crypto/backend_abi.h"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -27,7 +28,9 @@ enum class ErrorCode : std::uint8_t {
   authentication_failed,
   entropy_failure,
   backend_failure,
-  shutting_down
+  shutting_down,
+  cancelled,
+  deadline_exceeded
 };
 
 struct Error final {
@@ -208,6 +211,27 @@ private:
   ovf_crypto_handle_v1 handle_{};
 };
 
+using AsyncValue = std::variant<std::vector<std::byte>, bool>;
+
+class AsyncOperation final {
+public:
+  AsyncOperation() = default;
+  ~AsyncOperation();
+  AsyncOperation(AsyncOperation const&) = delete;
+  AsyncOperation& operator=(AsyncOperation const&) = delete;
+  AsyncOperation(AsyncOperation&&) noexcept;
+  AsyncOperation& operator=(AsyncOperation&&) noexcept;
+  [[nodiscard]] bool valid() const noexcept;
+  [[nodiscard]] Result<AsyncValue> Wait() noexcept;
+  [[nodiscard]] bool Cancel() noexcept;
+
+private:
+  friend class Runtime;
+  class State;
+  explicit AsyncOperation(std::shared_ptr<State>) noexcept;
+  std::shared_ptr<State> state_;
+};
+
 struct RuntimeConfig final {
   std::string configuration;
   std::uint32_t max_keys{128};
@@ -265,6 +289,16 @@ public:
   [[nodiscard]] Result<AeadRecordStream>
   BeginRecordDecryption(Algorithm algorithm, const Key& key,
                         AeadParameters parameters) const noexcept;
+  [[nodiscard]] Result<AsyncOperation>
+  AsyncHash(Algorithm algorithm, std::span<const std::byte> input,
+            std::chrono::steady_clock::time_point deadline) const noexcept;
+  [[nodiscard]] Result<AsyncOperation>
+  AsyncSign(Algorithm algorithm, const Key& key, std::span<const std::byte> message,
+            std::chrono::steady_clock::time_point deadline) const noexcept;
+  [[nodiscard]] Result<AsyncOperation>
+  AsyncVerify(Algorithm algorithm, const Key& key, std::span<const std::byte> message,
+              std::span<const std::byte> signature,
+              std::chrono::steady_clock::time_point deadline) const noexcept;
   void Stop() noexcept;
 
 private:
@@ -274,6 +308,10 @@ private:
   [[nodiscard]] Result<AeadRecordStream>
   BeginRecordStream(ovf_crypto_stream_operation_v1 operation, Algorithm algorithm, const Key& key,
                     AeadParameters parameters) const noexcept;
+  [[nodiscard]] Result<AsyncOperation>
+  SubmitAsync(ovf_crypto_async_operation_v1 operation, Algorithm algorithm, const Key* key,
+              std::span<const std::byte> input, std::span<const std::byte> auxiliary,
+              std::chrono::steady_clock::time_point deadline) const noexcept;
   std::shared_ptr<detail::RuntimeState> state_;
   void* library_{};
 };

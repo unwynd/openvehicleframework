@@ -3,6 +3,7 @@
 #include "ovf/crypto/crypto.hpp"
 
 #include <algorithm>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -44,6 +45,10 @@ ErrorCode ToErrorCode(ovf_crypto_status_v1 status) noexcept {
     return ErrorCode::entropy_failure;
   case OVF_CRYPTO_STATUS_SHUTTING_DOWN:
     return ErrorCode::shutting_down;
+  case OVF_CRYPTO_STATUS_CANCELLED:
+    return ErrorCode::cancelled;
+  case OVF_CRYPTO_STATUS_DEADLINE_EXCEEDED:
+    return ErrorCode::deadline_exceeded;
   case OVF_CRYPTO_STATUS_BACKEND_ERROR:
   case OVF_CRYPTO_STATUS_OK:
     return ErrorCode::backend_failure;
@@ -77,8 +82,8 @@ namespace detail {
 class RuntimeState final {
 public:
   RuntimeState(const ovf_crypto_backend_factory_v1* factory, ovf_crypto_backend_v1* backend,
-               void* library) noexcept
-      : factory_(*factory), backend_(backend), library_(library) {}
+               ovf_crypto_async_extension_v1* async, void* library) noexcept
+      : factory_(*factory), backend_(backend), async_(async), library_(library) {}
 
   ~RuntimeState() {
     Stop();
@@ -129,6 +134,7 @@ public:
 
   ovf_crypto_backend_factory_v1 factory_{};
   ovf_crypto_backend_v1* backend_{};
+  ovf_crypto_async_extension_v1* async_{};
   void* library_{};
   mutable std::mutex mutex_;
   bool running_{true};
@@ -215,6 +221,94 @@ void AeadRecordStream::Close() noexcept {
     handle_ = OVF_CRYPTO_INVALID_HANDLE_V1;
     state_.reset();
   }
+}
+
+class AsyncOperation::State final {
+public:
+  static void Complete(void* user_data, ovf_crypto_handle_v1,
+                       const ovf_crypto_async_result_v1* result) noexcept {
+    auto& self = *static_cast<State*>(user_data);
+    std::scoped_lock lock(self.mutex);
+    if (self.done) {
+      return;
+    }
+    if (result == nullptr || result->struct_size < sizeof(*result)) {
+      self.result = Error{ErrorCode::incompatible_abi, "provider returned an invalid async result"};
+    } else if (result->status != OVF_CRYPTO_STATUS_OK) {
+      self.result = Error{ToErrorCode(result->status), "asynchronous operation failed"};
+    } else if (self.boolean_result) {
+      self.result = AsyncValue(result->valid != 0);
+    } else {
+      try {
+        std::vector<std::byte> bytes(result->bytes.size);
+        if (!bytes.empty()) {
+          std::memcpy(bytes.data(), result->bytes.data, bytes.size());
+        }
+        self.result = AsyncValue(std::move(bytes));
+      } catch (...) {
+        self.result = Error{ErrorCode::resource_exhausted, "cannot copy asynchronous result"};
+      }
+    }
+    self.done = true;
+    self.condition.notify_all();
+  }
+
+  std::shared_ptr<detail::RuntimeState> runtime;
+  ovf_crypto_async_extension_v1* extension{};
+  ovf_crypto_handle_v1 ticket{};
+  bool boolean_result{};
+  std::mutex mutex;
+  std::condition_variable condition;
+  bool done{};
+  std::variant<std::monostate, AsyncValue, Error> result;
+};
+
+AsyncOperation::AsyncOperation(std::shared_ptr<State> state) noexcept : state_(std::move(state)) {}
+AsyncOperation::~AsyncOperation() {
+  if (state_ != nullptr) {
+    static_cast<void>(Cancel());
+    static_cast<void>(Wait());
+  }
+}
+AsyncOperation::AsyncOperation(AsyncOperation&&) noexcept = default;
+AsyncOperation& AsyncOperation::operator=(AsyncOperation&& other) noexcept {
+  if (this != &other) {
+    if (state_ != nullptr) {
+      static_cast<void>(Cancel());
+      static_cast<void>(Wait());
+    }
+    state_ = std::move(other.state_);
+  }
+  return *this;
+}
+bool AsyncOperation::valid() const noexcept { return state_ != nullptr; }
+Result<AsyncValue> AsyncOperation::Wait() noexcept {
+  if (state_ == nullptr) {
+    return Error{ErrorCode::invalid_state, "asynchronous operation is not active"};
+  }
+  std::unique_lock lock(state_->mutex);
+  state_->condition.wait(lock, [&] { return state_->done; });
+  auto state = std::move(state_);
+  if (std::holds_alternative<Error>(state->result)) {
+    return std::get<Error>(std::move(state->result));
+  }
+  return std::get<AsyncValue>(std::move(state->result));
+}
+bool AsyncOperation::Cancel() noexcept {
+  if (state_ == nullptr) {
+    return false;
+  }
+  ovf_crypto_handle_v1 ticket{};
+  ovf_crypto_async_extension_v1* extension{};
+  {
+    std::scoped_lock lock(state_->mutex);
+    if (state_->done) {
+      return false;
+    }
+    ticket = state_->ticket;
+    extension = state_->extension;
+  }
+  return extension->cancel(extension, ticket) == OVF_CRYPTO_STATUS_OK;
 }
 
 Result<bool> InputStream::Update(std::span<const std::byte> input) noexcept {
@@ -315,20 +409,20 @@ Result<std::unique_ptr<Runtime>> Runtime::Create(const ovf_crypto_backend_factor
     }
     constexpr auto required_backend_size =
         offsetof(ovf_crypto_backend_v1, last_error) + sizeof(backend->last_error);
-    const bool valid = backend->struct_size >= required_backend_size &&
-                       backend->abi_version == OVF_CRYPTO_BACKEND_ABI_VERSION_1 &&
-                       backend->start != nullptr && backend->stop != nullptr &&
-                       backend->get_capabilities != nullptr && backend->random_bytes != nullptr &&
-                       backend->key_import != nullptr && backend->key_generate != nullptr &&
-                       backend->key_destroy != nullptr && backend->hash != nullptr &&
-                       backend->mac != nullptr && backend->aead_encrypt != nullptr &&
-                       backend->aead_decrypt != nullptr && backend->sign != nullptr &&
-                       backend->verify != nullptr && backend->derive != nullptr &&
-                       backend->key_public_value != nullptr && backend->key_agree != nullptr &&
-                       backend->certificate_validate != nullptr &&
-                       backend->stream_create != nullptr && backend->stream_update != nullptr &&
-                       backend->stream_finish != nullptr && backend->stream_destroy != nullptr &&
-                       backend->stream_process_record != nullptr && backend->last_error != nullptr;
+    const bool valid =
+        backend->struct_size >= required_backend_size &&
+        backend->abi_version == OVF_CRYPTO_BACKEND_ABI_VERSION_1 && backend->start != nullptr &&
+        backend->stop != nullptr && backend->get_capabilities != nullptr &&
+        backend->random_bytes != nullptr && backend->key_import != nullptr &&
+        backend->key_generate != nullptr && backend->key_destroy != nullptr &&
+        backend->hash != nullptr && backend->mac != nullptr && backend->aead_encrypt != nullptr &&
+        backend->aead_decrypt != nullptr && backend->sign != nullptr &&
+        backend->verify != nullptr && backend->derive != nullptr &&
+        backend->key_public_value != nullptr && backend->key_agree != nullptr &&
+        backend->certificate_validate != nullptr && backend->stream_create != nullptr &&
+        backend->stream_update != nullptr && backend->stream_finish != nullptr &&
+        backend->stream_destroy != nullptr && backend->stream_process_record != nullptr &&
+        backend->query_extension != nullptr && backend->last_error != nullptr;
     if (!valid) {
       factory.destroy(backend);
       return Error{ErrorCode::incompatible_abi, "incomplete cryptographic provider ABI"};
@@ -338,7 +432,26 @@ Result<std::unique_ptr<Runtime>> Runtime::Create(const ovf_crypto_backend_factor
       factory.destroy(backend);
       return Error{ToErrorCode(start_status), "cannot start cryptographic provider"};
     }
-    auto state = std::make_shared<detail::RuntimeState>(&factory, backend, nullptr);
+    ovf_crypto_async_extension_v1* async{};
+    void* extension{};
+    const auto extension_status =
+        backend->query_extension(backend, OVF_CRYPTO_EXTENSION_ASYNC_V1, 1, &extension);
+    if (extension_status == OVF_CRYPTO_STATUS_OK) {
+      async = static_cast<ovf_crypto_async_extension_v1*>(extension);
+      constexpr auto required_async_size =
+          offsetof(ovf_crypto_async_extension_v1, cancel) + sizeof(async->cancel);
+      if (async == nullptr || async->struct_size < required_async_size || async->version != 1 ||
+          async->max_outstanding == 0 || async->submit == nullptr || async->cancel == nullptr) {
+        backend->stop(backend);
+        factory.destroy(backend);
+        return Error{ErrorCode::incompatible_abi, "invalid asynchronous provider extension"};
+      }
+    } else if (extension_status != OVF_CRYPTO_STATUS_UNSUPPORTED) {
+      backend->stop(backend);
+      factory.destroy(backend);
+      return Error{ToErrorCode(extension_status), "cannot query provider extensions"};
+    }
+    auto state = std::make_shared<detail::RuntimeState>(&factory, backend, async, nullptr);
     backend = nullptr;
     return std::unique_ptr<Runtime>(new Runtime(std::move(state), nullptr));
   } catch (...) {
@@ -832,6 +945,75 @@ Result<AeadRecordStream> Runtime::BeginRecordEncryption(Algorithm algorithm, con
 Result<AeadRecordStream> Runtime::BeginRecordDecryption(Algorithm algorithm, const Key& key,
                                                         AeadParameters parameters) const noexcept {
   return BeginRecordStream(OVF_CRYPTO_STREAM_AEAD_DECRYPT_RECORDS, algorithm, key, parameters);
+}
+
+Result<AsyncOperation>
+Runtime::SubmitAsync(ovf_crypto_async_operation_v1 operation, Algorithm algorithm, const Key* key,
+                     std::span<const std::byte> input, std::span<const std::byte> auxiliary,
+                     std::chrono::steady_clock::time_point deadline) const noexcept {
+  if (state_->async_ == nullptr) {
+    return Error{ErrorCode::unsupported, "provider has no asynchronous extension"};
+  }
+  if (input.empty() || (key != nullptr && (!key->valid() || key->state_ != state_))) {
+    return Error{ErrorCode::invalid_argument, "invalid asynchronous request"};
+  }
+  if (deadline <= std::chrono::steady_clock::now()) {
+    return Error{ErrorCode::deadline_exceeded, "asynchronous deadline has elapsed"};
+  }
+  try {
+    auto completion = std::make_shared<AsyncOperation::State>();
+    completion->runtime = state_;
+    completion->extension = state_->async_;
+    completion->boolean_result = operation == OVF_CRYPTO_ASYNC_VERIFY;
+    const auto deadline_ns = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(deadline.time_since_epoch()).count());
+    const ovf_crypto_async_request_v1 request{sizeof(request),
+                                              operation,
+                                              static_cast<std::uint32_t>(algorithm),
+                                              key == nullptr ? OVF_CRYPTO_INVALID_HANDLE_V1
+                                                             : key->handle_,
+                                              View(input),
+                                              View(auxiliary),
+                                              deadline_ns,
+                                              completion.get(),
+                                              AsyncOperation::State::Complete,
+                                              {}};
+    ovf_crypto_handle_v1 ticket{};
+    std::scoped_lock lock(state_->mutex_);
+    const auto status = state_->async_->submit(state_->async_, &request, &ticket);
+    if (status != OVF_CRYPTO_STATUS_OK) {
+      return state_->MakeError(status);
+    }
+    if (ticket == OVF_CRYPTO_INVALID_HANDLE_V1) {
+      return Error{ErrorCode::incompatible_abi, "provider returned an invalid async ticket"};
+    }
+    completion->ticket = ticket;
+    return AsyncOperation(std::move(completion));
+  } catch (...) {
+    return Error{ErrorCode::resource_exhausted, "cannot allocate asynchronous request"};
+  }
+}
+
+Result<AsyncOperation>
+Runtime::AsyncHash(Algorithm algorithm, std::span<const std::byte> input,
+                   std::chrono::steady_clock::time_point deadline) const noexcept {
+  return SubmitAsync(OVF_CRYPTO_ASYNC_HASH, algorithm, nullptr, input, {}, deadline);
+}
+
+Result<AsyncOperation>
+Runtime::AsyncSign(Algorithm algorithm, const Key& key, std::span<const std::byte> message,
+                   std::chrono::steady_clock::time_point deadline) const noexcept {
+  return SubmitAsync(OVF_CRYPTO_ASYNC_SIGN, algorithm, &key, message, {}, deadline);
+}
+
+Result<AsyncOperation>
+Runtime::AsyncVerify(Algorithm algorithm, const Key& key, std::span<const std::byte> message,
+                     std::span<const std::byte> signature,
+                     std::chrono::steady_clock::time_point deadline) const noexcept {
+  if (signature.empty()) {
+    return Error{ErrorCode::invalid_argument, "signature is empty"};
+  }
+  return SubmitAsync(OVF_CRYPTO_ASYNC_VERIFY, algorithm, &key, message, signature, deadline);
 }
 
 void Runtime::Stop() noexcept {

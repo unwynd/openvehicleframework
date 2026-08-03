@@ -20,16 +20,20 @@
 #include <botan/x509path.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
 #include <string>
+#include <thread>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -68,8 +72,25 @@ struct StreamEntry final {
   std::optional<AeadRecordState> aead;
 };
 
+using AsyncPrimitive =
+    std::variant<std::unique_ptr<Botan::HashFunction>, std::unique_ptr<Botan::PK_Signer>,
+                 std::unique_ptr<Botan::PK_Verifier>>;
+
+struct AsyncJob final {
+  ovf_crypto_handle_v1 ticket{};
+  ovf_crypto_async_operation_v1 operation{};
+  std::uint64_t deadline_ns{};
+  std::vector<std::uint8_t> input;
+  std::vector<std::uint8_t> auxiliary;
+  void* user_data{};
+  ovf_crypto_async_completion_fn_v1 completion{};
+  AsyncPrimitive primitive;
+  std::atomic_bool cancelled{};
+};
+
 struct Backend final {
   ovf_crypto_backend_v1 abi{};
+  ovf_crypto_async_extension_v1 async{};
   std::mutex mutex;
   Botan::AutoSeeded_RNG rng;
   std::vector<std::optional<KeyEntry>> keys;
@@ -78,6 +99,13 @@ struct Backend final {
   std::vector<std::uint32_t> stream_generations;
   std::string last_error;
   bool running{};
+  std::mutex async_mutex;
+  std::condition_variable async_condition;
+  std::deque<std::shared_ptr<AsyncJob>> async_queue;
+  std::vector<std::shared_ptr<AsyncJob>> async_outstanding;
+  std::thread async_worker;
+  std::uint64_t next_async_ticket{1};
+  bool async_stopping{};
 };
 
 Backend* Self(ovf_crypto_backend_v1* self) { return static_cast<Backend*>(self->implementation); }
@@ -207,6 +235,77 @@ std::size_t SymmetricKeySize(std::uint32_t algorithm) noexcept {
   }
 }
 
+std::uint64_t MonotonicNanoseconds() noexcept {
+  return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                        std::chrono::steady_clock::now().time_since_epoch())
+                                        .count());
+}
+
+void CompleteAsync(const std::shared_ptr<AsyncJob>& job, ovf_crypto_status_v1 status,
+                   std::span<const std::uint8_t> bytes = {}, bool valid = false) noexcept {
+  const ovf_crypto_async_result_v1 result{
+      sizeof(result), status, {bytes.data(), bytes.size()}, static_cast<std::uint8_t>(valid), {}};
+  job->completion(job->user_data, job->ticket, &result);
+}
+
+void AsyncWorker(Backend* backend) noexcept {
+  while (true) {
+    std::shared_ptr<AsyncJob> job;
+    bool stopping{};
+    {
+      std::unique_lock lock(backend->async_mutex);
+      backend->async_condition.wait(
+          lock, [&] { return backend->async_stopping || !backend->async_queue.empty(); });
+      if (backend->async_queue.empty()) {
+        if (backend->async_stopping) {
+          return;
+        }
+        continue;
+      }
+      job = std::move(backend->async_queue.front());
+      backend->async_queue.pop_front();
+      stopping = backend->async_stopping;
+    }
+    if (stopping) {
+      CompleteAsync(job, OVF_CRYPTO_STATUS_SHUTTING_DOWN);
+    } else if (job->cancelled.load()) {
+      CompleteAsync(job, OVF_CRYPTO_STATUS_CANCELLED);
+    } else if (MonotonicNanoseconds() >= job->deadline_ns) {
+      CompleteAsync(job, OVF_CRYPTO_STATUS_DEADLINE_EXCEEDED);
+    } else {
+      try {
+        std::vector<std::uint8_t> output;
+        bool valid{};
+        if (job->operation == OVF_CRYPTO_ASYNC_HASH) {
+          auto& hash = *std::get<std::unique_ptr<Botan::HashFunction>>(job->primitive);
+          hash.update(job->input);
+          output = hash.final_stdvec();
+        } else if (job->operation == OVF_CRYPTO_ASYNC_SIGN) {
+          auto& signer = *std::get<std::unique_ptr<Botan::PK_Signer>>(job->primitive);
+          signer.update(job->input);
+          std::scoped_lock lock(backend->mutex);
+          output = signer.signature(backend->rng);
+        } else {
+          auto& verifier = *std::get<std::unique_ptr<Botan::PK_Verifier>>(job->primitive);
+          verifier.update(job->input);
+          valid = verifier.check_signature(job->auxiliary);
+        }
+        if (job->cancelled.load()) {
+          CompleteAsync(job, OVF_CRYPTO_STATUS_CANCELLED);
+        } else if (MonotonicNanoseconds() >= job->deadline_ns) {
+          CompleteAsync(job, OVF_CRYPTO_STATUS_DEADLINE_EXCEEDED);
+        } else {
+          CompleteAsync(job, OVF_CRYPTO_STATUS_OK, output, valid);
+        }
+      } catch (...) {
+        CompleteAsync(job, OVF_CRYPTO_STATUS_BACKEND_ERROR);
+      }
+    }
+    std::scoped_lock lock(backend->async_mutex);
+    std::erase(backend->async_outstanding, job);
+  }
+}
+
 ovf_crypto_status_v1 Start(ovf_crypto_backend_v1* self) {
   auto& backend = *Self(self);
   std::scoped_lock lock(backend.mutex);
@@ -216,6 +315,8 @@ ovf_crypto_status_v1 Start(ovf_crypto_backend_v1* self) {
   try {
     std::array<std::uint8_t, 1> probe{};
     backend.rng.randomize(probe);
+    backend.async_stopping = false;
+    backend.async_worker = std::thread(AsyncWorker, &backend);
     backend.running = true;
     return OVF_CRYPTO_STATUS_OK;
   } catch (const std::exception& exception) {
@@ -225,13 +326,23 @@ ovf_crypto_status_v1 Start(ovf_crypto_backend_v1* self) {
 
 void Stop(ovf_crypto_backend_v1* self) {
   auto& backend = *Self(self);
-  std::scoped_lock lock(backend.mutex);
-  backend.running = false;
-  for (auto& key : backend.keys) {
-    key.reset();
+  {
+    std::scoped_lock lock(backend.mutex);
+    backend.running = false;
+    for (auto& key : backend.keys) {
+      key.reset();
+    }
+    for (auto& stream : backend.streams) {
+      stream.reset();
+    }
   }
-  for (auto& stream : backend.streams) {
-    stream.reset();
+  {
+    std::scoped_lock lock(backend.async_mutex);
+    backend.async_stopping = true;
+  }
+  backend.async_condition.notify_all();
+  if (backend.async_worker.joinable()) {
+    backend.async_worker.join();
   }
 }
 
@@ -1001,6 +1112,128 @@ ovf_crypto_status_v1 ProcessRecord(ovf_crypto_backend_v1* self, ovf_crypto_handl
   }
 }
 
+ovf_crypto_status_v1 SubmitAsync(ovf_crypto_async_extension_v1* extension,
+                                 const ovf_crypto_async_request_v1* request,
+                                 ovf_crypto_handle_v1* ticket) {
+  auto& backend = *static_cast<Backend*>(extension->implementation);
+  if (request == nullptr || request->struct_size < sizeof(*request) || ticket == nullptr ||
+      request->completion == nullptr || !ValidView(request->input) || request->input.size == 0 ||
+      request->input.size > kMaximumOperationSize || !ValidView(request->auxiliary) ||
+      request->deadline_monotonic_ns == 0) {
+    return OVF_CRYPTO_STATUS_INVALID_ARGUMENT;
+  }
+  if (request->deadline_monotonic_ns <= MonotonicNanoseconds()) {
+    return OVF_CRYPTO_STATUS_DEADLINE_EXCEEDED;
+  }
+  try {
+    auto job = std::make_shared<AsyncJob>();
+    job->operation = request->operation;
+    job->deadline_ns = request->deadline_monotonic_ns;
+    job->input.assign(request->input.data, request->input.data + request->input.size);
+    if (request->auxiliary.size != 0) {
+      job->auxiliary.assign(request->auxiliary.data,
+                            request->auxiliary.data + request->auxiliary.size);
+    }
+    job->user_data = request->user_data;
+    job->completion = request->completion;
+    {
+      std::scoped_lock lock(backend.mutex);
+      if (!backend.running) {
+        return Fail(backend, OVF_CRYPTO_STATUS_SHUTTING_DOWN, "provider is stopping");
+      }
+      auto* key = FindKey(backend, request->key);
+      if (request->operation == OVF_CRYPTO_ASYNC_HASH) {
+        const auto* name = HashName(request->algorithm);
+        if (name == nullptr || request->key != OVF_CRYPTO_INVALID_HANDLE_V1 ||
+            request->auxiliary.size != 0) {
+          return Fail(backend, OVF_CRYPTO_STATUS_INVALID_ARGUMENT, "invalid asynchronous hash");
+        }
+        job->primitive = Botan::HashFunction::create_or_throw(name);
+      } else if (request->operation == OVF_CRYPTO_ASYNC_SIGN) {
+        const auto* padding = SignaturePadding(request->algorithm);
+        if (key == nullptr || key->private_key == nullptr || key->algorithm != request->algorithm ||
+            !Permits(*key, OVF_CRYPTO_KEY_USAGE_SIGN) || padding == nullptr ||
+            request->auxiliary.size != 0) {
+          return Fail(backend, OVF_CRYPTO_STATUS_PERMISSION_DENIED,
+                      "asynchronous signing key policy rejected the request");
+        }
+        job->primitive = std::make_unique<Botan::PK_Signer>(*key->private_key, backend.rng, padding,
+                                                            SignatureFormat(request->algorithm));
+      } else if (request->operation == OVF_CRYPTO_ASYNC_VERIFY) {
+        const auto* padding = SignaturePadding(request->algorithm);
+        if (key == nullptr || key->algorithm != request->algorithm ||
+            !Permits(*key, OVF_CRYPTO_KEY_USAGE_VERIFY) || padding == nullptr ||
+            request->auxiliary.size == 0) {
+          return Fail(backend, OVF_CRYPTO_STATUS_PERMISSION_DENIED,
+                      "asynchronous verification key policy rejected the request");
+        }
+        std::unique_ptr<Botan::Public_Key> derived;
+        const Botan::Public_Key* public_key = key->public_key.get();
+        if (public_key == nullptr && key->private_key != nullptr) {
+          derived = key->private_key->public_key();
+          public_key = derived.get();
+        }
+        if (public_key == nullptr) {
+          return Fail(backend, OVF_CRYPTO_STATUS_PERMISSION_DENIED,
+                      "verification key has no public component");
+        }
+        job->primitive = std::make_unique<Botan::PK_Verifier>(*public_key, padding,
+                                                              SignatureFormat(request->algorithm));
+      } else {
+        return Fail(backend, OVF_CRYPTO_STATUS_UNSUPPORTED, "unsupported asynchronous operation");
+      }
+    }
+    {
+      std::scoped_lock lock(backend.async_mutex);
+      if (backend.async_stopping) {
+        return OVF_CRYPTO_STATUS_SHUTTING_DOWN;
+      }
+      if (backend.async_outstanding.size() >= extension->max_outstanding) {
+        return OVF_CRYPTO_STATUS_RESOURCE_EXHAUSTED;
+      }
+      job->ticket = backend.next_async_ticket++;
+      if (backend.next_async_ticket == OVF_CRYPTO_INVALID_HANDLE_V1) {
+        ++backend.next_async_ticket;
+      }
+      backend.async_outstanding.push_back(job);
+      backend.async_queue.push_back(job);
+      *ticket = job->ticket;
+    }
+    backend.async_condition.notify_one();
+    return OVF_CRYPTO_STATUS_OK;
+  } catch (const std::exception& exception) {
+    return BotanFailure(backend, exception);
+  }
+}
+
+ovf_crypto_status_v1 CancelAsync(ovf_crypto_async_extension_v1* extension,
+                                 ovf_crypto_handle_v1 ticket) {
+  auto& backend = *static_cast<Backend*>(extension->implementation);
+  std::scoped_lock lock(backend.async_mutex);
+  const auto found = std::ranges::find_if(backend.async_outstanding,
+                                          [&](const auto& job) { return job->ticket == ticket; });
+  if (found == backend.async_outstanding.end()) {
+    return OVF_CRYPTO_STATUS_NOT_FOUND;
+  }
+  (*found)->cancelled.store(true);
+  backend.async_condition.notify_one();
+  return OVF_CRYPTO_STATUS_OK;
+}
+
+ovf_crypto_status_v1 QueryExtension(ovf_crypto_backend_v1* self, std::uint64_t extension_id,
+                                    std::uint32_t minimum_version, void** output) {
+  auto& backend = *Self(self);
+  if (output == nullptr) {
+    return OVF_CRYPTO_STATUS_INVALID_ARGUMENT;
+  }
+  *output = nullptr;
+  if (extension_id != OVF_CRYPTO_EXTENSION_ASYNC_V1 || minimum_version > 1) {
+    return OVF_CRYPTO_STATUS_UNSUPPORTED;
+  }
+  *output = &backend.async;
+  return OVF_CRYPTO_STATUS_OK;
+}
+
 ovf_crypto_status_v1 LastError(ovf_crypto_backend_v1* self, ovf_crypto_mutable_bytes_v1* output) {
   auto& backend = *Self(self);
   std::scoped_lock lock(backend.mutex);
@@ -1012,7 +1245,8 @@ ovf_crypto_status_v1 Create(const ovf_crypto_host_api_v1* host,
                             const ovf_crypto_backend_config_v1* config,
                             ovf_crypto_backend_v1** output) {
   if (host == nullptr || host->struct_size < sizeof(*host) || config == nullptr ||
-      config->struct_size < sizeof(*config) || output == nullptr || config->max_keys == 0) {
+      config->struct_size < sizeof(*config) || output == nullptr || config->max_keys == 0 ||
+      config->max_contexts == 0) {
     return OVF_CRYPTO_STATUS_INVALID_ARGUMENT;
   }
   try {
@@ -1021,6 +1255,12 @@ ovf_crypto_status_v1 Create(const ovf_crypto_host_api_v1* host,
     backend->generations.resize(config->max_keys, 1);
     backend->streams.resize(config->max_contexts);
     backend->stream_generations.resize(config->max_contexts, 1);
+    backend->async = {sizeof(ovf_crypto_async_extension_v1),
+                      1,
+                      config->max_contexts,
+                      backend.get(),
+                      SubmitAsync,
+                      CancelAsync};
     backend->abi = {sizeof(ovf_crypto_backend_v1),
                     OVF_CRYPTO_BACKEND_ABI_VERSION_1,
                     backend.get(),
@@ -1046,6 +1286,7 @@ ovf_crypto_status_v1 Create(const ovf_crypto_host_api_v1* host,
                     FinishStream,
                     DestroyStream,
                     ProcessRecord,
+                    QueryExtension,
                     LastError};
     *output = &backend.release()->abi;
     return OVF_CRYPTO_STATUS_OK;

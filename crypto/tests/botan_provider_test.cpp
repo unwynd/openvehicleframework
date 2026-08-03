@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -318,6 +319,90 @@ TEST(BotanProviderTest, AuthenticatesEveryAeadStreamRecordBeforeRelease) {
   const auto rejected = rejecting.Process(tampered);
   ASSERT_FALSE(rejected);
   EXPECT_EQ(rejected.error().code, ovf::crypto::ErrorCode::authentication_failed);
+}
+
+TEST(BotanProviderTest, CompletesAsynchronousHashSignAndVerifyRequests) {
+  using namespace std::chrono_literals;
+  auto runtime = CreateRuntime();
+  ASSERT_NE(runtime, nullptr);
+  const auto deadline = std::chrono::steady_clock::now() + 10s;
+  auto hash_result =
+      runtime->AsyncHash(ovf::crypto::Algorithm::sha2_256, Bytes("async message"), deadline);
+  ASSERT_TRUE(hash_result) << hash_result.error().message;
+  auto hash = std::move(hash_result).value();
+  const auto async_digest = hash.Wait();
+  const auto direct_digest =
+      runtime->Hash(ovf::crypto::Algorithm::sha2_256, Bytes("async message"));
+  ASSERT_TRUE(async_digest);
+  ASSERT_TRUE(direct_digest);
+  ASSERT_TRUE(std::holds_alternative<std::vector<std::byte>>(async_digest.value()));
+  EXPECT_EQ(std::get<std::vector<std::byte>>(async_digest.value()), direct_digest.value());
+  EXPECT_FALSE(hash.valid());
+
+  auto key_result =
+      runtime->GenerateKey({ovf::crypto::Algorithm::ed25519,
+                            ovf::crypto::KeyUsage::sign | ovf::crypto::KeyUsage::verify});
+  ASSERT_TRUE(key_result);
+  auto key = std::move(key_result).value();
+  auto sign_result =
+      runtime->AsyncSign(ovf::crypto::Algorithm::ed25519, key, Bytes("async message"), deadline);
+  ASSERT_TRUE(sign_result) << sign_result.error().message;
+  auto sign = std::move(sign_result).value();
+  const auto signature_result = sign.Wait();
+  ASSERT_TRUE(signature_result);
+  ASSERT_TRUE(std::holds_alternative<std::vector<std::byte>>(signature_result.value()));
+  const auto& signature = std::get<std::vector<std::byte>>(signature_result.value());
+
+  auto verify_result = runtime->AsyncVerify(ovf::crypto::Algorithm::ed25519, key,
+                                            Bytes("async message"), signature, deadline);
+  ASSERT_TRUE(verify_result) << verify_result.error().message;
+  auto verify = std::move(verify_result).value();
+  const auto valid = verify.Wait();
+  ASSERT_TRUE(valid);
+  ASSERT_TRUE(std::holds_alternative<bool>(valid.value()));
+  EXPECT_TRUE(std::get<bool>(valid.value()));
+}
+
+TEST(BotanProviderTest, CancelsQueuedAsynchronousWorkExactlyOnce) {
+  using namespace std::chrono_literals;
+  const auto* factory = ovf_crypto_backend_query_v1();
+  ovf::crypto::RuntimeConfig config;
+  config.max_keys = 2;
+  config.max_contexts = 2;
+  auto runtime_result = ovf::crypto::Runtime::Create(*factory, std::move(config));
+  ASSERT_TRUE(runtime_result);
+  auto runtime = std::move(runtime_result).value();
+  const std::vector<std::byte> input(8U * 1024U * 1024U, std::byte{0x5A});
+  const auto deadline = std::chrono::steady_clock::now() + 10s;
+  auto first_result = runtime->AsyncHash(ovf::crypto::Algorithm::sha2_512, input, deadline);
+  auto cancelled_result = runtime->AsyncHash(ovf::crypto::Algorithm::sha2_512, input, deadline);
+  ASSERT_TRUE(first_result);
+  ASSERT_TRUE(cancelled_result);
+  auto first = std::move(first_result).value();
+  auto cancelled = std::move(cancelled_result).value();
+  EXPECT_TRUE(cancelled.Cancel());
+  const auto outcome = cancelled.Wait();
+  ASSERT_FALSE(outcome);
+  EXPECT_EQ(outcome.error().code, ovf::crypto::ErrorCode::cancelled);
+  const auto first_outcome = first.Wait();
+  EXPECT_TRUE(first_outcome);
+}
+
+TEST(BotanProviderTest, EnforcesAsynchronousDeadlines) {
+  using namespace std::chrono_literals;
+  auto runtime = CreateRuntime();
+  ASSERT_NE(runtime, nullptr);
+  const std::vector<std::byte> input(8U * 1024U * 1024U, std::byte{0x33});
+  auto operation_result = runtime->AsyncHash(ovf::crypto::Algorithm::sha2_512, input,
+                                             std::chrono::steady_clock::now() + 1ns);
+  if (!operation_result) {
+    EXPECT_EQ(operation_result.error().code, ovf::crypto::ErrorCode::deadline_exceeded);
+    return;
+  }
+  auto operation = std::move(operation_result).value();
+  const auto outcome = operation.Wait();
+  ASSERT_FALSE(outcome);
+  EXPECT_EQ(outcome.error().code, ovf::crypto::ErrorCode::deadline_exceeded);
 }
 
 } // namespace
