@@ -1,38 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 load("//bazel:application.bzl", "ovf_cc_application")
-load("//bazel:logging.bzl", "ovf_log_application")
-load("//bazel:persistency.bzl", "ovf_per_application", "ovf_per_contract")
-
-ovf_per_contract(
-    name = "policy_state_contract",
-    idl = ["policy-state.smithy"],
-    output_name = "driving-policy-state",
-)
-
-ovf_per_application(
-    name = "persistence",
-    cpp_namespace = "ovf::deployment::driving_policy",
-    deployment = "deployment.cue",
-    schemas = [":policy_state_contract"],
-)
-
-ovf_log_application(
-    name = "logging",
-    deployment = "deployment.cue",
-)
 
 ovf_cc_application(
     name = "driving_policy",
     srcs = ["main.cpp"],
     deployment = "deployment.cue",
-    interfaces = ["//contracts/environment_model"],
+    interfaces = ["//examples/sensor_fusion/interface:environment_model"],
+    logging = True,
+    persistent_schemas = ["//examples/driving_policy/persistence:policy_state"],
     tags = ["manual"],
     visibility = ["//visibility:public"],
-    deps = [
-        ":logging",
-        ":persistence",
-        ":policy_state_contract",
-        "//exec:application_api",
-    ],
 )

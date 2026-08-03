@@ -1,21 +1,43 @@
 # Building applications with Bazel
 
-Applications use the public `ovf_cc_application` macro. The application owns
-its source, private headers, and CUE deployment intent. Interface packages
-export Smithy contracts as Bazel targets; the framework owns the hermetic
-compilers and generated-artifact contract.
+Applications use reusable `ovf_interface` and `ovf_persistent_schema` targets
+with the public `ovf_cc_application` macro. The application owns its source,
+private headers, and one CUE deployment intent; the framework owns hermetic
+compilers, cluster facade generation, and artifact wiring.
 
 ```starlark
-load("@openvehicleframework//bazel:application.bzl", "ovf_cc_application")
+load(
+    "@openvehicleframework//bazel:application.bzl",
+    "ovf_cc_application",
+    "ovf_interface",
+    "ovf_persistent_schema",
+)
+
+ovf_interface(
+    name = "radar",
+    srcs = ["radar.smithy"],
+)
+
+ovf_persistent_schema(
+    name = "radar_state",
+    srcs = ["radar-state.smithy"],
+)
 
 ovf_cc_application(
     name = "radar_app",
     srcs = ["main.cpp"],
     hdrs = ["radar_logic.hpp"],
-    interfaces = ["//contracts/radar"],
+    interfaces = [":radar"],
     deployment = "radar.deployment.cue",
+    logging = True,
+    persistent_schemas = [":radar_state"],
 )
 ```
+
+Communication interfaces and persistent schemas use the same bounded Smithy
+data-type profile and stable member tags. Their generated envelopes and codecs
+remain cluster-specific because network compatibility and durable-record
+evolution have different requirements.
 
 Application code includes generated contract types and one application facade:
 
@@ -106,7 +128,7 @@ relative path against the application filesystem mount point.
 System-selected binding CUE chooses the communication implementation and
 supplies binding policy and extensions. The compiler generates provider-native names,
 identifiers, resource mappings, stable instance identity, and the canonical
-deployment plan. `contracts/` contains only interface definitions and
+deployment plan. Example interface subpackages contain only interface definitions and
 associated interface build metadata.
 
 CUE sources reference qualified Smithy shape names. The compiler resolves

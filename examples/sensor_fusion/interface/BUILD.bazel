@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
-package(default_visibility = ["//visibility:public"])
+load("//bazel:application.bzl", "ovf_interface")
 
-filegroup(
+ovf_interface(
     name = "environment_model",
     srcs = ["environment-model.smithy"],
+    visibility = ["//visibility:public"],
 )

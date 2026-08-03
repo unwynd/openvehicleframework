@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -20,6 +20,7 @@ py_library(
         "exec_deployment.py",
         "smithy_ast_to_ir.py",
         "smithy_ast_to_per_ir.py",
+        "smithy_types.py",
         "validate_deployment.py",
         "//:__init__.py",
     ],
@@ -34,6 +35,12 @@ py_binary(
         "//:__init__.py",
     ],
     main = "validate_ir.py",
+)
+
+py_test(
+    name = "smithy_types_test",
+    srcs = ["smithy_types_test.py"],
+    deps = [":build_lib"],
 )
 
 py_binary(
@@ -63,6 +70,7 @@ py_binary(
     srcs = [
         "__init__.py",
         "smithy_ast_to_ir.py",
+        "smithy_types.py",
         "//:__init__.py",
     ],
     main = "smithy_ast_to_ir.py",

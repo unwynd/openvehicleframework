@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("//bazel:application.bzl", "ovf_interface")
+
+ovf_interface(
+    name = "camera",
+    srcs = ["camera.smithy"],
+    visibility = ["//visibility:public"],
+)

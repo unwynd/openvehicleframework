@@ -8,8 +8,10 @@ use ovf.model#ovfCollection
 use ovf.model#ovfInteger
 use ovf.model#ovfTag
 use ovf.per.model#persistentRecord
+use smithy.api#length
 use smithy.api#required
 
+@length(max: 24)
 @ovfCollection(storage: "BOUNDED", capacity: 24)
 string ModeText
 

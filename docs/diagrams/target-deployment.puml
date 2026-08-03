@@ -22,7 +22,7 @@ skinparam DatabaseBorderColor #546E7A
 skinparam DatabaseBackgroundColor #ECEFF1
 
 package "Authored and selected inputs" as inputs #F3F8FC {
-  artifact "Smithy service\ncontracts" as smithy
+  artifact "Smithy interfaces and\npersistent schemas" as smithy
   artifact "Application CUE\ndeployment" as app_cue
   artifact "Platform CUE\npolicy" as platform_cue
   artifact "Execution allocation\ndomains and modes" as allocation

@@ -4,6 +4,9 @@
 
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
+load("//bazel:logging.bzl", "ovf_internal_log_facade")
+load("//bazel:persistency.bzl", "OvfPerContractInfo", "ovf_internal_persistence_facade", _ovf_persistent_schema = "ovf_persistent_schema")
 
 OvfContractInfo = provider(
     doc = "Generated, validated communication contract artifacts.",
@@ -184,6 +187,81 @@ ovf_contract = rule(
     doc = "Compiles Smithy IDL into canonical IR and deterministic C++.",
 )
 
+def _interface_export_impl(ctx):
+    contract = ctx.attr.contract[OvfContractInfo]
+    library = ctx.attr.library[CcInfo]
+    return [
+        DefaultInfo(files = ctx.attr.contract[DefaultInfo].files),
+        CcInfo(
+            compilation_context = library.compilation_context,
+            linking_context = library.linking_context,
+        ),
+        OvfContractInfo(header = contract.header, ir = contract.ir, metadata = contract.metadata),
+        OutputGroupInfo(
+            header = depset([contract.header]),
+            ir = depset([contract.ir]),
+            metadata = depset([contract.metadata]),
+        ),
+    ]
+
+_interface_export = rule(
+    implementation = _interface_export_impl,
+    attrs = {
+        "contract": attr.label(mandatory = True, providers = [OvfContractInfo]),
+        "library": attr.label(mandatory = True, providers = [CcInfo]),
+    },
+)
+
+def ovf_interface(name, srcs, service = "", visibility = None):
+    """Defines one reusable Smithy communication interface.
+
+    Args:
+      name: Stable interface target and generated include prefix.
+      srcs: Smithy interface source files.
+      service: Optional fully-qualified service shape selector.
+      visibility: Visibility of the exported interface target.
+    """
+    contract = name + "_contract"
+    header = name + "_header"
+    library = name + "_cc"
+    ovf_contract(
+        name = contract,
+        idl = srcs,
+        service = service,
+        output_name = name.replace("_", "-"),
+        visibility = ["//visibility:private"],
+    )
+    native.filegroup(
+        name = header,
+        srcs = [":" + contract],
+        output_group = "header",
+        visibility = ["//visibility:private"],
+    )
+    cc_library(
+        name = library,
+        hdrs = [":" + header],
+        include_prefix = name,
+        strip_include_prefix = "generated/" + contract,
+        deps = ["//com:api"],
+        visibility = ["//visibility:private"],
+    )
+    _interface_export(
+        name = name,
+        contract = ":" + contract,
+        library = ":" + library,
+        visibility = visibility,
+    )
+
+def ovf_persistent_schema(name, srcs, visibility = None):
+    """Defines one reusable Smithy persistent schema.
+
+    Args:
+      name: Stable schema target and generated include prefix.
+      srcs: Smithy persistent-record source files.
+      visibility: Visibility of the exported schema target.
+    """
+    _ovf_persistent_schema(name = name, srcs = srcs, visibility = visibility)
+
 def _deployment_impl(ctx):
     contract = ctx.attr.contract[OvfContractInfo]
     arguments = ctx.actions.args()
@@ -311,6 +389,7 @@ ovf_deployment = rule(
 
 def _application_package_impl(ctx):
     contracts = [target[OvfContractInfo] for target in ctx.attr.contracts]
+    persistent_schemas = [target[OvfPerContractInfo] for target in ctx.attr.persistent_schemas]
     model = ctx.attr.model[OvfApplicationModelInfo]
     output = ctx.outputs.bundle
     arguments = ctx.actions.args()
@@ -322,9 +401,12 @@ def _application_package_impl(ctx):
     arguments.add("--application-deployment", ctx.file.deployment)
     for contract in contracts:
         arguments.add("--contract", contract.ir)
+    for schema in persistent_schemas:
+        arguments.add("--persistent-schema", schema.ir)
     arguments.add("--output", output)
     inputs = [ctx.executable.application, model.model, ctx.file.deployment]
     inputs.extend([contract.ir for contract in contracts])
+    inputs.extend([schema.ir for schema in persistent_schemas])
     ctx.actions.run(
         executable = ctx.executable._builder,
         arguments = [arguments],
@@ -344,6 +426,7 @@ ovf_application_package = rule(
         "contracts": attr.label_list(mandatory = True, providers = [OvfContractInfo]),
         "deployment": attr.label(mandatory = True, allow_single_file = [".cue"]),
         "model": attr.label(mandatory = True, providers = [OvfApplicationModelInfo]),
+        "persistent_schemas": attr.label_list(providers = [OvfPerContractInfo]),
         "_builder": attr.label(
             default = Label("//tools:ovf_build"),
             executable = True,
@@ -454,28 +537,33 @@ def _ovf_cc_application_impl(
         name,
         srcs,
         interfaces,
+        interface_names,
+        deployment,
         application_name = None,
         execution_install_path = None,
         hdrs = [],
         deps = [],
+        generated_artifacts = [],
+        persistent_schemas = [],
         copts = [],
         defines = [],
         data = [],
         tags = [],
         visibility = None,
         **kwargs):
-    """Expands interface targets into generated application dependencies.
-
-    Each interface dictionary requires `name` and `idl`.
-    Generated contract headers are included as `<name>/ovf_contract.hpp`.
+    """Composes reusable interfaces into one generated application dependency.
 
     Args:
       name: Application target name.
       application_name: Stable deployment name, independent of the Bazel target variant.
       srcs: C++ source files owned by the application.
-      interfaces: Interface role dictionaries composed into the process.
+      interfaces: Reusable interface targets composed into the process.
+      interface_names: Stable logical names corresponding to interfaces.
+      deployment: The application's CUE deployment document.
       hdrs: Application-owned headers.
       deps: Additional C++ dependencies.
+      generated_artifacts: Cluster artifacts generated for this application.
+      persistent_schemas: Persistent schemas packaged with the application.
       copts: Additional compiler options.
       defines: Additional preprocessor definitions.
       data: Runtime data files.
@@ -484,52 +572,15 @@ def _ovf_cc_application_impl(
       visibility: Visibility of public targets.
       **kwargs: Additional attributes forwarded to the application binary.
     """
-    interface_libraries = []
-    contract_rules = []
-    artifacts = []
-    for interface in interfaces:
-        interface_name = interface["name"]
-        prefix = name + "_" + interface_name
-        contract_rule = prefix + "_contract_codegen"
-        contract_header = prefix + "_contract_header"
-        contract_library = prefix + "_contract"
-
-        ovf_contract(
-            name = contract_rule,
-            idl = interface["idl"],
-            service = interface.get("service", ""),
-            output_name = prefix,
-            visibility = ["//visibility:private"],
-        )
-        native.filegroup(
-            name = contract_header,
-            srcs = [":" + contract_rule],
-            output_group = "header",
-            visibility = ["//visibility:private"],
-        )
-        cc_library(
-            name = contract_library,
-            hdrs = [":" + contract_header],
-            include_prefix = interface_name,
-            strip_include_prefix = "generated/" + contract_rule,
-            copts = ["-std=c++20"],
-            deps = [Label("//com:api")],
-            visibility = ["//visibility:private"],
-        )
-
-        interface_libraries.append(":" + contract_library)
-        contract_rules.append(":" + contract_rule)
-        artifacts.extend([":" + contract_rule] + interface["idl"])
-
     facade_rule = name + "_application_model"
     ovf_application_model(
         name = facade_rule,
-        deployment = interfaces[0]["deployment"],
-        contracts = contract_rules,
-        interface_names = [interface["name"] for interface in interfaces],
+        deployment = deployment,
+        contracts = interfaces,
+        interface_names = interface_names,
         visibility = ["//visibility:private"],
     )
-    artifacts.append(":" + facade_rule)
+    artifacts = interfaces + generated_artifacts + [":" + facade_rule]
     cc_library(
         name = name + "_application_api",
         hdrs = [":" + facade_rule],
@@ -540,7 +591,7 @@ def _ovf_cc_application_impl(
     cc_binary(
         name = name,
         srcs = srcs + hdrs,
-        deps = interface_libraries + [":" + name + "_application_api"] + deps,
+        deps = interfaces + [":" + name + "_application_api"] + deps,
         copts = ["-std=c++20"] + copts,
         defines = defines,
         data = data,
@@ -562,8 +613,9 @@ def _ovf_cc_application_impl(
         name = name + "_bundle",
         application_name = application_name or name,
         application = ":" + name,
-        contracts = contract_rules,
-        deployment = interfaces[0]["deployment"],
+        contracts = interfaces,
+        persistent_schemas = persistent_schemas,
+        deployment = deployment,
         model = ":" + facade_rule,
         install_path = execution_install_path or "opt/%s/bin/%s" % (
             application_name or name,
@@ -577,6 +629,8 @@ def ovf_cc_application(
         srcs,
         interfaces,
         deployment,
+        persistent_schemas = [],
+        logging = False,
         application_name = None,
         hdrs = [],
         deps = [],
@@ -589,9 +643,9 @@ def ovf_cc_application(
         **kwargs):
     """Builds a C++ application using one or more interface targets.
 
-    Contract targets encapsulate Smithy sources. The application owns one CUE
-    deployment containing all of its provider and consumer roles. Platform
-    policy resolves each role's logical transport selection.
+    Reusable Smithy interface and persistent-schema targets are composed with
+    the application's one CUE deployment. Logging and persistence facades are
+    generated internally rather than wired through companion application rules.
 
     Args:
       name: Application target name.
@@ -599,6 +653,8 @@ def ovf_cc_application(
       srcs: C++ source files owned by the application.
       interfaces: Public OVF interface targets consumed by the application.
       deployment: The application's single CUE deployment model.
+      persistent_schemas: Reusable persistent-schema targets used by the application.
+      logging: Whether to generate the logging deployment facade.
       hdrs: Application-owned headers.
       deps: Additional C++ dependencies.
       copts: Additional compiler options.
@@ -609,26 +665,47 @@ def ovf_cc_application(
       visibility: Visibility of public targets.
       **kwargs: Additional attributes forwarded to the application binary.
     """
-    specifications = []
     names = []
     for target in interfaces:
         interface_name = str(target).split(":")[-1].split("/")[-1]
         if interface_name in names:
             fail("duplicate interface target name: " + interface_name)
         names.append(interface_name)
-        specifications.append({
-            "name": interface_name,
-            "deployment": deployment,
-            "idl": [target],
-        })
+    generated_deps = [Label("//exec:application_api")]
+    generated_artifacts = []
+    if logging:
+        logging_target = name + "_logging"
+        ovf_internal_log_facade(
+            name = logging_target,
+            deployment = deployment,
+            visibility = ["//visibility:private"],
+        )
+        generated_deps.append(":" + logging_target)
+        generated_artifacts.append(":" + logging_target)
+    if persistent_schemas:
+        persistence_target = name + "_persistence"
+        namespace_name = (application_name or name).replace("-", "_")
+        ovf_internal_persistence_facade(
+            name = persistence_target,
+            cpp_namespace = "ovf::deployment::" + namespace_name,
+            deployment = deployment,
+            schemas = persistent_schemas,
+            visibility = ["//visibility:private"],
+        )
+        generated_deps.extend([":" + persistence_target] + persistent_schemas)
+        generated_artifacts.append(":" + persistence_target)
     _ovf_cc_application_impl(
         name = name,
         srcs = srcs,
-        interfaces = specifications,
+        interfaces = interfaces,
+        interface_names = names,
+        deployment = deployment,
         application_name = application_name,
         execution_install_path = execution_install_path,
         hdrs = hdrs,
-        deps = deps,
+        deps = generated_deps + deps,
+        generated_artifacts = generated_artifacts + persistent_schemas,
+        persistent_schemas = persistent_schemas,
         copts = copts,
         defines = defines,
         data = data,
@@ -642,7 +719,7 @@ def ovf_cc_application(
         application = ":" + name,
         application_name = application_name or name,
         model = ":" + name + "_application_model",
-        contracts = [":" + name + "_" + interface["name"] + "_contract_codegen" for interface in specifications],
+        contracts = interfaces,
         interface_names = names,
         executable_target = ":" + name,
         install_path = execution_install_path or "opt/%s/bin/%s" % (

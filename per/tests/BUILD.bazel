@@ -3,16 +3,15 @@
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load("@rules_python//python:defs.bzl", "py_test")
-load("//bazel:persistency.bzl", "ovf_per_application", "ovf_per_contract")
+load("//bazel:persistency.bzl", "ovf_internal_persistence_facade", "ovf_persistent_schema")
 
 package(default_visibility = ["//visibility:public"])
 
 exports_files(["deployment.cue"])
 
-ovf_per_contract(
+ovf_persistent_schema(
     name = "typed_state",
-    idl = ["state.smithy"],
-    output_name = "typed-state",
+    srcs = ["state.smithy"],
 )
 
 cc_test(
@@ -25,7 +24,7 @@ cc_test(
     ],
 )
 
-ovf_per_application(
+ovf_internal_persistence_facade(
     name = "e2e_deployment",
     cpp_namespace = "ovf::deployment::per_e2e",
     deployment = "deployment.cue",

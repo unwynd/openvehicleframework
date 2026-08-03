@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("//bazel:application.bzl", "ovf_interface")
+
+exports_files(
+    ["radar.smithy"],
+    visibility = ["//visibility:public"],
+)
+
+ovf_interface(
+    name = "radar",
+    srcs = ["radar.smithy"],
+    visibility = ["//visibility:public"],
+)

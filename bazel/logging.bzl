@@ -50,7 +50,7 @@ _ovf_log_model = rule(
     },
 )
 
-def ovf_log_application(name, deployment, binding = "//log/deployment/bindings:dlt.cue", visibility = None):
+def ovf_internal_log_facade(name, deployment, binding = "//log/deployment/bindings:dlt.cue", visibility = None):
     """Generates an application's logging runtime from deployment intent.
 
     Args:

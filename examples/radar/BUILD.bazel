@@ -1,53 +1,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 load("//bazel:application.bzl", "ovf_cc_application")
-load("//bazel:logging.bzl", "ovf_log_application")
 
 package(default_visibility = ["//visibility:public"])
-
-ovf_log_application(
-    name = "client_logging",
-    deployment = "client/deployment.cue",
-)
-
-ovf_log_application(
-    name = "ipc_client_logging",
-    deployment = "client/ipc-deployment.cue",
-)
-
-ovf_log_application(
-    name = "service_logging",
-    deployment = "service/deployment.cue",
-)
-
-ovf_log_application(
-    name = "ipc_service_logging",
-    deployment = "service/ipc-deployment.cue",
-)
 
 ovf_cc_application(
     name = "radar_inproc_client",
     srcs = ["client/main.cpp"],
     deployment = "client/ipc-deployment.cue",
-    interfaces = ["//contracts/radar"],
+    interfaces = ["//examples/radar/interface:radar"],
+    logging = True,
     tags = ["manual"],
-    deps = [
-        ":ipc_client_logging",
-        "//exec:application_api",
-    ],
 )
 
 ovf_cc_application(
     name = "radar_service",
     srcs = ["service/main.cpp"],
     deployment = "service/deployment.cue",
-    interfaces = ["//contracts/radar"],
+    interfaces = ["//examples/radar/interface:radar"],
+    logging = True,
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:linux"],
-    deps = [
-        ":service_logging",
-        "//exec:application_api",
-    ],
 )
 
 ovf_cc_application(
@@ -55,35 +28,26 @@ ovf_cc_application(
     srcs = ["service/main.cpp"],
     application_name = "radar",
     deployment = "service/ipc-deployment.cue",
-    interfaces = ["//contracts/radar"],
+    interfaces = ["//examples/radar/interface:radar"],
+    logging = True,
     tags = ["manual"],
-    deps = [
-        ":ipc_service_logging",
-        "//exec:application_api",
-    ],
 )
 
 ovf_cc_application(
     name = "radar_iceoryx2_client",
     srcs = ["client/main.cpp"],
     deployment = "client/ipc-deployment.cue",
-    interfaces = ["//contracts/radar"],
+    interfaces = ["//examples/radar/interface:radar"],
+    logging = True,
     tags = ["manual"],
-    deps = [
-        ":ipc_client_logging",
-        "//exec:application_api",
-    ],
 )
 
 ovf_cc_application(
     name = "radar_client",
     srcs = ["client/main.cpp"],
     deployment = "client/deployment.cue",
-    interfaces = ["//contracts/radar"],
+    interfaces = ["//examples/radar/interface:radar"],
+    logging = True,
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:linux"],
-    deps = [
-        ":client_logging",
-        "//exec:application_api",
-    ],
 )

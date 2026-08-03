@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("//bazel:application.bzl", "ovf_persistent_schema")
+
+ovf_persistent_schema(
+    name = "policy_state",
+    srcs = ["policy-state.smithy"],
+    visibility = ["//visibility:public"],
+)

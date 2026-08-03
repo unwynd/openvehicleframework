@@ -4,8 +4,8 @@
 #include "ovf/exec/application.hpp"
 #include "ovf_application.hpp"
 #include "ovf_logging.hpp"
-#include "ovf_per_contract.hpp"
 #include "ovf_persistence.hpp"
+#include "policy_state/ovf_record.hpp"
 
 #include <chrono>
 #include <condition_variable>

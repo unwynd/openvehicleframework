@@ -70,7 +70,7 @@ structure ovfTag {
     value: Long
 }
 
-@trait(selector: ":is(byte, short, integer, long, bigInteger)")
+@trait(selector: ":is(byte, short, integer, long)")
 structure ovfInteger {
     @required
     signed: Boolean

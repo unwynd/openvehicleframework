@@ -1,26 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 load("//bazel:application.bzl", "ovf_cc_application")
-load("//bazel:logging.bzl", "ovf_log_application")
-
-ovf_log_application(
-    name = "logging",
-    deployment = "deployment.cue",
-)
 
 ovf_cc_application(
     name = "sensor_fusion",
     srcs = ["main.cpp"],
     deployment = "deployment.cue",
     interfaces = [
-        "//contracts/camera",
-        "//contracts/environment_model",
-        "//contracts/radar",
+        "//examples/camera/interface:camera",
+        "//examples/radar/interface:radar",
+        "//examples/sensor_fusion/interface:environment_model",
     ],
+    logging = True,
     tags = ["manual"],
     visibility = ["//visibility:public"],
-    deps = [
-        ":logging",
-        "//exec:application_api",
-    ],
 )

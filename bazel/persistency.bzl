@@ -12,7 +12,7 @@ OvfPerContractInfo = provider(
 
 def _per_contract_impl(ctx):
     ir = ctx.actions.declare_file(ctx.attr.output_name + ".ovf-per-ir.json")
-    header = ctx.actions.declare_file("generated/%s/ovf_per_contract.hpp" % ctx.label.name)
+    header = ctx.actions.declare_file("generated/%s/ovf_record.hpp" % ctx.label.name)
     arguments = ctx.actions.args()
     arguments.add("per-contract")
     arguments.add("--smithy", ctx.file._smithy)
@@ -80,17 +80,16 @@ _per_contract_export = rule(
     },
 )
 
-def ovf_per_contract(name, idl, output_name, visibility = None):
-    """Compiles typed persistent records and exposes generated C++ codecs.
+def ovf_persistent_schema(name, srcs, visibility = None):
+    """Compiles a reusable persistent schema and exposes generated C++ codecs.
 
     Args:
       name: Public generated C++ library target.
-      idl: Smithy persistent-record sources.
-      output_name: Stable generated artifact base name.
+      srcs: Smithy persistent-record sources.
       visibility: Visibility of the generated library.
     """
     model = name + "_model"
-    _ovf_per_contract(name = model, idl = idl, output_name = output_name)
+    _ovf_per_contract(name = model, idl = srcs, output_name = name.replace("_", "-"))
     native.filegroup(
         name = name + "_header",
         srcs = [":" + model],
@@ -100,7 +99,7 @@ def ovf_per_contract(name, idl, output_name, visibility = None):
     cc_library(
         name = library,
         hdrs = [":" + name + "_header"],
-        include_prefix = "",
+        include_prefix = name,
         strip_include_prefix = "generated/" + model,
         deps = ["//per:api"],
     )
@@ -164,7 +163,7 @@ _ovf_per_model = rule(
     },
 )
 
-def ovf_per_application(name, deployment, cpp_namespace, schemas = [], binding = "//per/deployment/bindings:sqlite.cue", visibility = None):
+def ovf_internal_persistence_facade(name, deployment, cpp_namespace, schemas = [], binding = "//per/deployment/bindings:sqlite.cue", visibility = None):
     """Generates a persistence facade from application intent and platform binding.
 
     Args:

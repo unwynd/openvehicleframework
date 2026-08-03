@@ -207,8 +207,16 @@ def main() -> int:
         ROOT / "usr/lib/ovf/providers/libovf_per_provider_sqlite.so"
     )
     persistence_root = ROOT / "var/lib/ovf/per"
-    if not persistence_provider.is_file() or not persistence_root.is_dir():
-        raise RuntimeError("persistence platform artifacts are absent from target filesystem")
+    policy_schema = (
+        ROOT
+        / "share/ovf/driving_policy/persistent-schema-0.ovf-per-ir.json"
+    )
+    if (
+        not persistence_provider.is_file()
+        or not persistence_root.is_dir()
+        or not policy_schema.is_file()
+    ):
+        raise RuntimeError("persistence artifacts are absent from target filesystem")
     persistence = subprocess.run(
         [
             runfile(os.environ["OVF_TEST_PER_CLIENT"]),

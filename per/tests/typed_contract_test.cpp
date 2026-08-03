@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ovf_per_contract.hpp"
+#include "typed_state/ovf_record.hpp"
 
 #include <gtest/gtest.h>
 

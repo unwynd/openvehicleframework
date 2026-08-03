@@ -20,10 +20,10 @@ use smithy.api#required
 string DiagnosticText
 
 @ovfInteger(signed: false, bits: 64)
-bigInteger TimestampNs
+long TimestampNs
 
 @ovfInteger(signed: false, bits: 16)
-integer ObjectId
+short ObjectId
 
 @ovfInteger(signed: false, bits: 8)
 byte ConfidencePercent

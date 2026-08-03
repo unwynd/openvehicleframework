@@ -50,7 +50,8 @@ def valid_install_path(value: str) -> bool:
 
 
 def compile_contract(args: argparse.Namespace) -> int:
-    with tempfile.TemporaryDirectory(prefix="ovf-contract-") as temporary:
+    args.ir.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".ovf-contract-", dir=args.ir.parent) as temporary:
         root = Path(temporary)
         config = {
             "version": "1.0",
@@ -117,8 +118,9 @@ def compile_per_contract(args: argparse.Namespace) -> int:
 
 
 def compile_deployment(args: argparse.Namespace) -> int:
+    args.deployment_ir.parent.mkdir(parents=True, exist_ok=True)
     contract = read(args.contract)
-    with tempfile.TemporaryDirectory(prefix="ovf-cue-") as cue_cache:
+    with tempfile.TemporaryDirectory(prefix=".ovf-cue-", dir=args.deployment_ir.parent) as cue_cache:
         environment = dict(os.environ)
         environment["CUE_CACHE_DIR"] = cue_cache
         environment["CUE_CONFIG_DIR"] = cue_cache
@@ -147,7 +149,7 @@ def compile_deployment(args: argparse.Namespace) -> int:
         args.deployment_ir,
         json.dumps(deployment, sort_keys=True, indent=2) + "\n",
     )
-    with tempfile.TemporaryDirectory(prefix="ovf-profiles-") as temporary:
+    with tempfile.TemporaryDirectory(prefix=".ovf-profiles-", dir=args.deployment_ir.parent) as temporary:
         profiles = Path(temporary)
         for profile in args.profile:
             shutil.copyfile(profile, profiles / profile.name)
@@ -166,7 +168,8 @@ def compile_deployment(args: argparse.Namespace) -> int:
 
 
 def compile_application_model(args: argparse.Namespace) -> int:
-    with tempfile.TemporaryDirectory(prefix="ovf-application-cue-") as cue_cache:
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".ovf-application-cue-", dir=args.output.parent) as cue_cache:
         environment = dict(os.environ)
         environment["CUE_CACHE_DIR"] = cue_cache
         environment["CUE_CONFIG_DIR"] = cue_cache
@@ -478,7 +481,7 @@ def compile_communication_deployment(args: argparse.Namespace) -> int:
     args.output.mkdir(parents=True, exist_ok=True)
     binding_values = []
     for binding_path in args.binding:
-        with tempfile.TemporaryDirectory(prefix="ovf-com-binding-cue-") as cue_cache:
+        with tempfile.TemporaryDirectory(prefix=".ovf-com-binding-cue-", dir=args.output.parent) as cue_cache:
             environment = dict(os.environ, CUE_CACHE_DIR=cue_cache, CUE_CONFIG_DIR=cue_cache)
             completed = subprocess.run([str(args.cue.resolve()), "export", str(binding_path.resolve()),
                 "--expression", "bindings", "--out", "json"], capture_output=True, text=True,
@@ -488,7 +491,7 @@ def compile_communication_deployment(args: argparse.Namespace) -> int:
     transports = [item["transport"] for item in binding_values]
     if len(transports) != len(set(transports)):
         raise ValueError("system communication deployment selects a transport more than once")
-    with tempfile.TemporaryDirectory(prefix="ovf-com-profiles-") as temporary:
+    with tempfile.TemporaryDirectory(prefix=".ovf-com-profiles-", dir=args.output.parent) as temporary:
         profiles = Path(temporary)
         for profile in args.profile: shutil.copyfile(profile, profiles / profile.name)
         for name, model_path, deployment_path in zip(args.application_name, args.application_model,
@@ -499,7 +502,7 @@ def compile_communication_deployment(args: argparse.Namespace) -> int:
                 owner, separator, contract_path = specification.partition("=")
                 if not separator or owner != name: continue
                 contract = read(Path(contract_path))
-                with tempfile.TemporaryDirectory(prefix="ovf-com-cue-") as cue_cache:
+                with tempfile.TemporaryDirectory(prefix=".ovf-com-cue-", dir=args.output.parent) as cue_cache:
                     environment = dict(os.environ, CUE_CACHE_DIR=cue_cache, CUE_CONFIG_DIR=cue_cache)
                     completed = subprocess.run([str(args.cue.resolve()), "export",
                         str(deployment_path.resolve()), "--expression", "application", "--out", "json"],
@@ -526,7 +529,8 @@ def compile_communication_deployment(args: argparse.Namespace) -> int:
 
 
 def compile_execution_deployment(args: argparse.Namespace) -> int:
-    with tempfile.TemporaryDirectory(prefix="ovf-exec-smithy-") as temporary:
+    args.execution_ir.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".ovf-exec-smithy-", dir=args.execution_ir.parent) as temporary:
         root = Path(temporary)
         config = {
             "version": "1.0",
@@ -551,7 +555,7 @@ def compile_execution_deployment(args: argparse.Namespace) -> int:
             check=True,
         )
         schema_ast = read(output / "ovf/model/model.json")
-    with tempfile.TemporaryDirectory(prefix="ovf-exec-cue-") as cue_cache:
+    with tempfile.TemporaryDirectory(prefix=".ovf-exec-cue-", dir=args.execution_ir.parent) as cue_cache:
         environment = dict(os.environ)
         environment["CUE_CACHE_DIR"] = cue_cache
         environment["CUE_CONFIG_DIR"] = cue_cache
@@ -865,6 +869,7 @@ def package_application(args: argparse.Namespace) -> int:
         raise ValueError("application install path must be a normalized relative path")
     model = read(args.application_model)
     contracts = [(path, read(path)) for path in args.contract]
+    persistent_schemas = [(path, read(path)) for path in args.persistent_schema]
     manifest = {
         "applicationBundleVersion": 2,
         "name": args.name,
@@ -877,6 +882,11 @@ def package_application(args: argparse.Namespace) -> int:
             },
         },
         "interfaces": model["interfaces"],
+        "persistentSchemas": [
+            {"id": record["id"], "version": record["version"], "key": record["key"]}
+            for _, schema in persistent_schemas
+            for record in schema["records"]
+        ],
     }
     manifest["files"]["applicationModel"] = {
         "path": f"share/ovf/{args.name}/application.json",
@@ -897,6 +907,13 @@ def package_application(args: argparse.Namespace) -> int:
         for index, (path, _) in enumerate(contracts):
             add_file(archive, path,
                      f"share/ovf/{args.name}/contract-{index}.ovf-ir.json", 0o644)
+        for index, (path, _) in enumerate(persistent_schemas):
+            add_file(
+                archive,
+                path,
+                f"share/ovf/{args.name}/persistent-schema-{index}.ovf-per-ir.json",
+                0o644,
+            )
         info = tar_bytes(manifest_content, 0o644)
         info.name = f"share/ovf/{args.name}/manifest.json"
         archive.addfile(info, io.BytesIO(manifest_content))
@@ -1168,6 +1185,7 @@ def parser() -> argparse.ArgumentParser:
     package.add_argument("--executable", required=True, type=Path)
     package.add_argument("--install-path", required=True)
     package.add_argument("--contract", required=True, action="append", type=Path)
+    package.add_argument("--persistent-schema", action="append", type=Path, default=[])
     package.add_argument("--application-model", required=True, type=Path)
     package.add_argument("--application-deployment", required=True, type=Path)
     package.add_argument("--output", required=True, type=Path)

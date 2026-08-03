@@ -9,28 +9,13 @@ import argparse
 import json
 from pathlib import Path
 
+from tools.smithy_types import BUILTINS, COLLECTION_TRAIT, INTEGER_TRAIT, REQUIRED_TRAIT, TAG_TRAIT, compile_types, local, target, type_ref
 from tools.validate_ir import normalized, validate
 
 SERVICE_TRAIT = "ovf.model#ovfService"
 METHOD_TRAIT = "ovf.model#ovfMethod"
 EVENT_TRAIT = "ovf.model#ovfEvent"
 FIELD_TRAIT = "ovf.model#ovfField"
-TAG_TRAIT = "ovf.model#ovfTag"
-INTEGER_TRAIT = "ovf.model#ovfInteger"
-COLLECTION_TRAIT = "ovf.model#ovfCollection"
-REQUIRED_TRAIT = "smithy.api#required"
-BUILTINS = {
-    "smithy.api#Boolean": "bool", "smithy.api#Float": "f32",
-    "smithy.api#Double": "f64", "smithy.api#Blob": "bytes",
-    "smithy.api#String": "string"
-}
-
-
-def local(shape_id: str) -> str: return shape_id.split("#", 1)[1]
-def target(value: dict) -> str: return value["target"]
-def type_ref(shape_id: str) -> str: return BUILTINS.get(shape_id, local(shape_id))
-
-
 def compile_model(ast: dict, service_id: str | None) -> dict:
     shapes: dict[str, dict] = ast["shapes"]
     services = [item for item, shape in shapes.items() if SERVICE_TRAIT in shape.get("traits", {})]
@@ -44,45 +29,7 @@ def compile_model(ast: dict, service_id: str | None) -> dict:
     namespace = service_id.split("#", 1)[0]
     referenced_wrappers = set(service_trait.get("events", []) + service_trait.get("fields", []))
 
-    types: list[dict] = []
-    for shape_id, shape in sorted(shapes.items()):
-        if not shape_id.startswith(namespace + "#") or shape_id in referenced_wrappers:
-            continue
-        name, kind, traits = local(shape_id), shape["type"], shape.get("traits", {})
-        if kind in ("service", "operation", "resource", "union", "enum", "intEnum"):
-            continue
-        if kind in ("byte", "short", "integer", "long", "bigInteger"):
-            integer = traits.get(INTEGER_TRAIT)
-            if integer is None: raise ValueError(f"{shape_id}: exact integer trait required")
-            types.append({"kind": "integer", "name": name,
-                "signed": integer["signed"], "bits": integer["bits"]})
-        elif kind == "string":
-            collection = traits.get(COLLECTION_TRAIT)
-            if collection is None: raise ValueError(f"{shape_id}: collection bound required")
-            item = {"kind": "string", "name": name,
-                "storage": collection["storage"].lower()}
-            if "capacity" in collection: item["capacity"] = collection["capacity"]
-            types.append(item)
-        elif kind == "list":
-            collection = traits.get(COLLECTION_TRAIT)
-            if collection is None: raise ValueError(f"{shape_id}: collection bound required")
-            item = {"kind": "sequence", "name": name,
-                "element": type_ref(target(shape["member"])),
-                "storage": collection["storage"].lower()}
-            if "capacity" in collection: item["capacity"] = collection["capacity"]
-            types.append(item)
-        elif kind == "structure":
-            members = []
-            for member_name, member in shape.get("members", {}).items():
-                tag = member.get("traits", {}).get(TAG_TRAIT)
-                if tag is None: raise ValueError(f"{shape_id}${member_name}: tag required")
-                members.append({"name": member_name, "tag": tag["value"],
-                    "type": type_ref(target(member)),
-                    "required": REQUIRED_TRAIT in member.get("traits", {})})
-            types.append({"kind": "struct", "name": name,
-                "members": sorted(members, key=lambda item: item["tag"])})
-        else:
-            raise ValueError(f"{shape_id}: unsupported Smithy shape type {kind}")
+    types = compile_types(shapes, namespace, excluded=referenced_wrappers)
 
     events = []
     for event_id in service_trait.get("events", []):

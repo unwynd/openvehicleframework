@@ -14,7 +14,7 @@ generated build artifacts and are not committed.
 
 Provider mappings are generated from interface IR, application instance intent,
 and binding policy. Applications do not author native identifiers, names,
-buffer layouts, or resource mappings. Interface packages under `contracts/`
+buffer layouts, or resource mappings. Provider-owned example interface packages
 contain no deployment or transport data.
 
 Provider selection belongs to system integration, which composes the reusable

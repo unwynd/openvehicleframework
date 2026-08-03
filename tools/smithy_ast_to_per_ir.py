@@ -7,16 +7,7 @@ from __future__ import annotations
 
 import re
 
-from tools.smithy_ast_to_ir import (
-    BUILTINS,
-    COLLECTION_TRAIT,
-    INTEGER_TRAIT,
-    REQUIRED_TRAIT,
-    TAG_TRAIT,
-    local,
-    target,
-    type_ref,
-)
+from tools.smithy_types import compile_types, local
 
 RECORD_TRAIT = "ovf.per.model#persistentRecord"
 
@@ -34,42 +25,7 @@ def compile_per_model(ast: dict) -> dict:
     if len(namespaces) != 1:
         raise ValueError("one persistent contract may contain only one namespace")
     namespace = next(iter(namespaces))
-    types = []
-    for shape_id, shape in sorted(shapes.items()):
-        if not shape_id.startswith(namespace + "#"):
-            continue
-        name, kind, traits = local(shape_id), shape["type"], shape.get("traits", {})
-        if kind in ("byte", "short", "integer", "long", "bigInteger"):
-            integer = traits.get(INTEGER_TRAIT)
-            if integer is None:
-                raise ValueError(f"{shape_id}: exact integer trait required")
-            types.append({"kind": "integer", "name": name, **integer})
-        elif kind == "string":
-            collection = traits.get(COLLECTION_TRAIT)
-            if collection is None or collection.get("storage") != "BOUNDED":
-                raise ValueError(f"{shape_id}: bounded collection trait required")
-            types.append({"kind": "string", "name": name, "capacity": collection["capacity"]})
-        elif kind == "structure":
-            members = []
-            tags = set()
-            for member_name, member in shape.get("members", {}).items():
-                tag = member.get("traits", {}).get(TAG_TRAIT)
-                if tag is None:
-                    raise ValueError(f"{shape_id}${member_name}: stable tag required")
-                value = tag["value"]
-                if value in tags:
-                    raise ValueError(f"{shape_id}: duplicate field tag {value}")
-                tags.add(value)
-                members.append({
-                    "name": member_name,
-                    "tag": value,
-                    "type": type_ref(target(member)),
-                    "required": REQUIRED_TRAIT in member.get("traits", {}),
-                })
-            types.append({"kind": "struct", "name": name,
-                          "members": sorted(members, key=lambda item: item["tag"])})
-        else:
-            raise ValueError(f"{shape_id}: unsupported persistent shape type {kind}")
+    types = compile_types(shapes, namespace, persistent=True)
     record_models = []
     keys = set()
     identifiers = set()

@@ -13,10 +13,10 @@ use smithy.api#length
 use smithy.api#required
 
 @ovfInteger(signed: false, bits: 64)
-bigInteger TimestampNs
+long TimestampNs
 
 @ovfInteger(signed: false, bits: 16)
-integer TrackId
+short TrackId
 
 @ovfInteger(signed: false, bits: 8)
 byte ConfidencePercent

@@ -281,7 +281,7 @@ genrule(
     srcs = [
         "//com/model:ovf-profile.smithy",
         "//com/model:smithy-build.json",
-        "//contracts/radar",
+        "//examples/radar/interface:radar.smithy",
     ],
     outs = ["smithy/ovf/model/model.json"],
     cmd = "$(location //bazel/host_tools:smithy) build " +

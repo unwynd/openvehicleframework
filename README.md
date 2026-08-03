@@ -81,16 +81,21 @@ platform policy, generates dinit service descriptions, and packages a complete
 target filesystem. `ovf-execd` exposes system-wide execution domains and modes
 without embedding communication-specific behavior.
 
-Logging intent is defined alongside each application's deployment. The
-`ovf_log_application` Bazel rule validates that intent and generates the
-runtime factory and backend identifier mapping. Application source uses only
-`ovf::log`; backend identifiers and initialization remain outside application
-source.
+Logging intent is defined alongside each application's deployment. The unified
+`ovf_cc_application` rule validates that intent and generates the runtime
+factory and backend identifier mapping when `logging = True`. Application
+source uses only `ovf::log`; backend identifiers and initialization remain
+outside application source.
 
 Persistence intent is defined in application CUE deployment, while physical
 storage roots, journal policy, and provider choice remain platform-owned. The
-`ovf_per_application` Bazel rule validates the composed model and generates
-named store factories, bounded initial data, and explicit reset operations.
+`ovf_cc_application` validates the composed persistence model and generates
+named store factories, bounded initial data, and explicit reset operations from
+the reusable targets listed in `persistent_schemas`. Communication interfaces
+and persistent schemas share one bounded Smithy type profile and stable-tag
+validation. Their generated envelopes and codecs remain cluster-specific so
+network and durable-storage compatibility can evolve independently.
+
 Smithy record schemas generate stable identifiers and deterministic,
 endian-independent codecs. Applications use only `ovf::per` typed records,
 transactions, ordered snapshot cursors, and blob streams. The SQLite provider
@@ -171,14 +176,24 @@ The public `ovf_cc_application` Bazel macro accepts application sources,
 headers, Smithy service IDL, and typed CUE deployment intent:
 
 ```starlark
-load("@openvehicleframework//bazel:application.bzl", "ovf_cc_application")
+load(
+    "@openvehicleframework//bazel:application.bzl",
+    "ovf_cc_application",
+    "ovf_interface",
+)
+
+ovf_interface(
+    name = "radar",
+    srcs = ["radar.smithy"],
+)
 
 ovf_cc_application(
     name = "radar_app",
     srcs = ["main.cpp"],
     hdrs = ["radar_logic.hpp"],
-    interfaces = ["//contracts/radar"],
+    interfaces = [":radar"],
     deployment = "radar.deployment.cue",
+    logging = True,
 )
 ```
 
@@ -204,9 +219,8 @@ over SOME/IP to `driving_policy`.
 bazel/          public build rules, toolchains, and build tests
 codegen/        Rust generator and versioned MiniJinja templates
 com/            runtime, public API, deployments, transports, and tests
-contracts/      authored service contracts
 docs/           public architecture and application documentation
-examples/       example applications
+examples/       example applications with provider-owned interfaces and schemas
 exec/           execution model, coordinator, dinit backend, and tests
 log/            structured logging API, runtime, bindings, deployments, tests
 crypto/         cryptographic API, provider ABI, Botan binding, and tests
