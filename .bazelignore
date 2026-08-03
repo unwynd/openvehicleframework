@@ -1,0 +1,4 @@
+integration/separate_app/bazel-bin
+integration/separate_app/bazel-out
+integration/separate_app/bazel-separate_app
+integration/separate_app/bazel-testlogs
