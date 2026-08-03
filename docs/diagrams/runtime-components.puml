@@ -23,8 +23,17 @@ skinparam NoteBackgroundColor #FFFDE7
 
 package "Application process" as application #F3F8FC {
   component "Application logic" as app
-  component "Generated contract API\nand deployment facades" as generated <<generated>>
-  app --> generated : typed service calls
+  component "Generated interface APIs\nand cluster facades" as generated <<generated>>
+  app --> generated : typed calls and records
+}
+
+package "Reusable authored models" as models #E8F5E9 {
+  artifact "Smithy communication\ninterfaces" as interfaces
+  artifact "Smithy persistent\nschemas" as schemas
+  component "Shared bounded type profile\nand stable-tag validation" as type_profile
+  interfaces --> type_profile
+  schemas --> type_profile
+  type_profile --> generated : template generation
 }
 
 package "Public framework API" as public_api #F3F8FC {
@@ -65,10 +74,10 @@ package "Backend implementations" as backends #F5F5F5 {
 }
 
 generated --> icom
-app --> iexec
-app --> ilog
-app --> icrypto
+generated --> ilog
 generated --> iper
+app --> iexec
+app --> icrypto
 
 icom -- com_runtime
 iexec -- exec_runtime

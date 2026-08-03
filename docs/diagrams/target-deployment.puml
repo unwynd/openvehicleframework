@@ -22,13 +22,15 @@ skinparam DatabaseBorderColor #546E7A
 skinparam DatabaseBackgroundColor #ECEFF1
 
 package "Authored and selected inputs" as inputs #F3F8FC {
-  artifact "Smithy interfaces and\npersistent schemas" as smithy
+  artifact "Exported Smithy\ninterface targets" as interfaces
+  artifact "Exported Smithy persistent-\nschema targets" as schemas
   artifact "Application CUE\ndeployment" as app_cue
   artifact "Platform CUE\npolicy" as platform_cue
   artifact "Execution allocation\ndomains and modes" as allocation
 }
 
-component "Validated Bazel generation\nand system resolution" as generator <<build time>>
+component "ovf_cc_application\nvalidated composition" as application_build <<build time>>
+component "System deployment\nresolution" as system_build <<build time>>
 
 package "Separately shippable artifacts" as artifacts #FFF8E1 {
   artifact "Application bundles\n/opt/<application>" as app_bundles
@@ -39,14 +41,16 @@ package "Separately shippable artifacts" as artifacts #FFF8E1 {
 
 artifact "Deterministic target\nfilesystem" as rootfs <<assembled>>
 
-smithy --> generator
-app_cue --> generator
-platform_cue --> generator
-allocation --> generator
-generator --> app_bundles
-generator --> com_deployments
-generator --> exec_deployment
-generator --> middleware
+interfaces --> application_build
+schemas --> application_build
+app_cue --> application_build
+application_build --> app_bundles
+application_build --> system_build : application model and artifacts
+platform_cue --> system_build
+allocation --> system_build
+system_build --> com_deployments
+system_build --> exec_deployment
+system_build --> middleware
 app_bundles --> rootfs
 com_deployments --> rootfs
 exec_deployment --> rootfs

@@ -6,7 +6,7 @@ communication, application execution, deployment generation, and structured
 logging. It is not a finished vehicle software platform.
 
 > [!WARNING]
-> Version 0.0.3 is experimental. It is not production-ready, safety-qualified,
+> Version 0.0.4 is experimental. It is not production-ready, safety-qualified,
 > or intended for use in a vehicle. APIs, generated artifacts, deployment
 > formats, and binary interfaces may change without compatibility guarantees.
 
@@ -17,7 +17,8 @@ The repository currently contains:
 - an explicit communication runtime with static and dynamic transport
   registration;
 - a versioned C transport boundary usable by C++ and Rust implementations;
-- Smithy-based service definitions and template-driven Rust C++ generation;
+- reusable Smithy interface and persistent-schema targets with one bounded type
+  profile and template-driven Rust C++ generation;
 - deployment schema validation and deterministic application packaging;
 - validated execution domains, modes, unit dependencies, and lifecycle policy;
 - dinit-backed process supervision through the `ovf-execd` coordinator;
@@ -71,8 +72,9 @@ Botan binding is an experimental software provider; this release does not
 claim hardware-backed keys, durable key storage, or a complete credential
 provisioning lifecycle.
 
-Service contracts are separate from deployment configuration. Applications use
-generated types, generated deployment facades, and `ovf::com` APIs. Deployment
+Interfaces and persistent schemas are separate from deployment configuration.
+Applications consume exported Bazel targets rather than source-file paths and
+use generated types, deployment facades, and public framework APIs. Deployment
 selects runtime-loaded provider plugins and generates their configuration.
 
 Application targets also export their executable identity and relative install
@@ -109,9 +111,10 @@ qualification.
 
 ### Build and deployment flow
 
-Contracts, application intent, provider policy, and machine allocation remain
-separate inputs. System integration resolves them into independently shippable
-application and middleware artifacts before assembling a target filesystem.
+Interfaces, persistent schemas, application intent, provider policy, and
+machine allocation remain separate inputs. System integration resolves them
+into independently shippable application and middleware artifacts before
+assembling a target filesystem.
 
 [![Generated target and runtime deployment](docs/diagrams/target-deployment.svg)](docs/diagrams/target-deployment.puml)
 
@@ -172,19 +175,25 @@ transitions, reverse shutdown, and journal persistence.
 
 ## Building an application
 
-The public `ovf_cc_application` Bazel macro accepts application sources,
-headers, Smithy service IDL, and typed CUE deployment intent:
+The public build API defines reusable Smithy targets and composes them with
+application sources, headers, and one typed CUE deployment intent:
 
 ```starlark
 load(
     "@openvehicleframework//bazel:application.bzl",
     "ovf_cc_application",
     "ovf_interface",
+    "ovf_persistent_schema",
 )
 
 ovf_interface(
     name = "radar",
     srcs = ["radar.smithy"],
+)
+
+ovf_persistent_schema(
+    name = "radar_state",
+    srcs = ["radar-state.smithy"],
 )
 
 ovf_cc_application(
@@ -194,12 +203,15 @@ ovf_cc_application(
     interfaces = [":radar"],
     deployment = "radar.deployment.cue",
     logging = True,
+    persistent_schemas = [":radar_state"],
 )
 ```
 
-It compiles the contract and application intent into portable generated code,
-an application model, and a target bundle. Provider selection belongs to system
-integration, where independent bindings such as
+It compiles each reusable model once, generates the selected application
+facades, and produces portable code, an application model, and a target bundle.
+The application macro wires communication, execution, logging, and persistence
+support without exposing generator internals. Provider selection belongs to
+system integration, where independent bindings such as
 `//com/deployment/bindings:iceoryx2.cue` and
 `//com/deployment/bindings:vsomeip.cue` are composed into per-application
 runtime deployments. Target platform selection remains a separate Linux, QNX,
