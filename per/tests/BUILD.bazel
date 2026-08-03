@@ -3,11 +3,27 @@
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load("@rules_python//python:defs.bzl", "py_test")
-load("//bazel:persistency.bzl", "ovf_per_application")
+load("//bazel:persistency.bzl", "ovf_per_application", "ovf_per_contract")
 
 package(default_visibility = ["//visibility:public"])
 
 exports_files(["deployment.cue"])
+
+ovf_per_contract(
+    name = "typed_state",
+    idl = ["state.smithy"],
+    output_name = "typed-state",
+)
+
+cc_test(
+    name = "typed_contract_test",
+    srcs = ["typed_contract_test.cpp"],
+    deps = [
+        ":typed_state",
+        "//per:memory_provider",
+        "@googletest//:gtest_main",
+    ],
+)
 
 ovf_per_application(
     name = "e2e_deployment",
@@ -67,5 +83,6 @@ test_suite(
         ":memory_provider_test",
         ":process_e2e_test",
         ":sqlite_provider_test",
+        ":typed_contract_test",
     ],
 )

@@ -12,6 +12,7 @@ const CPP_APPLICATION_TEMPLATE: &str = include_str!("../templates/cpp_applicatio
 const CPP_DEPLOYMENT_TEMPLATE: &str = include_str!("../templates/cpp_deployment.hpp.j2");
 const CPP_LOG_TEMPLATE: &str = include_str!("../templates/cpp_log.hpp.j2");
 const CPP_PER_TEMPLATE: &str = include_str!("../templates/cpp_per.hpp.j2");
+const CPP_PER_CONTRACT_TEMPLATE: &str = include_str!("../templates/cpp_per_contract.hpp.j2");
 const DINIT_BOOT_TEMPLATE: &str = include_str!("../templates/dinit_boot.j2");
 const DINIT_DAEMON_TEMPLATE: &str = include_str!("../templates/dinit_daemon.j2");
 const DINIT_SERVICE_TEMPLATE: &str = include_str!("../templates/dinit_service.j2");
@@ -37,6 +38,21 @@ fn uuid_bytes(value: &str) -> String {
         .as_bytes()
         .chunks(2)
         .map(|pair| format!("0x{}", std::str::from_utf8(pair).expect("UUID is ASCII")))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn uuid_byte_initializers(value: &str) -> String {
+    value
+        .replace('-', "")
+        .as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            format!(
+                "std::byte{{0x{}}}",
+                std::str::from_utf8(pair).expect("UUID is ASCII")
+            )
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -144,6 +160,24 @@ fn prepare(mut model: JsonValue) -> Result<JsonValue, String> {
                 .insert("application_error".into(), JsonValue::String(value));
         }
     }
+    Ok(model)
+}
+
+fn prepare_per(mut model: JsonValue) -> Result<JsonValue, String> {
+    let namespace = model["namespace"]
+        .as_str()
+        .ok_or("persistent model has no namespace")?
+        .replace('.', "::");
+    let types = ordered_types(
+        model["types"]
+            .as_array()
+            .ok_or("persistent model has no types")?,
+    )?;
+    let object = model
+        .as_object_mut()
+        .ok_or("persistent model root is not an object")?;
+    object.insert("cpp_namespace".into(), JsonValue::String(namespace));
+    object.insert("ordered_types".into(), JsonValue::Array(types));
     Ok(model)
 }
 
@@ -623,6 +657,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let rendered = environment
             .get_template("cpp_per.hpp")?
             .render(context! { deployment => Value::from_serialize(&model) })?;
+        fs::write(&arguments[4], rendered)?;
+        return Ok(());
+    }
+    if arguments.first().map(String::as_str) == Some("per-contract-cpp") {
+        if arguments.len() != 5 || arguments[1] != "--model" || arguments[3] != "--output" {
+            return Err(
+                "usage: ovf_codegen per-contract-cpp --model <model> --output <header>".into(),
+            );
+        }
+        let model: JsonValue = serde_json::from_str(&fs::read_to_string(&arguments[2])?)?;
+        let mut environment = Environment::new();
+        environment.add_template("cpp_per_contract.hpp", CPP_PER_CONTRACT_TEMPLATE)?;
+        environment.add_filter("cpp_type", cpp_type);
+        environment.add_filter("qualified_type", codec_type);
+        environment.add_filter("cpp_string", cpp_string);
+        environment.add_filter("uuid_byte_initializers", uuid_byte_initializers);
+        let rendered = environment
+            .get_template("cpp_per_contract.hpp")?
+            .render(context! { model => Value::from_serialize(&prepare_per(model)?) })?;
         fs::write(&arguments[4], rendered)?;
         return Ok(());
     }

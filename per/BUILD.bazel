@@ -25,6 +25,13 @@ cc_library(
 )
 
 cc_library(
+    name = "codec",
+    hdrs = ["include/ovf/per/codec.hpp"],
+    includes = ["include"],
+    deps = [":runtime"],
+)
+
+cc_library(
     name = "memory_provider",
     srcs = ["backends/memory.cpp"],
     deps = [":provider_abi"],
@@ -53,6 +60,7 @@ cc_library(
     name = "public_headers",
     hdrs = [
         "include/ovf/per/backend_abi.h",
+        "include/ovf/per/codec.hpp",
         "include/ovf/per/per.hpp",
     ],
     includes = ["include"],

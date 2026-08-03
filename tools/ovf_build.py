@@ -19,6 +19,7 @@ import tempfile
 import uuid
 
 from tools.smithy_ast_to_ir import compile_model
+from tools.smithy_ast_to_per_ir import compile_per_model
 from tools.exec_deployment import (
     finalize_manifest as finalize_execution_manifest,
     generate_artifacts as generate_execution_artifacts,
@@ -86,6 +87,32 @@ def compile_contract(args: argparse.Namespace) -> int:
         "service": args.service,
     }
     write_if_changed(args.metadata, json.dumps(metadata, sort_keys=True, indent=2) + "\n")
+    return 0
+
+
+def compile_per_contract(args: argparse.Namespace) -> int:
+    args.ir.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".ovf-per-contract-", dir=args.ir.parent) as temporary:
+        root = Path(temporary)
+        config = {
+            "version": "1.0",
+            "sources": [str(path.resolve()) for path in args.idl],
+            "imports": [str(path.resolve()) for path in args.profile],
+            "projections": {
+                "ovf": {"plugins": {"model": {"includePreludeShapes": False}}}
+            },
+        }
+        config_path = root / "smithy-build.json"
+        config_path.write_text(json.dumps(config, sort_keys=True), encoding="utf-8")
+        output = root / "smithy-output"
+        subprocess.run(
+            [str(args.smithy.resolve()), "build", "--config", str(config_path),
+             "--output", str(output), "--no-color"],
+            check=True,
+        )
+        ast = read(output / "ovf/model/model.json")
+    model = compile_per_model(ast)
+    write_if_changed(args.ir, json.dumps(model, sort_keys=True, indent=2) + "\n")
     return 0
 
 
@@ -1013,6 +1040,12 @@ def parser() -> argparse.ArgumentParser:
     persistence.add_argument("--namespace", required=True)
     persistence.add_argument("--output", required=True, type=Path)
     persistence.set_defaults(run=compile_per_deployment)
+    per_contract = commands.add_parser("per-contract")
+    per_contract.add_argument("--smithy", required=True, type=Path)
+    per_contract.add_argument("--profile", required=True, action="append", type=Path)
+    per_contract.add_argument("--idl", required=True, action="append", type=Path)
+    per_contract.add_argument("--ir", required=True, type=Path)
+    per_contract.set_defaults(run=compile_per_contract)
 
     communication = commands.add_parser("communication-deployment")
     communication.add_argument("--cue", required=True, type=Path)
