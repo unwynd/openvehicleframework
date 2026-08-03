@@ -1,0 +1,4 @@
+SQLite is in the public domain.
+
+The SQLite source used by this build is distributed by the SQLite project.
+See https://sqlite.org/copyright.html for the authors' public-domain dedication.

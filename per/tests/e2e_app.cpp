@@ -52,6 +52,12 @@ int main(int argc, char** argv) {
   auto store = std::move(store_result).value();
   const std::string_view mode(argv[2]);
   if (mode == "initialize" || mode == "update") {
+    if (mode == "initialize") {
+      auto reset = ovf::deployment::per_e2e::ResetOperationalState(store);
+      if (!reset) {
+        return Fail("reset initial data", reset.error());
+      }
+    }
     const std::string_view expected = mode == "initialize" ? "ready" : "active";
     auto transaction_result = store.BeginWrite();
     if (!transaction_result) {

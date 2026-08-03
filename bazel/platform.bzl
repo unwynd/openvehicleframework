@@ -88,3 +88,39 @@ ovf_dlt_platform_bundle = rule(
     outputs = {"bundle": "%{name}.tar"},
     doc = "Creates a deterministic DLT middleware filesystem bundle.",
 )
+
+def _sqlite_platform_bundle_impl(ctx):
+    arguments = ctx.actions.args()
+    arguments.add("package-sqlite-platform")
+    arguments.add_all(ctx.files.runtime, before_each = "--runtime")
+    arguments.add("--framework-license", ctx.file.framework_license)
+    arguments.add("--sqlite-notice", ctx.file.sqlite_notice)
+    arguments.add("--output", ctx.outputs.bundle)
+    ctx.actions.run(
+        executable = ctx.executable._builder,
+        arguments = [arguments],
+        inputs = depset(ctx.files.runtime + [
+            ctx.file.framework_license,
+            ctx.file.sqlite_notice,
+        ]),
+        outputs = [ctx.outputs.bundle],
+        mnemonic = "OvfSqlitePlatformPackage",
+        progress_message = "Packaging SQLite persistence middleware %{label}",
+    )
+    return [DefaultInfo(files = depset([ctx.outputs.bundle]))]
+
+ovf_sqlite_platform_bundle = rule(
+    implementation = _sqlite_platform_bundle_impl,
+    attrs = {
+        "framework_license": attr.label(allow_single_file = True, mandatory = True),
+        "runtime": attr.label_list(allow_files = True, mandatory = True),
+        "sqlite_notice": attr.label(allow_single_file = True, mandatory = True),
+        "_builder": attr.label(
+            default = Label("//tools:ovf_build"),
+            executable = True,
+            cfg = "exec",
+        ),
+    },
+    outputs = {"bundle": "%{name}.tar"},
+    doc = "Creates a deterministic SQLite persistence platform bundle.",
+)

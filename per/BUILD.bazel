@@ -3,6 +3,7 @@
 load("@rules_cc//cc:cc_import.bzl", "cc_import")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_shared_library.bzl", "cc_shared_library")
+load("//bazel:platform.bzl", "ovf_sqlite_platform_bundle")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -96,4 +97,12 @@ filegroup(
         ":shared",
         ":sqlite_provider_plugin",
     ],
+)
+
+ovf_sqlite_platform_bundle(
+    name = "sqlite_platform_bundle",
+    framework_license = "//:LICENSE",
+    runtime = [":sqlite_runtime"],
+    sqlite_notice = "sqlite-NOTICE.txt",
+    target_compatible_with = ["@platforms//os:linux"],
 )

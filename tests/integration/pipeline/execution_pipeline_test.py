@@ -149,6 +149,32 @@ def main() -> int:
     logs = outputs / "execution-pipeline"
     logs.mkdir(parents=True, exist_ok=True)
     mount_target_filesystem(runfile(os.environ["OVF_TEST_TARGET_FILESYSTEM"]))
+    persistence_provider = (
+        ROOT / "usr/lib/ovf/providers/libovf_per_provider_sqlite.so"
+    )
+    persistence_root = ROOT / "var/lib/ovf/per"
+    if not persistence_provider.is_file() or not persistence_root.is_dir():
+        raise RuntimeError("persistence platform artifacts are absent from target filesystem")
+    persistence = subprocess.run(
+        [
+            runfile(os.environ["OVF_TEST_PER_CLIENT"]),
+            persistence_provider.parent,
+            persistence_root,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        env={**os.environ, "LD_LIBRARY_PATH": str(ROOT / "usr/lib")},
+    )
+    (logs / "persistence.log").write_text(
+        persistence.stdout + persistence.stderr, encoding="utf-8"
+    )
+    if (
+        persistence.returncode != 0
+        or "PERSISTENCE_INSTALLED_PROVIDER_VERIFIED" not in persistence.stdout
+    ):
+        raise RuntimeError(f"installed persistence provider failed: {persistence.stderr}")
     (ROOT / "run").mkdir(parents=True, exist_ok=True)
     (ROOT / "var/lib/ovf/exec").mkdir(parents=True, exist_ok=True)
     runtime_directory = subprocess.run(

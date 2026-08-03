@@ -39,5 +39,26 @@ namespace {{ deployment.namespace }} {
       .schema_version = {{ store.schemaVersion }}ULL});
 }
 
+[[nodiscard]] inline std::vector<ovf::per::Entry> {{ store.cppName }}InitialData() {
+  return {
+{% for entry in store.initialData %}
+      ovf::per::Entry{std::vector<std::byte>{ {{ entry.key|utf8_byte_initializers }} },
+                      std::vector<std::byte>{ {{ entry.valueHex|hex_byte_initializers }} }},
+{% endfor %}
+  };
+}
+
+[[nodiscard]] inline ovf::per::Result<ovf::per::CommitInfo> Reset{{ store.cppName }}(
+    const ovf::per::Store& store,
+    ovf::per::Durability durability = ovf::per::Durability::process_crash) noexcept {
+  try {
+    const auto initial = {{ store.cppName }}InitialData();
+    return store.Reset(initial, durability);
+  } catch (...) {
+    return ovf::per::Error{ovf::per::ErrorCode::resource_exhausted,
+                           "cannot allocate persistence initial data"};
+  }
+}
+
 {% endfor %}
 } // namespace {{ deployment.namespace }}

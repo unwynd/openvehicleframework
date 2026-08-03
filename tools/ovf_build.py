@@ -329,12 +329,26 @@ def compile_per_deployment(args: argparse.Namespace) -> int:
         for record in read(path)["records"]
     }
     for store in stores:
+        store.setdefault("initialData", [])
         identity = (store["schemaId"], store["schemaVersion"])
         if store["schemaId"] != "dynamic" and identity not in records:
             raise ValueError(
                 f"store {store['name']} references an undeclared persistent schema "
                 f"{store['schemaId']} version {store['schemaVersion']}"
             )
+        entries = store["initialData"]
+        entry_keys = [entry["key"] for entry in entries]
+        if len(entry_keys) != len(set(entry_keys)):
+            raise ValueError(f"store {store['name']} has duplicate initial-data keys")
+        for entry in entries:
+            if len(entry["valueHex"]) % 2 != 0:
+                raise ValueError(f"store {store['name']} has an odd-length hexadecimal value")
+            if len(entry["key"].encode()) > store["maxKeySize"]:
+                raise ValueError(f"store {store['name']} initial-data key exceeds its bound")
+            if len(entry["valueHex"]) // 2 > store["maxValueSize"]:
+                raise ValueError(f"store {store['name']} initial-data value exceeds its bound")
+        if len(entries) > store["maxEntries"]:
+            raise ValueError(f"store {store['name']} initial data exceeds its entry bound")
     binding = source["provider"]
     root = binding["configuration"]["root"]
     if not root.startswith("/") or ".." in Path(root).parts:
@@ -716,6 +730,7 @@ def add_file(archive: tarfile.TarFile, source: Path, target: str, mode: int) -> 
 
 def package_execution_target(args: argparse.Namespace) -> int:
     entries: dict[str, tuple[bytes, int]] = {}
+    directories: dict[str, int] = {}
 
     def insert(path: str, content: bytes, mode: int) -> None:
         normalized = str(Path(path))
@@ -732,6 +747,14 @@ def package_execution_target(args: argparse.Namespace) -> int:
         with tarfile.open(archive_path) as archive:
             for member in archive.getmembers():
                 if member.isdir():
+                    normalized = str(Path(member.name))
+                    if member.name.startswith("/") or ".." in Path(member.name).parts:
+                        raise ValueError(f"unsafe target bundle directory: {member.name}")
+                    mode = member.mode & 0o777
+                    existing_mode = directories.get(normalized)
+                    if existing_mode is not None and existing_mode != mode:
+                        raise ValueError(f"conflicting target bundle directory: {normalized}")
+                    directories[normalized] = mode
                     continue
                 if not member.isfile():
                     raise ValueError(
@@ -808,6 +831,10 @@ def package_execution_target(args: argparse.Namespace) -> int:
         "executionManifestSha256": hashlib.sha256(runtime_manifest_content).hexdigest(),
         "applications": sorted(expected_applications),
         "requiredBaseExecutables": required_base_executables,
+        "directories": {
+            path: {"mode": f"{mode:04o}"}
+            for path, mode in sorted(directories.items())
+        },
         "files": {
             path: {"sha256": hashlib.sha256(content).hexdigest(), "mode": f"{mode:04o}"}
             for path, (content, mode) in sorted(entries.items())
@@ -817,6 +844,14 @@ def package_execution_target(args: argparse.Namespace) -> int:
     insert("usr/share/ovf/target/manifest.json", inventory_content, 0o644)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(args.output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        for path, mode in sorted(directories.items()):
+            info = tarfile.TarInfo(path.rstrip("/") + "/")
+            info.type = tarfile.DIRTYPE
+            info.mode = mode
+            info.mtime = 0
+            info.uid = info.gid = 0
+            info.uname = info.gname = "root"
+            archive.addfile(info)
         for path, (content, mode) in sorted(entries.items()):
             info = tar_bytes(content, mode)
             info.name = path
@@ -982,6 +1017,62 @@ def package_dlt_platform(args: argparse.Namespace) -> int:
     return 0
 
 
+def package_sqlite_platform(args: argparse.Namespace) -> int:
+    runtime_targets = {
+        "libovf_per.so": ("usr/lib/libovf_per.so", 0o755),
+        "libovf_per_provider_sqlite.so": (
+            "usr/lib/ovf/providers/libovf_per_provider_sqlite.so",
+            0o755,
+        ),
+    }
+    sources: dict[str, Path] = {}
+    for source in args.runtime:
+        if source.name in runtime_targets:
+            if source.name in sources:
+                raise ValueError(f"duplicate persistence runtime artifact: {source.name}")
+            sources[source.name] = source
+    missing = sorted(set(runtime_targets) - set(sources))
+    if missing:
+        raise ValueError(f"missing persistence runtime artifacts: {', '.join(missing)}")
+    entries = [
+        (target, sources[name], mode)
+        for name, (target, mode) in runtime_targets.items()
+    ]
+    entries.extend([
+        ("usr/share/licenses/openvehicleframework/LICENSE", args.framework_license, 0o644),
+        ("usr/share/licenses/sqlite/NOTICE", args.sqlite_notice, 0o644),
+    ])
+    files = {
+        target: {"sha256": digest(source), "mode": f"{mode:04o}"}
+        for target, source, mode in sorted(entries)
+    }
+    manifest = {
+        "platformBundleVersion": 1,
+        "name": "ovf-persistence-sqlite",
+        "provider": "sqlite",
+        "providerDirectory": "/usr/lib/ovf/providers",
+        "storageRoot": "/var/lib/ovf/per",
+        "applicationsIncluded": False,
+        "files": files,
+    }
+    manifest_content = json.dumps(manifest, sort_keys=True, indent=2).encode() + b"\n"
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(args.output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        directory = tarfile.TarInfo("var/lib/ovf/per/")
+        directory.type = tarfile.DIRTYPE
+        directory.mode = 0o700
+        directory.mtime = 0
+        directory.uid = directory.gid = 0
+        directory.uname = directory.gname = "root"
+        archive.addfile(directory)
+        for target, source, mode in sorted(entries):
+            add_file(archive, source, target, mode)
+        info = tar_bytes(manifest_content, 0o644)
+        info.name = "usr/share/ovf/platform/persistence-sqlite/manifest.json"
+        archive.addfile(info, io.BytesIO(manifest_content))
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser()
     commands = result.add_subparsers(dest="command", required=True)
@@ -1098,6 +1189,12 @@ def parser() -> argparse.ArgumentParser:
     dlt_platform.add_argument("--dlt-license", required=True, type=Path)
     dlt_platform.add_argument("--output", required=True, type=Path)
     dlt_platform.set_defaults(run=package_dlt_platform)
+    sqlite_platform = commands.add_parser("package-sqlite-platform")
+    sqlite_platform.add_argument("--runtime", required=True, action="append", type=Path)
+    sqlite_platform.add_argument("--framework-license", required=True, type=Path)
+    sqlite_platform.add_argument("--sqlite-notice", required=True, type=Path)
+    sqlite_platform.add_argument("--output", required=True, type=Path)
+    sqlite_platform.set_defaults(run=package_sqlite_platform)
     target = commands.add_parser("package-execution-target")
     target.add_argument("--execution-model", required=True, type=Path)
     target.add_argument("--backend-config", required=True, type=Path)

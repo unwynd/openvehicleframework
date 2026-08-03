@@ -57,6 +57,29 @@ fn uuid_byte_initializers(value: &str) -> String {
         .join(", ")
 }
 
+fn utf8_byte_initializers(value: &str) -> String {
+    value
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("std::byte{{0x{byte:02x}}}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn hex_byte_initializers(value: &str) -> String {
+    value
+        .as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            format!(
+                "std::byte{{0x{}}}",
+                std::str::from_utf8(pair).expect("validated hexadecimal is ASCII")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn codec_type(name: &str, namespace: &str) -> String {
     match name {
         "bool" | "f32" | "f64" | "bytes" | "string" => cpp_type(name),
@@ -654,6 +677,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let mut environment = Environment::new();
         environment.add_template("cpp_per.hpp", CPP_PER_TEMPLATE)?;
         environment.add_filter("cpp_string", cpp_string);
+        environment.add_filter("utf8_byte_initializers", utf8_byte_initializers);
+        environment.add_filter("hex_byte_initializers", hex_byte_initializers);
         let rendered = environment
             .get_template("cpp_per.hpp")?
             .render(context! { deployment => Value::from_serialize(&model) })?;

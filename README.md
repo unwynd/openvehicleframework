@@ -90,11 +90,17 @@ source.
 Persistence intent is defined in application CUE deployment, while physical
 storage roots, journal policy, and provider choice remain platform-owned. The
 `ovf_per_application` Bazel rule validates the composed model and generates
-named store factories. Applications use only `ovf::per` transactions and blob
-streams. The SQLite provider enforces deployment compatibility, shared quotas,
-cross-process writer exclusion, snapshot generations, explicit durability,
-and rollback of interrupted changes. These mechanisms are tested on Linux but
-do not constitute a storage-hardware or power-loss qualification claim.
+named store factories, bounded initial data, and explicit reset operations.
+Smithy record schemas generate stable identifiers and deterministic,
+endian-independent codecs. Applications use only `ovf::per` typed records,
+transactions, ordered snapshot cursors, and blob streams. The SQLite provider
+enforces deployment compatibility, shared quotas, cross-process writer
+exclusion, generation conflicts, explicit durability, structured recovery
+status, and resumable offline migration with explicit rollback. Its runtime,
+provider, license notice, and storage root are assembled independently into the
+Linux target filesystem and exercised through the installed provider path.
+These mechanisms do not constitute storage-hardware or power-loss
+qualification.
 
 ### Build and deployment flow
 

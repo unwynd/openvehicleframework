@@ -14,5 +14,6 @@ application: {
 		maxBlobSize:       262144
 		schemaId:          "7b5a1411-c98e-4bcc-b672-443415c156f1"
 		schemaVersion:     1
+		initialData: [{key: "mode", valueHex: "7265616479"}]
 	}]
 }

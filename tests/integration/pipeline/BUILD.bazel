@@ -79,6 +79,7 @@ ovf_exec_target_bundle(
     platform_bundles = [
         "//com:vsomeip_platform_bundle",
         "//log:dlt_platform_bundle",
+        "//per:sqlite_platform_bundle",
     ],
     providers = ["//com/transports/iceoryx2:plugin"],
     tags = ["manual"],
@@ -112,11 +113,13 @@ py_test(
     data = [
         ":execution_target_filesystem",
         ":mode_client",
+        "//per/tests:installed_provider_e2e",
         "@dinit_source//:dinitctl",
     ],
     env = {
         "OVF_TEST_DINITCTL": "$(rootpath @dinit_source//:dinitctl)",
         "OVF_TEST_MODE_CLIENT": "$(rootpath :mode_client)",
+        "OVF_TEST_PER_CLIENT": "$(rootpath //per/tests:installed_provider_e2e)",
         "OVF_TEST_TARGET_FILESYSTEM": "$(rootpath :execution_target_filesystem)",
     },
     tags = [

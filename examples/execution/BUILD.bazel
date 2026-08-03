@@ -53,6 +53,7 @@ ovf_exec_target_bundle(
     platform_bundles = [
         "//com:vsomeip_platform_bundle",
         "//log:dlt_platform_bundle",
+        "//per:sqlite_platform_bundle",
     ],
     providers = ["//com/transports/iceoryx2:plugin"],
     tags = ["manual"],

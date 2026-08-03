@@ -41,6 +41,12 @@ cc_binary(
     ],
 )
 
+cc_binary(
+    name = "installed_provider_e2e",
+    srcs = ["installed_provider_e2e.cpp"],
+    deps = ["//per:runtime"],
+)
+
 py_test(
     name = "process_e2e_test",
     size = "medium",

@@ -5,6 +5,11 @@ package ovf_deployment
 #Durability: "buffered" | "process_crash" | "media"
 #Access: "read_only" | "read_write"
 
+#InitialEntry: {
+	key:      string & !=""
+	valueHex: string & =~"^[0-9a-f]*$"
+}
+
 #Store: {
 	name:              string & =~"^[A-Za-z][A-Za-z0-9_.-]{0,127}$"
 	access:            #Access | *"read_write"
@@ -16,6 +21,7 @@ package ovf_deployment
 	maxBlobSize:       int & >=1 & <=1099511627776 | *16777216
 	schemaId:          string & =~"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$" | *"dynamic"
 	schemaVersion:     int & >=1 | *1
+	initialData?:      [...#InitialEntry]
 }
 
 #Persistence: {
