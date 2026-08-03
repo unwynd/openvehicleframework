@@ -18,6 +18,10 @@ exports_files([
     "src/lib/pubkey/pubkey.h",
     "src/lib/pubkey/x509_key.h",
     "src/lib/rng/auto_rng/auto_rng.h",
+    "src/lib/x509/certstor.h",
+    "src/lib/x509/x509_crl.h",
+    "src/lib/x509/x509cert.h",
+    "src/lib/x509/x509path.h",
 ])
 
 filegroup(
@@ -48,6 +52,10 @@ filegroup(
         "src/lib/pubkey/pubkey.h",
         "src/lib/pubkey/x509_key.h",
         "src/lib/rng/auto_rng/auto_rng.h",
+        "src/lib/x509/certstor.h",
+        "src/lib/x509/x509_crl.h",
+        "src/lib/x509/x509cert.h",
+        "src/lib/x509/x509path.h",
     ],
 )
 

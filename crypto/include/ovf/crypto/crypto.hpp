@@ -104,6 +104,47 @@ struct Capabilities final {
   bool secure_memory{};
 };
 
+enum class CertificateUsage : std::uint8_t {
+  unspecified,
+  server_authentication,
+  client_authentication,
+  certificate_authority,
+  ocsp_signing,
+  encryption
+};
+
+enum class CertificateVerdict : std::uint8_t {
+  trusted,
+  untrusted,
+  expired,
+  revoked,
+  name_mismatch,
+  usage_rejected,
+  malformed,
+  revocation_unknown,
+  policy_rejected
+};
+
+struct CertificateValidationRequest final {
+  std::span<const std::byte> leaf;
+  std::span<const std::span<const std::byte>> intermediates;
+  std::span<const std::span<const std::byte>> trust_anchors;
+  std::span<const std::span<const std::byte>> crls;
+  std::string_view expected_name;
+  std::uint64_t validation_time_unix_seconds{};
+  std::uint32_t minimum_security_bits{128};
+  CertificateUsage usage{CertificateUsage::unspecified};
+  bool require_revocation{false};
+  bool require_self_signed_anchor{true};
+};
+
+struct CertificateValidationResult final {
+  bool valid{};
+  CertificateVerdict verdict{CertificateVerdict::untrusted};
+  std::uint32_t verified_chain_length{};
+  std::uint64_t native_status{};
+};
+
 namespace detail {
 class RuntimeState;
 }
@@ -165,6 +206,13 @@ public:
                                                       std::span<const std::byte> salt,
                                                       std::span<const std::byte> info,
                                                       std::size_t output_size) const noexcept;
+  [[nodiscard]] Result<std::vector<std::byte>> PublicValue(const Key& key) const noexcept;
+  [[nodiscard]] Result<Key> Agree(Algorithm algorithm, const Key& private_key,
+                                  std::span<const std::byte> peer_public_value,
+                                  std::span<const std::byte> salt,
+                                  KeyPolicy derived_key) const noexcept;
+  [[nodiscard]] Result<CertificateValidationResult>
+  ValidateCertificate(const CertificateValidationRequest& request) const noexcept;
   void Stop() noexcept;
 
 private:

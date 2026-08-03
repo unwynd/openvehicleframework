@@ -106,6 +106,54 @@ typedef struct ovf_crypto_aead_parameters_v1 {
   uint32_t tag_size;
 } ovf_crypto_aead_parameters_v1;
 
+typedef enum ovf_crypto_certificate_usage_v1 {
+  OVF_CRYPTO_CERTIFICATE_USAGE_UNSPECIFIED = 0,
+  OVF_CRYPTO_CERTIFICATE_USAGE_SERVER_AUTHENTICATION = 1,
+  OVF_CRYPTO_CERTIFICATE_USAGE_CLIENT_AUTHENTICATION = 2,
+  OVF_CRYPTO_CERTIFICATE_USAGE_CERTIFICATE_AUTHORITY = 3,
+  OVF_CRYPTO_CERTIFICATE_USAGE_OCSP_SIGNING = 4,
+  OVF_CRYPTO_CERTIFICATE_USAGE_ENCRYPTION = 5
+} ovf_crypto_certificate_usage_v1;
+
+typedef enum ovf_crypto_certificate_verdict_v1 {
+  OVF_CRYPTO_CERTIFICATE_VERDICT_TRUSTED = 0,
+  OVF_CRYPTO_CERTIFICATE_VERDICT_UNTRUSTED = 1,
+  OVF_CRYPTO_CERTIFICATE_VERDICT_EXPIRED = 2,
+  OVF_CRYPTO_CERTIFICATE_VERDICT_REVOKED = 3,
+  OVF_CRYPTO_CERTIFICATE_VERDICT_NAME_MISMATCH = 4,
+  OVF_CRYPTO_CERTIFICATE_VERDICT_USAGE_REJECTED = 5,
+  OVF_CRYPTO_CERTIFICATE_VERDICT_MALFORMED = 6,
+  OVF_CRYPTO_CERTIFICATE_VERDICT_REVOCATION_UNKNOWN = 7,
+  OVF_CRYPTO_CERTIFICATE_VERDICT_POLICY_REJECTED = 8
+} ovf_crypto_certificate_verdict_v1;
+
+typedef struct ovf_crypto_certificate_validation_request_v1 {
+  size_t struct_size;
+  ovf_crypto_bytes_view_v1 leaf;
+  const ovf_crypto_bytes_view_v1* intermediates;
+  size_t intermediate_count;
+  const ovf_crypto_bytes_view_v1* trust_anchors;
+  size_t trust_anchor_count;
+  const ovf_crypto_bytes_view_v1* crls;
+  size_t crl_count;
+  ovf_crypto_string_view_v1 expected_name;
+  uint64_t validation_time_unix_seconds;
+  uint32_t minimum_security_bits;
+  ovf_crypto_certificate_usage_v1 usage;
+  uint8_t require_revocation;
+  uint8_t require_self_signed_anchor;
+  uint8_t reserved[6];
+} ovf_crypto_certificate_validation_request_v1;
+
+typedef struct ovf_crypto_certificate_validation_result_v1 {
+  size_t struct_size;
+  uint8_t valid;
+  uint8_t reserved[3];
+  ovf_crypto_certificate_verdict_v1 verdict;
+  uint32_t verified_chain_length;
+  uint64_t native_status;
+} ovf_crypto_certificate_validation_result_v1;
+
 typedef struct ovf_crypto_backend_config_v1 {
   size_t struct_size;
   ovf_crypto_string_view_v1 configuration;
@@ -154,6 +202,17 @@ struct ovf_crypto_backend_v1 {
   ovf_crypto_status_v1 (*derive)(ovf_crypto_backend_v1*, uint32_t algorithm, ovf_crypto_handle_v1,
                                  ovf_crypto_bytes_view_v1 salt, ovf_crypto_bytes_view_v1 info,
                                  ovf_crypto_mutable_bytes_v1*);
+  ovf_crypto_status_v1 (*key_public_value)(ovf_crypto_backend_v1*, ovf_crypto_handle_v1,
+                                           ovf_crypto_mutable_bytes_v1*);
+  ovf_crypto_status_v1 (*key_agree)(ovf_crypto_backend_v1*, uint32_t algorithm,
+                                    ovf_crypto_handle_v1,
+                                    ovf_crypto_bytes_view_v1 peer_public_value,
+                                    ovf_crypto_bytes_view_v1 salt,
+                                    const ovf_crypto_key_descriptor_v1* derived_key,
+                                    ovf_crypto_handle_v1*);
+  ovf_crypto_status_v1 (*certificate_validate)(ovf_crypto_backend_v1*,
+                                               const ovf_crypto_certificate_validation_request_v1*,
+                                               ovf_crypto_certificate_validation_result_v1*);
   ovf_crypto_status_v1 (*last_error)(ovf_crypto_backend_v1*, ovf_crypto_mutable_bytes_v1* message);
 };
 

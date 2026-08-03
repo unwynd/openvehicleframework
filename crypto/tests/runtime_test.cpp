@@ -124,6 +124,23 @@ ovf_crypto_status_v1 Derive(ovf_crypto_backend_v1*, std::uint32_t, ovf_crypto_ha
   return OVF_CRYPTO_STATUS_UNSUPPORTED;
 }
 
+ovf_crypto_status_v1 PublicValue(ovf_crypto_backend_v1*, ovf_crypto_handle_v1,
+                                 ovf_crypto_mutable_bytes_v1*) {
+  return OVF_CRYPTO_STATUS_UNSUPPORTED;
+}
+
+ovf_crypto_status_v1 Agree(ovf_crypto_backend_v1*, std::uint32_t, ovf_crypto_handle_v1,
+                           ovf_crypto_bytes_view_v1, ovf_crypto_bytes_view_v1,
+                           const ovf_crypto_key_descriptor_v1*, ovf_crypto_handle_v1*) {
+  return OVF_CRYPTO_STATUS_UNSUPPORTED;
+}
+
+ovf_crypto_status_v1 ValidateCertificate(ovf_crypto_backend_v1*,
+                                         const ovf_crypto_certificate_validation_request_v1*,
+                                         ovf_crypto_certificate_validation_result_v1*) {
+  return OVF_CRYPTO_STATUS_UNSUPPORTED;
+}
+
 ovf_crypto_status_v1 LastError(ovf_crypto_backend_v1*, ovf_crypto_mutable_bytes_v1* output) {
   constexpr std::array<std::uint8_t, 12> message{'f', 'a', 'k', 'e', ' ',  'e',
                                                  'r', 'r', 'o', 'r', '\0', '\0'};
@@ -155,6 +172,9 @@ ovf_crypto_status_v1 Create(const ovf_crypto_host_api_v1* host,
                   UnsupportedOutput,
                   Verify,
                   Derive,
+                  PublicValue,
+                  Agree,
+                  ValidateCertificate,
                   LastError};
   *output = &backend->abi;
   return OVF_CRYPTO_STATUS_OK;

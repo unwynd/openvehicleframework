@@ -4,6 +4,7 @@
 
 #include <botan/aead.h>
 #include <botan/auto_rng.h>
+#include <botan/certstor.h>
 #include <botan/cipher_mode.h>
 #include <botan/hash.h>
 #include <botan/kdf.h>
@@ -13,9 +14,13 @@
 #include <botan/pkcs8.h>
 #include <botan/pubkey.h>
 #include <botan/secmem.h>
+#include <botan/x509_crl.h>
 #include <botan/x509_key.h>
+#include <botan/x509cert.h>
+#include <botan/x509path.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -198,12 +203,13 @@ ovf_crypto_status_v1 GetCapabilities(ovf_crypto_backend_v1* self,
   }
   const auto max_keys = static_cast<std::uint32_t>(backend.keys.size());
   *output = {sizeof(*output),
-             10,
+             11,
              {OVF_CRYPTO_ALGORITHM_SHA2_256, OVF_CRYPTO_ALGORITHM_SHA2_384,
               OVF_CRYPTO_ALGORITHM_SHA2_512, OVF_CRYPTO_ALGORITHM_HMAC_SHA2_256,
               OVF_CRYPTO_ALGORITHM_AES_128_GCM, OVF_CRYPTO_ALGORITHM_AES_256_GCM,
               OVF_CRYPTO_ALGORITHM_HKDF_SHA2_256, OVF_CRYPTO_ALGORITHM_ECDSA_P256_SHA2_256,
-              OVF_CRYPTO_ALGORITHM_RSA_PSS_SHA2_256, OVF_CRYPTO_ALGORITHM_ED25519},
+              OVF_CRYPTO_ALGORITHM_RSA_PSS_SHA2_256, OVF_CRYPTO_ALGORITHM_ED25519,
+              OVF_CRYPTO_ALGORITHM_ECDH_P256},
              max_keys,
              max_keys,
              kMaximumOperationSize,
@@ -525,6 +531,164 @@ ovf_crypto_status_v1 Derive(ovf_crypto_backend_v1* self, std::uint32_t algorithm
   }
 }
 
+ovf_crypto_status_v1 PublicValue(ovf_crypto_backend_v1* self, ovf_crypto_handle_v1 handle,
+                                 ovf_crypto_mutable_bytes_v1* output) {
+  auto& backend = *Self(self);
+  std::scoped_lock lock(backend.mutex);
+  auto* key = FindKey(backend, handle);
+  if (key == nullptr || key->algorithm != OVF_CRYPTO_ALGORITHM_ECDH_P256 ||
+      key->private_key == nullptr || !Permits(*key, OVF_CRYPTO_KEY_USAGE_DERIVE)) {
+    return Fail(backend, OVF_CRYPTO_STATUS_PERMISSION_DENIED,
+                "key policy rejected public-value export");
+  }
+  try {
+    const auto* agreement_key =
+        dynamic_cast<const Botan::PK_Key_Agreement_Key*>(key->private_key.get());
+    if (agreement_key == nullptr) {
+      return Fail(backend, OVF_CRYPTO_STATUS_UNSUPPORTED, "key does not support agreement");
+    }
+    const auto value = agreement_key->public_value();
+    return WriteOutput(output, value);
+  } catch (const std::exception& exception) {
+    return BotanFailure(backend, exception);
+  }
+}
+
+ovf_crypto_status_v1 Agree(ovf_crypto_backend_v1* self, std::uint32_t algorithm,
+                           ovf_crypto_handle_v1 handle, ovf_crypto_bytes_view_v1 peer,
+                           ovf_crypto_bytes_view_v1 salt,
+                           const ovf_crypto_key_descriptor_v1* derived_key,
+                           ovf_crypto_handle_v1* output) {
+  auto& backend = *Self(self);
+  std::scoped_lock lock(backend.mutex);
+  auto* key = FindKey(backend, handle);
+  if (algorithm != OVF_CRYPTO_ALGORITHM_ECDH_P256 || key == nullptr ||
+      key->algorithm != algorithm || key->private_key == nullptr ||
+      !Permits(*key, OVF_CRYPTO_KEY_USAGE_DERIVE) || !ValidView(peer) || peer.size == 0 ||
+      !ValidView(salt) || derived_key == nullptr ||
+      derived_key->struct_size < sizeof(*derived_key) || derived_key->persistent != 0 ||
+      output == nullptr) {
+    return Fail(backend, OVF_CRYPTO_STATUS_PERMISSION_DENIED, "invalid key-agreement request");
+  }
+  try {
+    const auto* agreement_key =
+        dynamic_cast<const Botan::PK_Key_Agreement_Key*>(key->private_key.get());
+    if (agreement_key == nullptr) {
+      return Fail(backend, OVF_CRYPTO_STATUS_UNSUPPORTED, "key does not support agreement");
+    }
+    const auto output_size = SymmetricKeySize(derived_key->algorithm);
+    if (output_size == 0) {
+      return Fail(backend, OVF_CRYPTO_STATUS_UNSUPPORTED,
+                  "derived-key algorithm is not a supported symmetric algorithm");
+    }
+    Botan::PK_Key_Agreement agreement(*agreement_key, backend.rng, "HKDF(SHA-256)");
+    const auto shared = agreement.derive_key(output_size, Span(peer), Span(salt));
+    KeyEntry entry;
+    entry.algorithm = derived_key->algorithm;
+    entry.usage = derived_key->permitted_usage;
+    entry.secret.assign(shared.begin(), shared.end());
+    return StoreKey(backend, std::move(entry), output);
+  } catch (const Botan::Invalid_Argument& exception) {
+    return Fail(backend, OVF_CRYPTO_STATUS_INVALID_ARGUMENT, exception.what());
+  } catch (const std::exception& exception) {
+    return BotanFailure(backend, exception);
+  }
+}
+
+Botan::Usage_Type CertificateUsage(ovf_crypto_certificate_usage_v1 usage) {
+  switch (usage) {
+  case OVF_CRYPTO_CERTIFICATE_USAGE_SERVER_AUTHENTICATION:
+    return Botan::Usage_Type::TLS_SERVER_AUTH;
+  case OVF_CRYPTO_CERTIFICATE_USAGE_CLIENT_AUTHENTICATION:
+    return Botan::Usage_Type::TLS_CLIENT_AUTH;
+  case OVF_CRYPTO_CERTIFICATE_USAGE_CERTIFICATE_AUTHORITY:
+    return Botan::Usage_Type::CERTIFICATE_AUTHORITY;
+  case OVF_CRYPTO_CERTIFICATE_USAGE_OCSP_SIGNING:
+    return Botan::Usage_Type::OCSP_RESPONDER;
+  case OVF_CRYPTO_CERTIFICATE_USAGE_ENCRYPTION:
+    return Botan::Usage_Type::ENCRYPTION;
+  default:
+    return Botan::Usage_Type::UNSPECIFIED;
+  }
+}
+
+ovf_crypto_certificate_verdict_v1 CertificateVerdict(Botan::Certificate_Status_Code status) {
+  using Code = Botan::Certificate_Status_Code;
+  switch (status) {
+  case Code::CERT_HAS_EXPIRED:
+  case Code::CERT_NOT_YET_VALID:
+    return OVF_CRYPTO_CERTIFICATE_VERDICT_EXPIRED;
+  case Code::CERT_IS_REVOKED:
+    return OVF_CRYPTO_CERTIFICATE_VERDICT_REVOKED;
+  case Code::CERT_NAME_NOMATCH:
+  case Code::CHAIN_NAME_MISMATCH:
+    return OVF_CRYPTO_CERTIFICATE_VERDICT_NAME_MISMATCH;
+  case Code::INVALID_USAGE:
+    return OVF_CRYPTO_CERTIFICATE_VERDICT_USAGE_REJECTED;
+  case Code::NO_REVOCATION_DATA:
+  case Code::NO_MATCHING_CRLDP:
+    return OVF_CRYPTO_CERTIFICATE_VERDICT_REVOCATION_UNKNOWN;
+  case Code::CERT_ISSUER_NOT_FOUND:
+  case Code::CANNOT_ESTABLISH_TRUST:
+  case Code::CHAIN_LACKS_TRUST_ROOT:
+    return OVF_CRYPTO_CERTIFICATE_VERDICT_UNTRUSTED;
+  default:
+    return OVF_CRYPTO_CERTIFICATE_VERDICT_POLICY_REJECTED;
+  }
+}
+
+ovf_crypto_status_v1
+ValidateCertificate(ovf_crypto_backend_v1* self,
+                    const ovf_crypto_certificate_validation_request_v1* request,
+                    ovf_crypto_certificate_validation_result_v1* output) {
+  auto& backend = *Self(self);
+  std::scoped_lock lock(backend.mutex);
+  if (!backend.running || request == nullptr || request->struct_size < sizeof(*request) ||
+      output == nullptr || output->struct_size < sizeof(*output) || !ValidView(request->leaf) ||
+      request->leaf.size == 0 || request->trust_anchor_count == 0) {
+    return Fail(backend, OVF_CRYPTO_STATUS_INVALID_ARGUMENT,
+                "invalid certificate-validation request");
+  }
+  try {
+    std::vector<Botan::X509_Certificate> chain;
+    chain.emplace_back(Span(request->leaf));
+    for (std::size_t index = 0; index < request->intermediate_count; ++index) {
+      chain.emplace_back(Span(request->intermediates[index]));
+    }
+    Botan::Certificate_Store_In_Memory trust;
+    for (std::size_t index = 0; index < request->trust_anchor_count; ++index) {
+      trust.add_certificate(Botan::X509_Certificate(Span(request->trust_anchors[index])));
+    }
+    for (std::size_t index = 0; index < request->crl_count; ++index) {
+      const auto encoded = Span(request->crls[index]);
+      trust.add_crl(Botan::X509_CRL(std::vector<std::uint8_t>(encoded.begin(), encoded.end())));
+    }
+    const Botan::Path_Validation_Restrictions restrictions(
+        request->require_revocation != 0, request->minimum_security_bits, false,
+        std::chrono::seconds::zero(), nullptr, false, request->require_self_signed_anchor != 0);
+    const std::vector<Botan::Certificate_Store*> stores{&trust};
+    const std::string name(request->expected_name.data, request->expected_name.size);
+    const auto time = std::chrono::system_clock::time_point(
+        std::chrono::seconds(request->validation_time_unix_seconds));
+    const auto result = Botan::x509_path_validate(chain, restrictions, stores, name,
+                                                  CertificateUsage(request->usage), time);
+    const auto status = result.result();
+    *output = {sizeof(*output),
+               static_cast<std::uint8_t>(result.successful_validation()),
+               {},
+               result.successful_validation() ? OVF_CRYPTO_CERTIFICATE_VERDICT_TRUSTED
+                                              : CertificateVerdict(status),
+               static_cast<std::uint32_t>(result.cert_path().size()),
+               static_cast<std::uint64_t>(status)};
+    return OVF_CRYPTO_STATUS_OK;
+  } catch (const Botan::Decoding_Error&) {
+    *output = {sizeof(*output), 0, {}, OVF_CRYPTO_CERTIFICATE_VERDICT_MALFORMED, 0, 0};
+    return OVF_CRYPTO_STATUS_OK;
+  } catch (const std::exception& exception) {
+    return BotanFailure(backend, exception);
+  }
+}
+
 ovf_crypto_status_v1 LastError(ovf_crypto_backend_v1* self, ovf_crypto_mutable_bytes_v1* output) {
   auto& backend = *Self(self);
   std::scoped_lock lock(backend.mutex);
@@ -560,6 +724,9 @@ ovf_crypto_status_v1 Create(const ovf_crypto_host_api_v1* host,
                     Sign,
                     Verify,
                     Derive,
+                    PublicValue,
+                    Agree,
+                    ValidateCertificate,
                     LastError};
     *output = &backend.release()->abi;
     return OVF_CRYPTO_STATUS_OK;

@@ -140,4 +140,57 @@ TEST(BotanProviderTest, DerivesKeysAndSeparatesSignatureMismatchFromProviderErro
   }
 }
 
+TEST(BotanProviderTest, AgreesOnTheSameKeyAndRejectsMalformedCertificates) {
+  auto runtime = CreateRuntime();
+  ASSERT_NE(runtime, nullptr);
+  auto first_result =
+      runtime->GenerateKey({ovf::crypto::Algorithm::ecdh_p256, ovf::crypto::KeyUsage::derive});
+  auto second_result =
+      runtime->GenerateKey({ovf::crypto::Algorithm::ecdh_p256, ovf::crypto::KeyUsage::derive});
+  ASSERT_TRUE(first_result) << first_result.error().message;
+  ASSERT_TRUE(second_result) << second_result.error().message;
+  auto first = std::move(first_result).value();
+  auto second = std::move(second_result).value();
+  const auto first_public = runtime->PublicValue(first);
+  const auto second_public = runtime->PublicValue(second);
+  ASSERT_TRUE(first_public) << first_public.error().message;
+  ASSERT_TRUE(second_public) << second_public.error().message;
+  const ovf::crypto::KeyPolicy session_policy{ovf::crypto::Algorithm::hmac_sha2_256,
+                                              ovf::crypto::KeyUsage::mac_generate};
+  auto first_secret = runtime->Agree(ovf::crypto::Algorithm::ecdh_p256, first,
+                                     second_public.value(), Bytes("session-v1"), session_policy);
+  auto second_secret = runtime->Agree(ovf::crypto::Algorithm::ecdh_p256, second,
+                                      first_public.value(), Bytes("session-v1"), session_policy);
+  ASSERT_TRUE(first_secret) << first_secret.error().message;
+  ASSERT_TRUE(second_secret) << second_secret.error().message;
+  auto first_session = std::move(first_secret).value();
+  auto second_session = std::move(second_secret).value();
+  const auto first_mac =
+      runtime->Mac(ovf::crypto::Algorithm::hmac_sha2_256, first_session, Bytes("proof"));
+  const auto second_mac =
+      runtime->Mac(ovf::crypto::Algorithm::hmac_sha2_256, second_session, Bytes("proof"));
+  ASSERT_TRUE(first_mac);
+  ASSERT_TRUE(second_mac);
+  EXPECT_EQ(first_mac.value(), second_mac.value());
+
+  const std::array malformed{std::byte{0x30}, std::byte{0x01}, std::byte{0x00}};
+  const std::array<std::span<const std::byte>, 1> anchors{malformed};
+  const ovf::crypto::CertificateValidationRequest request{
+      .leaf = malformed,
+      .intermediates = {},
+      .trust_anchors = anchors,
+      .crls = {},
+      .expected_name = {},
+      .validation_time_unix_seconds = 1'700'000'000,
+      .minimum_security_bits = 128,
+      .usage = ovf::crypto::CertificateUsage::unspecified,
+      .require_revocation = false,
+      .require_self_signed_anchor = true,
+  };
+  const auto validation = runtime->ValidateCertificate(request);
+  ASSERT_TRUE(validation) << validation.error().message;
+  EXPECT_FALSE(validation.value().valid);
+  EXPECT_EQ(validation.value().verdict, ovf::crypto::CertificateVerdict::malformed);
+}
+
 } // namespace
