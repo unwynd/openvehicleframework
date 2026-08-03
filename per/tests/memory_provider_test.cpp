@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstddef>
 #include <span>
 #include <string_view>
@@ -124,6 +125,44 @@ TEST(PerMemoryProviderTest, RejectsUnsupportedDurabilityAndConcurrentWriters) {
   const auto second = store.BeginWrite(ovf::per::Durability::buffered);
   ASSERT_FALSE(second);
   EXPECT_EQ(second.error().code, ovf::per::ErrorCode::busy);
+}
+
+TEST(PerMemoryProviderTest, ReplacesBlobsAtomicallyWithBoundedStreaming) {
+  auto runtime_result = ovf::per::Runtime::Create(*ovf_per_backend_query_v1());
+  ASSERT_TRUE(runtime_result);
+  auto runtime = std::move(runtime_result).value();
+  auto store_result = runtime->OpenStore(Options());
+  ASSERT_TRUE(store_result);
+  auto store = std::move(store_result).value();
+
+  auto writer_result = store.BeginBlobReplace(Bytes("map"), 6, ovf::per::Durability::buffered);
+  ASSERT_TRUE(writer_result) << writer_result.error().message;
+  auto writer = std::move(writer_result).value();
+  ASSERT_TRUE(writer.Write(Bytes("abc")));
+  ASSERT_TRUE(writer.Write(Bytes("def")));
+  const auto committed = writer.Commit();
+  ASSERT_TRUE(committed) << committed.error().message;
+  EXPECT_EQ(committed.value().generation, 1U);
+
+  auto reader_result = store.OpenBlob(Bytes("map"));
+  ASSERT_TRUE(reader_result);
+  auto reader = std::move(reader_result).value();
+  EXPECT_EQ(reader.size(), 6U);
+  std::array<std::byte, 3> tail{};
+  const auto read = reader.Read(3, tail);
+  ASSERT_TRUE(read);
+  EXPECT_EQ(tail, (std::array<std::byte, 3>{std::byte{'d'}, std::byte{'e'}, std::byte{'f'}}));
+  reader.Close();
+
+  {
+    auto aborted_result = store.BeginBlobReplace(Bytes("map"), 3, ovf::per::Durability::buffered);
+    ASSERT_TRUE(aborted_result);
+    auto aborted = std::move(aborted_result).value();
+    ASSERT_TRUE(aborted.Write(Bytes("new")));
+  }
+  auto retained_result = store.OpenBlob(Bytes("map"));
+  ASSERT_TRUE(retained_result);
+  EXPECT_EQ(retained_result.value().size(), 6U);
 }
 
 } // namespace

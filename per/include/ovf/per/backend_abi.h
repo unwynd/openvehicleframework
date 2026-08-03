@@ -77,6 +77,7 @@ typedef struct ovf_per_store_descriptor_v1 {
   uint32_t max_entries;
   uint32_t max_key_size;
   uint32_t max_value_size;
+  uint64_t max_blob_size;
 } ovf_per_store_descriptor_v1;
 
 typedef struct ovf_per_capabilities_v1 {
@@ -86,6 +87,7 @@ typedef struct ovf_per_capabilities_v1 {
   uint64_t max_store_bytes;
   uint32_t max_key_size;
   uint32_t max_value_size;
+  uint64_t max_blob_size;
   ovf_per_durability_v1 maximum_durability;
   uint8_t persistent;
   uint8_t cross_process_leases;
@@ -124,6 +126,19 @@ struct ovf_per_backend_v1 {
                                           ovf_per_commit_result_v1*);
   ovf_per_status_v1 (*transaction_abort)(ovf_per_backend_v1*, ovf_per_handle_v1);
   ovf_per_status_v1 (*transaction_close)(ovf_per_backend_v1*, ovf_per_handle_v1);
+  ovf_per_status_v1 (*blob_read_open)(ovf_per_backend_v1*, ovf_per_handle_v1, ovf_per_bytes_view_v1,
+                                      ovf_per_handle_v1*, uint64_t*, uint64_t*);
+  ovf_per_status_v1 (*blob_replace_begin)(ovf_per_backend_v1*, ovf_per_handle_v1,
+                                          ovf_per_bytes_view_v1, uint64_t, ovf_per_durability_v1,
+                                          ovf_per_handle_v1*, uint64_t*);
+  ovf_per_status_v1 (*blob_read)(ovf_per_backend_v1*, ovf_per_handle_v1, uint64_t,
+                                 ovf_per_mutable_bytes_v1*);
+  ovf_per_status_v1 (*blob_write)(ovf_per_backend_v1*, ovf_per_handle_v1, uint64_t,
+                                  ovf_per_bytes_view_v1);
+  ovf_per_status_v1 (*blob_commit)(ovf_per_backend_v1*, ovf_per_handle_v1,
+                                   ovf_per_commit_result_v1*);
+  ovf_per_status_v1 (*blob_abort)(ovf_per_backend_v1*, ovf_per_handle_v1);
+  ovf_per_status_v1 (*blob_close)(ovf_per_backend_v1*, ovf_per_handle_v1);
   ovf_per_status_v1 (*last_error)(ovf_per_backend_v1*, ovf_per_mutable_bytes_v1*);
 };
 

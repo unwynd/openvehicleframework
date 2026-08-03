@@ -375,7 +375,10 @@ Result<std::unique_ptr<Runtime>> Runtime::Create(const ovf_per_backend_factory_v
         backend->transaction_get != nullptr && backend->transaction_put != nullptr &&
         backend->transaction_erase != nullptr && backend->transaction_commit != nullptr &&
         backend->transaction_abort != nullptr && backend->transaction_close != nullptr &&
-        backend->last_error != nullptr;
+        backend->blob_read_open != nullptr && backend->blob_replace_begin != nullptr &&
+        backend->blob_read != nullptr && backend->blob_write != nullptr &&
+        backend->blob_commit != nullptr && backend->blob_abort != nullptr &&
+        backend->blob_close != nullptr && backend->last_error != nullptr;
     if (!valid) {
       factory.destroy(backend);
       return Error{ErrorCode::incompatible_abi, "persistency provider table is incomplete"};
@@ -440,15 +443,21 @@ Result<Capabilities> Runtime::GetCapabilities() const noexcept {
   if (status != OVF_PER_STATUS_OK) {
     return state_->MakeError(status);
   }
-  return Capabilities{capabilities.max_stores,      capabilities.max_transactions,
-                      capabilities.max_store_bytes, capabilities.max_key_size,
-                      capabilities.max_value_size,  FromAbi(capabilities.maximum_durability),
-                      capabilities.persistent != 0, capabilities.cross_process_leases != 0};
+  return Capabilities{capabilities.max_stores,
+                      capabilities.max_transactions,
+                      capabilities.max_store_bytes,
+                      capabilities.max_key_size,
+                      capabilities.max_value_size,
+                      capabilities.max_blob_size,
+                      FromAbi(capabilities.maximum_durability),
+                      capabilities.persistent != 0,
+                      capabilities.cross_process_leases != 0};
 }
 
 Result<Store> Runtime::OpenStore(StoreOptions options) const noexcept {
   if (state_ == nullptr || options.logical_name.empty() || options.capacity_bytes == 0 ||
-      options.max_entries == 0 || options.max_key_size == 0 || options.max_value_size == 0) {
+      options.max_entries == 0 || options.max_key_size == 0 || options.max_value_size == 0 ||
+      options.max_blob_size == 0) {
     return Error{ErrorCode::invalid_argument, "store options are invalid"};
   }
   std::scoped_lock lock(state_->mutex_);
@@ -460,11 +469,155 @@ Result<Store> Runtime::OpenStore(StoreOptions options) const noexcept {
       options.capacity_bytes,
       options.max_entries,
       options.max_key_size,
-      options.max_value_size};
+      options.max_value_size,
+      options.max_blob_size};
   ovf_per_handle_v1 handle{};
   const auto status = state_->backend_->store_open(state_->backend_, &descriptor, &handle);
   return status == OVF_PER_STATUS_OK ? Result<Store>(Store(state_, handle))
                                      : Result<Store>(state_->MakeError(status));
+}
+
+Store::BlobReader::BlobReader(std::shared_ptr<detail::RuntimeState> state, ovf_per_handle_v1 handle,
+                              std::uint64_t size, std::uint64_t generation) noexcept
+    : state_(std::move(state)), handle_(handle), size_(size), generation_(generation) {}
+Store::BlobReader::~BlobReader() { Close(); }
+Store::BlobReader::BlobReader(BlobReader&& other) noexcept
+    : state_(std::move(other.state_)), handle_(std::exchange(other.handle_, 0)), size_(other.size_),
+      generation_(other.generation_) {}
+Store::BlobReader& Store::BlobReader::operator=(BlobReader&& other) noexcept {
+  if (this != &other) {
+    Close();
+    state_ = std::move(other.state_);
+    handle_ = std::exchange(other.handle_, 0);
+    size_ = other.size_;
+    generation_ = other.generation_;
+  }
+  return *this;
+}
+bool Store::BlobReader::valid() const noexcept {
+  return state_ != nullptr && handle_ != OVF_PER_INVALID_HANDLE_V1;
+}
+std::uint64_t Store::BlobReader::size() const noexcept { return size_; }
+std::uint64_t Store::BlobReader::generation() const noexcept { return generation_; }
+Result<std::size_t> Store::BlobReader::Read(std::uint64_t offset,
+                                            std::span<std::byte> output) const noexcept {
+  if (!valid() || offset > size_ || output.size() > size_ - offset) {
+    return Error{ErrorCode::invalid_argument, "blob read is outside its declared size"};
+  }
+  if (output.empty()) {
+    return std::size_t{0};
+  }
+  std::scoped_lock lock(state_->mutex_);
+  ovf_per_mutable_bytes_v1 bytes{reinterpret_cast<std::uint8_t*>(output.data()), output.size()};
+  const auto status = state_->backend_->blob_read(state_->backend_, handle_, offset, &bytes);
+  return status == OVF_PER_STATUS_OK ? Result<std::size_t>(bytes.size)
+                                     : Result<std::size_t>(state_->MakeError(status));
+}
+void Store::BlobReader::Close() noexcept {
+  if (valid()) {
+    std::scoped_lock lock(state_->mutex_);
+    if (state_->running_) {
+      static_cast<void>(state_->backend_->blob_close(state_->backend_, handle_));
+    }
+  }
+  handle_ = OVF_PER_INVALID_HANDLE_V1;
+  state_.reset();
+}
+
+Store::BlobWriter::BlobWriter(std::shared_ptr<detail::RuntimeState> state, ovf_per_handle_v1 handle,
+                              std::uint64_t size, std::uint64_t position) noexcept
+    : state_(std::move(state)), handle_(handle), size_(size), position_(position) {}
+Store::BlobWriter::~BlobWriter() { Abort(); }
+Store::BlobWriter::BlobWriter(BlobWriter&& other) noexcept
+    : state_(std::move(other.state_)), handle_(std::exchange(other.handle_, 0)), size_(other.size_),
+      position_(other.position_) {}
+Store::BlobWriter& Store::BlobWriter::operator=(BlobWriter&& other) noexcept {
+  if (this != &other) {
+    Abort();
+    state_ = std::move(other.state_);
+    handle_ = std::exchange(other.handle_, 0);
+    size_ = other.size_;
+    position_ = other.position_;
+  }
+  return *this;
+}
+bool Store::BlobWriter::valid() const noexcept {
+  return state_ != nullptr && handle_ != OVF_PER_INVALID_HANDLE_V1;
+}
+std::uint64_t Store::BlobWriter::size() const noexcept { return size_; }
+std::uint64_t Store::BlobWriter::position() const noexcept { return position_; }
+Result<std::size_t> Store::BlobWriter::Write(std::span<const std::byte> input) noexcept {
+  if (!valid() || position_ > size_ || input.size() > size_ - position_) {
+    return Error{ErrorCode::invalid_argument, "blob write exceeds its declared size"};
+  }
+  if (input.empty()) {
+    return std::size_t{0};
+  }
+  std::scoped_lock lock(state_->mutex_);
+  const auto status =
+      state_->backend_->blob_write(state_->backend_, handle_, position_, View(input));
+  if (status != OVF_PER_STATUS_OK) {
+    return state_->MakeError(status);
+  }
+  position_ += input.size();
+  return input.size();
+}
+Result<CommitInfo> Store::BlobWriter::Commit() noexcept {
+  if (!valid() || position_ != size_) {
+    return Error{ErrorCode::invalid_state, "blob replacement is incomplete"};
+  }
+  std::scoped_lock lock(state_->mutex_);
+  ovf_per_commit_result_v1 result{};
+  result.struct_size = sizeof(result);
+  const auto status = state_->backend_->blob_commit(state_->backend_, handle_, &result);
+  if (status != OVF_PER_STATUS_OK) {
+    return state_->MakeError(status);
+  }
+  static_cast<void>(state_->backend_->blob_close(state_->backend_, handle_));
+  handle_ = OVF_PER_INVALID_HANDLE_V1;
+  state_.reset();
+  return CommitInfo{result.generation, FromAbi(result.achieved_durability)};
+}
+void Store::BlobWriter::Abort() noexcept {
+  if (valid()) {
+    std::scoped_lock lock(state_->mutex_);
+    if (state_->running_) {
+      static_cast<void>(state_->backend_->blob_abort(state_->backend_, handle_));
+      static_cast<void>(state_->backend_->blob_close(state_->backend_, handle_));
+    }
+  }
+  handle_ = OVF_PER_INVALID_HANDLE_V1;
+  state_.reset();
+}
+
+Result<Store::BlobReader> Store::OpenBlob(std::span<const std::byte> key) const noexcept {
+  if (!valid() || key.empty()) {
+    return Error{ErrorCode::invalid_argument, "store or blob key is invalid"};
+  }
+  std::scoped_lock lock(state_->mutex_);
+  ovf_per_handle_v1 blob{};
+  std::uint64_t size{};
+  std::uint64_t generation{};
+  const auto status = state_->backend_->blob_read_open(state_->backend_, handle_, View(key), &blob,
+                                                       &size, &generation);
+  return status == OVF_PER_STATUS_OK
+             ? Result<BlobReader>(BlobReader(state_, blob, size, generation))
+             : Result<BlobReader>(state_->MakeError(status));
+}
+
+Result<Store::BlobWriter> Store::BeginBlobReplace(std::span<const std::byte> key,
+                                                  std::uint64_t size,
+                                                  Durability durability) const noexcept {
+  if (!valid() || key.empty()) {
+    return Error{ErrorCode::invalid_argument, "store or blob key is invalid"};
+  }
+  std::scoped_lock lock(state_->mutex_);
+  ovf_per_handle_v1 blob{};
+  std::uint64_t generation{};
+  const auto status = state_->backend_->blob_replace_begin(
+      state_->backend_, handle_, View(key), size, ToAbi(durability), &blob, &generation);
+  return status == OVF_PER_STATUS_OK ? Result<BlobWriter>(BlobWriter(state_, blob, size, 0))
+                                     : Result<BlobWriter>(state_->MakeError(status));
 }
 
 void Runtime::Stop() noexcept {

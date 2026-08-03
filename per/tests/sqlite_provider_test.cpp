@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstdlib>
 #include <span>
 #include <string>
@@ -116,6 +117,41 @@ TEST(PerSqliteProviderTest, DeploymentMismatchCannotReinterpretExistingStore) {
   const auto incompatible = runtime->OpenStore(Options(2048));
   ASSERT_FALSE(incompatible);
   EXPECT_EQ(incompatible.error().code, ovf::per::ErrorCode::invalid_argument);
+}
+
+TEST(PerSqliteProviderTest, StreamsAndPersistsAtomicBlobReplacement) {
+  const auto root = TestRoot("blob");
+  {
+    auto runtime_result = ovf::per::Runtime::Create(*ovf_per_sqlite_backend_query_v1(),
+                                                    {.configuration = Configuration(root)});
+    ASSERT_TRUE(runtime_result);
+    auto runtime = std::move(runtime_result).value();
+    auto store_result = runtime->OpenStore(Options());
+    ASSERT_TRUE(store_result) << store_result.error().message;
+    auto store = std::move(store_result).value();
+    auto writer_result =
+        store.BeginBlobReplace(Bytes("occupancy-grid"), 8, ovf::per::Durability::process_crash);
+    ASSERT_TRUE(writer_result) << writer_result.error().message;
+    auto writer = std::move(writer_result).value();
+    ASSERT_TRUE(writer.Write(Bytes("grid")));
+    ASSERT_TRUE(writer.Write(Bytes("data")));
+    ASSERT_TRUE(writer.Commit());
+  }
+
+  auto runtime_result = ovf::per::Runtime::Create(*ovf_per_sqlite_backend_query_v1(),
+                                                  {.configuration = Configuration(root)});
+  ASSERT_TRUE(runtime_result);
+  auto runtime = std::move(runtime_result).value();
+  auto store_result = runtime->OpenStore(Options());
+  ASSERT_TRUE(store_result);
+  auto store = std::move(store_result).value();
+  auto reader_result = store.OpenBlob(Bytes("occupancy-grid"));
+  ASSERT_TRUE(reader_result) << reader_result.error().message;
+  auto reader = std::move(reader_result).value();
+  std::array<std::byte, 8> bytes{};
+  ASSERT_TRUE(reader.Read(0, bytes));
+  EXPECT_EQ(bytes.front(), std::byte{'g'});
+  EXPECT_EQ(bytes.back(), std::byte{'a'});
 }
 
 } // namespace

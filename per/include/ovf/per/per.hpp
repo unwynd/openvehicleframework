@@ -71,6 +71,7 @@ struct StoreOptions final {
   std::uint32_t max_entries{1024};
   std::uint32_t max_key_size{256};
   std::uint32_t max_value_size{64U * 1024U};
+  std::uint64_t max_blob_size{16U * 1024U * 1024U};
 };
 
 struct Capabilities final {
@@ -79,6 +80,7 @@ struct Capabilities final {
   std::uint64_t max_store_bytes{};
   std::uint32_t max_key_size{};
   std::uint32_t max_value_size{};
+  std::uint64_t max_blob_size{};
   Durability maximum_durability{};
   bool persistent{};
   bool cross_process_leases{};
@@ -154,6 +156,12 @@ public:
   [[nodiscard]] Result<ReadTransaction> BeginRead() const noexcept;
   [[nodiscard]] Result<WriteTransaction>
   BeginWrite(Durability durability = Durability::process_crash) const noexcept;
+  class BlobReader;
+  class BlobWriter;
+  [[nodiscard]] Result<BlobReader> OpenBlob(std::span<const std::byte> key) const noexcept;
+  [[nodiscard]] Result<BlobWriter>
+  BeginBlobReplace(std::span<const std::byte> key, std::uint64_t size,
+                   Durability durability = Durability::process_crash) const noexcept;
   void Close() noexcept;
 
 private:
@@ -161,6 +169,56 @@ private:
   Store(std::shared_ptr<detail::RuntimeState>, ovf_per_handle_v1) noexcept;
   std::shared_ptr<detail::RuntimeState> state_;
   ovf_per_handle_v1 handle_{};
+};
+
+class Store::BlobReader final {
+public:
+  BlobReader() = default;
+  ~BlobReader();
+  BlobReader(BlobReader const&) = delete;
+  BlobReader& operator=(BlobReader const&) = delete;
+  BlobReader(BlobReader&&) noexcept;
+  BlobReader& operator=(BlobReader&&) noexcept;
+  [[nodiscard]] bool valid() const noexcept;
+  [[nodiscard]] std::uint64_t size() const noexcept;
+  [[nodiscard]] std::uint64_t generation() const noexcept;
+  [[nodiscard]] Result<std::size_t> Read(std::uint64_t offset,
+                                         std::span<std::byte> output) const noexcept;
+  void Close() noexcept;
+
+private:
+  friend class Store;
+  BlobReader(std::shared_ptr<detail::RuntimeState>, ovf_per_handle_v1, std::uint64_t,
+             std::uint64_t) noexcept;
+  std::shared_ptr<detail::RuntimeState> state_;
+  ovf_per_handle_v1 handle_{};
+  std::uint64_t size_{};
+  std::uint64_t generation_{};
+};
+
+class Store::BlobWriter final {
+public:
+  BlobWriter() = default;
+  ~BlobWriter();
+  BlobWriter(BlobWriter const&) = delete;
+  BlobWriter& operator=(BlobWriter const&) = delete;
+  BlobWriter(BlobWriter&&) noexcept;
+  BlobWriter& operator=(BlobWriter&&) noexcept;
+  [[nodiscard]] bool valid() const noexcept;
+  [[nodiscard]] std::uint64_t size() const noexcept;
+  [[nodiscard]] std::uint64_t position() const noexcept;
+  [[nodiscard]] Result<std::size_t> Write(std::span<const std::byte> input) noexcept;
+  [[nodiscard]] Result<CommitInfo> Commit() noexcept;
+  void Abort() noexcept;
+
+private:
+  friend class Store;
+  BlobWriter(std::shared_ptr<detail::RuntimeState>, ovf_per_handle_v1, std::uint64_t,
+             std::uint64_t) noexcept;
+  std::shared_ptr<detail::RuntimeState> state_;
+  ovf_per_handle_v1 handle_{};
+  std::uint64_t size_{};
+  std::uint64_t position_{};
 };
 
 class Runtime final {
