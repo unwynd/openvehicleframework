@@ -122,6 +122,11 @@ public:
     return running_ && backend_->key_destroy(backend_, handle) == OVF_CRYPTO_STATUS_OK;
   }
 
+  bool DestroyStream(ovf_crypto_handle_v1 handle) noexcept {
+    std::scoped_lock lock(mutex_);
+    return running_ && backend_->stream_destroy(backend_, handle) == OVF_CRYPTO_STATUS_OK;
+  }
+
   ovf_crypto_backend_factory_v1 factory_{};
   ovf_crypto_backend_v1* backend_{};
   void* library_{};
@@ -158,6 +163,96 @@ bool Key::valid() const noexcept {
   return state_ != nullptr && handle_ != OVF_CRYPTO_INVALID_HANDLE_V1;
 }
 
+InputStream::InputStream(std::shared_ptr<detail::RuntimeState> state, ovf_crypto_handle_v1 handle,
+                         ovf_crypto_stream_operation_v1 operation) noexcept
+    : state_(std::move(state)), handle_(handle), operation_(operation) {}
+
+InputStream::~InputStream() { Cancel(); }
+
+InputStream::InputStream(InputStream&& other) noexcept
+    : state_(std::move(other.state_)), handle_(std::exchange(other.handle_, 0)),
+      operation_(other.operation_) {}
+
+InputStream& InputStream::operator=(InputStream&& other) noexcept {
+  if (this != &other) {
+    Cancel();
+    state_ = std::move(other.state_);
+    handle_ = std::exchange(other.handle_, 0);
+    operation_ = other.operation_;
+  }
+  return *this;
+}
+
+bool InputStream::valid() const noexcept {
+  return state_ != nullptr && handle_ != OVF_CRYPTO_INVALID_HANDLE_V1;
+}
+
+Result<bool> InputStream::Update(std::span<const std::byte> input) noexcept {
+  if (!valid()) {
+    return Error{ErrorCode::invalid_state, "stream is not active"};
+  }
+  std::scoped_lock lock(state_->mutex_);
+  const auto status = state_->backend_->stream_update(state_->backend_, handle_, View(input));
+  return status == OVF_CRYPTO_STATUS_OK ? Result<bool>(true)
+                                        : Result<bool>(state_->MakeError(status));
+}
+
+Result<std::vector<std::byte>> InputStream::Finish() noexcept {
+  if (!valid() || operation_ == OVF_CRYPTO_STREAM_VERIFY) {
+    return Error{ErrorCode::invalid_state, "stream cannot produce an output"};
+  }
+  std::scoped_lock lock(state_->mutex_);
+  try {
+    ovf_crypto_mutable_bytes_v1 output{nullptr, 0};
+    auto status =
+        state_->backend_->stream_finish(state_->backend_, handle_, {nullptr, 0}, &output, nullptr);
+    if (status != OVF_CRYPTO_STATUS_BUFFER_TOO_SMALL || output.size > 64U * 1024U) {
+      return status == OVF_CRYPTO_STATUS_BUFFER_TOO_SMALL
+                 ? Error{ErrorCode::resource_exhausted, "stream output exceeds its limit"}
+                 : state_->MakeError(status);
+    }
+    std::vector<std::byte> bytes(output.size);
+    output.data = reinterpret_cast<std::uint8_t*>(bytes.data());
+    status =
+        state_->backend_->stream_finish(state_->backend_, handle_, {nullptr, 0}, &output, nullptr);
+    if (status != OVF_CRYPTO_STATUS_OK || output.size > bytes.size()) {
+      return status == OVF_CRYPTO_STATUS_OK
+                 ? Error{ErrorCode::incompatible_abi, "provider returned an invalid stream output"}
+                 : state_->MakeError(status);
+    }
+    bytes.resize(output.size);
+    handle_ = OVF_CRYPTO_INVALID_HANDLE_V1;
+    state_.reset();
+    return bytes;
+  } catch (...) {
+    return Error{ErrorCode::resource_exhausted, "cannot allocate stream output"};
+  }
+}
+
+Result<bool> InputStream::FinishVerify(std::span<const std::byte> signature) noexcept {
+  if (!valid() || operation_ != OVF_CRYPTO_STREAM_VERIFY || signature.empty()) {
+    return Error{ErrorCode::invalid_state, "stream is not a verifier"};
+  }
+  std::scoped_lock lock(state_->mutex_);
+  std::uint8_t valid{};
+  const auto status =
+      state_->backend_->stream_finish(state_->backend_, handle_, View(signature), nullptr, &valid);
+  if (status != OVF_CRYPTO_STATUS_OK) {
+    return state_->MakeError(status);
+  }
+  handle_ = OVF_CRYPTO_INVALID_HANDLE_V1;
+  state_.reset();
+  return valid != 0;
+}
+
+void InputStream::Cancel() noexcept {
+  if (valid()) {
+    static_cast<void>(state_->DestroyStream(handle_));
+    handle_ = OVF_CRYPTO_INVALID_HANDLE_V1;
+    state_.reset();
+  }
+}
+
 Runtime::Runtime(std::shared_ptr<detail::RuntimeState> state, void* library) noexcept
     : state_(std::move(state)), library_(library) {}
 
@@ -190,17 +285,19 @@ Result<std::unique_ptr<Runtime>> Runtime::Create(const ovf_crypto_backend_factor
     }
     constexpr auto required_backend_size =
         offsetof(ovf_crypto_backend_v1, last_error) + sizeof(backend->last_error);
-    const bool valid = backend->struct_size >= required_backend_size &&
-                       backend->abi_version == OVF_CRYPTO_BACKEND_ABI_VERSION_1 &&
-                       backend->start != nullptr && backend->stop != nullptr &&
-                       backend->get_capabilities != nullptr && backend->random_bytes != nullptr &&
-                       backend->key_import != nullptr && backend->key_generate != nullptr &&
-                       backend->key_destroy != nullptr && backend->hash != nullptr &&
-                       backend->mac != nullptr && backend->aead_encrypt != nullptr &&
-                       backend->aead_decrypt != nullptr && backend->sign != nullptr &&
-                       backend->verify != nullptr && backend->derive != nullptr &&
-                       backend->key_public_value != nullptr && backend->key_agree != nullptr &&
-                       backend->certificate_validate != nullptr && backend->last_error != nullptr;
+    const bool valid =
+        backend->struct_size >= required_backend_size &&
+        backend->abi_version == OVF_CRYPTO_BACKEND_ABI_VERSION_1 && backend->start != nullptr &&
+        backend->stop != nullptr && backend->get_capabilities != nullptr &&
+        backend->random_bytes != nullptr && backend->key_import != nullptr &&
+        backend->key_generate != nullptr && backend->key_destroy != nullptr &&
+        backend->hash != nullptr && backend->mac != nullptr && backend->aead_encrypt != nullptr &&
+        backend->aead_decrypt != nullptr && backend->sign != nullptr &&
+        backend->verify != nullptr && backend->derive != nullptr &&
+        backend->key_public_value != nullptr && backend->key_agree != nullptr &&
+        backend->certificate_validate != nullptr && backend->stream_create != nullptr &&
+        backend->stream_update != nullptr && backend->stream_finish != nullptr &&
+        backend->stream_destroy != nullptr && backend->last_error != nullptr;
     if (!valid) {
       factory.destroy(backend);
       return Error{ErrorCode::incompatible_abi, "incomplete cryptographic provider ABI"};
@@ -616,6 +713,45 @@ Runtime::ValidateCertificate(const CertificateValidationRequest& request) const 
   } catch (...) {
     return Error{ErrorCode::resource_exhausted, "cannot allocate certificate-validation input"};
   }
+}
+
+Result<InputStream> Runtime::BeginStream(ovf_crypto_stream_operation_v1 operation,
+                                         Algorithm algorithm, const Key* key) const noexcept {
+  if (key != nullptr && (!key->valid() || key->state_ != state_)) {
+    return Error{ErrorCode::invalid_argument, "key belongs to another runtime"};
+  }
+  const ovf_crypto_stream_descriptor_v1 descriptor{sizeof(descriptor),
+                                                   operation,
+                                                   static_cast<std::uint32_t>(algorithm),
+                                                   key == nullptr ? OVF_CRYPTO_INVALID_HANDLE_V1
+                                                                  : key->handle_,
+                                                   {}};
+  ovf_crypto_handle_v1 handle{};
+  std::scoped_lock lock(state_->mutex_);
+  const auto status = state_->backend_->stream_create(state_->backend_, &descriptor, &handle);
+  if (status != OVF_CRYPTO_STATUS_OK) {
+    return state_->MakeError(status);
+  }
+  if (handle == OVF_CRYPTO_INVALID_HANDLE_V1) {
+    return Error{ErrorCode::incompatible_abi, "provider returned an invalid stream handle"};
+  }
+  return InputStream(state_, handle, operation);
+}
+
+Result<InputStream> Runtime::BeginHash(Algorithm algorithm) const noexcept {
+  return BeginStream(OVF_CRYPTO_STREAM_HASH, algorithm, nullptr);
+}
+
+Result<InputStream> Runtime::BeginMac(Algorithm algorithm, const Key& key) const noexcept {
+  return BeginStream(OVF_CRYPTO_STREAM_MAC, algorithm, &key);
+}
+
+Result<InputStream> Runtime::BeginSign(Algorithm algorithm, const Key& key) const noexcept {
+  return BeginStream(OVF_CRYPTO_STREAM_SIGN, algorithm, &key);
+}
+
+Result<InputStream> Runtime::BeginVerify(Algorithm algorithm, const Key& key) const noexcept {
+  return BeginStream(OVF_CRYPTO_STREAM_VERIFY, algorithm, &key);
 }
 
 void Runtime::Stop() noexcept {

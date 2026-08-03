@@ -193,4 +193,84 @@ TEST(BotanProviderTest, AgreesOnTheSameKeyAndRejectsMalformedCertificates) {
   EXPECT_EQ(validation.value().verdict, ovf::crypto::CertificateVerdict::malformed);
 }
 
+TEST(BotanProviderTest, StreamsHashMacSignAndVerifyWithoutBufferingMessages) {
+  auto runtime = CreateRuntime();
+  ASSERT_NE(runtime, nullptr);
+
+  auto hash_result = runtime->BeginHash(ovf::crypto::Algorithm::sha2_256);
+  ASSERT_TRUE(hash_result) << hash_result.error().message;
+  auto hash = std::move(hash_result).value();
+  ASSERT_TRUE(hash.Update(Bytes("large ")));
+  ASSERT_TRUE(hash.Update(Bytes("message")));
+  const auto streamed_digest = hash.Finish();
+  const auto direct_digest =
+      runtime->Hash(ovf::crypto::Algorithm::sha2_256, Bytes("large message"));
+  ASSERT_TRUE(streamed_digest);
+  ASSERT_TRUE(direct_digest);
+  EXPECT_EQ(streamed_digest.value(), direct_digest.value());
+  EXPECT_FALSE(hash.valid());
+
+  const auto key_material = Hex<32>("000102030405060708090a0b0c0d0e0f"
+                                    "101112131415161718191a1b1c1d1e1f");
+  auto mac_key_result = runtime->ImportKey(
+      {ovf::crypto::Algorithm::hmac_sha2_256, ovf::crypto::KeyUsage::mac_generate},
+      ovf::crypto::KeyFormat::raw, key_material);
+  ASSERT_TRUE(mac_key_result);
+  auto mac_key = std::move(mac_key_result).value();
+  auto mac_result = runtime->BeginMac(ovf::crypto::Algorithm::hmac_sha2_256, mac_key);
+  ASSERT_TRUE(mac_result);
+  auto mac = std::move(mac_result).value();
+  ASSERT_TRUE(mac.Update(Bytes("large ")));
+  ASSERT_TRUE(mac.Update(Bytes("message")));
+  const auto streamed_mac = mac.Finish();
+  const auto direct_mac =
+      runtime->Mac(ovf::crypto::Algorithm::hmac_sha2_256, mac_key, Bytes("large message"));
+  ASSERT_TRUE(streamed_mac);
+  ASSERT_TRUE(direct_mac);
+  EXPECT_EQ(streamed_mac.value(), direct_mac.value());
+
+  auto signing_key_result =
+      runtime->GenerateKey({ovf::crypto::Algorithm::ed25519,
+                            ovf::crypto::KeyUsage::sign | ovf::crypto::KeyUsage::verify});
+  ASSERT_TRUE(signing_key_result);
+  auto signing_key = std::move(signing_key_result).value();
+  auto signer_result = runtime->BeginSign(ovf::crypto::Algorithm::ed25519, signing_key);
+  ASSERT_TRUE(signer_result);
+  auto signer = std::move(signer_result).value();
+  ASSERT_TRUE(signer.Update(Bytes("large ")));
+  ASSERT_TRUE(signer.Update(Bytes("message")));
+  const auto signature = signer.Finish();
+  ASSERT_TRUE(signature);
+
+  auto verifier_result = runtime->BeginVerify(ovf::crypto::Algorithm::ed25519, signing_key);
+  ASSERT_TRUE(verifier_result);
+  auto verifier = std::move(verifier_result).value();
+  ASSERT_TRUE(verifier.Update(Bytes("large ")));
+  ASSERT_TRUE(verifier.Update(Bytes("message")));
+  const auto valid = verifier.FinishVerify(signature.value());
+  ASSERT_TRUE(valid);
+  EXPECT_TRUE(valid.value());
+  EXPECT_FALSE(verifier.valid());
+}
+
+TEST(BotanProviderTest, BoundsAndReclaimsStreamingContexts) {
+  const auto* factory = ovf_crypto_backend_query_v1();
+  ovf::crypto::RuntimeConfig config;
+  config.max_keys = 2;
+  config.max_contexts = 1;
+  auto runtime_result = ovf::crypto::Runtime::Create(*factory, std::move(config));
+  ASSERT_TRUE(runtime_result);
+  auto runtime = std::move(runtime_result).value();
+  auto first_result = runtime->BeginHash(ovf::crypto::Algorithm::sha2_256);
+  ASSERT_TRUE(first_result);
+  auto first = std::move(first_result).value();
+  const auto exhausted = runtime->BeginHash(ovf::crypto::Algorithm::sha2_256);
+  ASSERT_FALSE(exhausted);
+  EXPECT_EQ(exhausted.error().code, ovf::crypto::ErrorCode::resource_exhausted);
+  first.Cancel();
+  EXPECT_FALSE(first.valid());
+  const auto replacement = runtime->BeginHash(ovf::crypto::Algorithm::sha2_256);
+  EXPECT_TRUE(replacement);
+}
+
 } // namespace

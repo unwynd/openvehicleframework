@@ -30,6 +30,7 @@
 #include <span>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -45,12 +46,25 @@ struct KeyEntry final {
   std::unique_ptr<Botan::Public_Key> public_key;
 };
 
+using StreamPrimitive =
+    std::variant<std::unique_ptr<Botan::HashFunction>,
+                 std::unique_ptr<Botan::MessageAuthenticationCode>,
+                 std::unique_ptr<Botan::PK_Signer>, std::unique_ptr<Botan::PK_Verifier>>;
+
+struct StreamEntry final {
+  std::uint32_t generation{1};
+  ovf_crypto_stream_operation_v1 operation{};
+  StreamPrimitive primitive;
+};
+
 struct Backend final {
   ovf_crypto_backend_v1 abi{};
   std::mutex mutex;
   Botan::AutoSeeded_RNG rng;
   std::vector<std::optional<KeyEntry>> keys;
   std::vector<std::uint32_t> generations;
+  std::vector<std::optional<StreamEntry>> streams;
+  std::vector<std::uint32_t> stream_generations;
   std::string last_error;
   bool running{};
 };
@@ -89,6 +103,19 @@ KeyEntry* FindKey(Backend& backend, ovf_crypto_handle_v1 handle) noexcept {
     return nullptr;
   }
   auto& slot = backend.keys[encoded_index - 1U];
+  return slot.has_value() && slot->generation == generation ? &*slot : nullptr;
+}
+
+StreamEntry* FindStream(Backend& backend, ovf_crypto_handle_v1 handle) noexcept {
+  if (handle == OVF_CRYPTO_INVALID_HANDLE_V1) {
+    return nullptr;
+  }
+  const auto encoded_index = static_cast<std::uint32_t>(handle);
+  const auto generation = static_cast<std::uint32_t>(handle >> 32U);
+  if (encoded_index == 0 || encoded_index > backend.streams.size()) {
+    return nullptr;
+  }
+  auto& slot = backend.streams[encoded_index - 1U];
   return slot.has_value() && slot->generation == generation ? &*slot : nullptr;
 }
 
@@ -191,6 +218,9 @@ void Stop(ovf_crypto_backend_v1* self) {
   backend.running = false;
   for (auto& key : backend.keys) {
     key.reset();
+  }
+  for (auto& stream : backend.streams) {
+    stream.reset();
   }
 }
 
@@ -689,6 +719,181 @@ ValidateCertificate(ovf_crypto_backend_v1* self,
   }
 }
 
+ovf_crypto_status_v1 StoreStream(Backend& backend, StreamEntry entry,
+                                 ovf_crypto_handle_v1* output) {
+  if (output == nullptr) {
+    return Fail(backend, OVF_CRYPTO_STATUS_INVALID_ARGUMENT, "stream handle output is null");
+  }
+  for (std::size_t index = 0; index < backend.streams.size(); ++index) {
+    if (!backend.streams[index].has_value()) {
+      entry.generation = backend.stream_generations[index];
+      backend.streams[index].emplace(std::move(entry));
+      *output = Handle(index, backend.stream_generations[index]);
+      return OVF_CRYPTO_STATUS_OK;
+    }
+  }
+  return Fail(backend, OVF_CRYPTO_STATUS_RESOURCE_EXHAUSTED, "stream capacity is exhausted");
+}
+
+ovf_crypto_status_v1 CreateStream(ovf_crypto_backend_v1* self,
+                                  const ovf_crypto_stream_descriptor_v1* descriptor,
+                                  ovf_crypto_handle_v1* output) {
+  auto& backend = *Self(self);
+  std::scoped_lock lock(backend.mutex);
+  if (!backend.running || descriptor == nullptr || descriptor->struct_size < sizeof(*descriptor) ||
+      output == nullptr) {
+    return Fail(backend, OVF_CRYPTO_STATUS_INVALID_ARGUMENT, "invalid stream request");
+  }
+  try {
+    StreamEntry stream;
+    stream.operation = descriptor->operation;
+    auto* key = FindKey(backend, descriptor->key);
+    if (descriptor->operation == OVF_CRYPTO_STREAM_HASH) {
+      const auto* name = HashName(descriptor->algorithm);
+      if (name == nullptr || descriptor->key != OVF_CRYPTO_INVALID_HANDLE_V1) {
+        return Fail(backend, OVF_CRYPTO_STATUS_INVALID_ARGUMENT, "invalid hash stream");
+      }
+      stream.primitive = Botan::HashFunction::create_or_throw(name);
+    } else if (descriptor->operation == OVF_CRYPTO_STREAM_MAC) {
+      if (descriptor->algorithm != OVF_CRYPTO_ALGORITHM_HMAC_SHA2_256 || key == nullptr ||
+          key->algorithm != descriptor->algorithm ||
+          !Permits(*key, OVF_CRYPTO_KEY_USAGE_MAC_GENERATE)) {
+        return Fail(backend, OVF_CRYPTO_STATUS_PERMISSION_DENIED,
+                    "MAC stream key policy rejected the request");
+      }
+      auto mac = Botan::MessageAuthenticationCode::create_or_throw("HMAC(SHA-256)");
+      mac->set_key(key->secret);
+      stream.primitive = std::move(mac);
+    } else if (descriptor->operation == OVF_CRYPTO_STREAM_SIGN) {
+      const auto* padding = SignaturePadding(descriptor->algorithm);
+      if (key == nullptr || key->private_key == nullptr ||
+          key->algorithm != descriptor->algorithm || !Permits(*key, OVF_CRYPTO_KEY_USAGE_SIGN) ||
+          padding == nullptr) {
+        return Fail(backend, OVF_CRYPTO_STATUS_PERMISSION_DENIED,
+                    "sign stream key policy rejected the request");
+      }
+      stream.primitive = std::make_unique<Botan::PK_Signer>(*key->private_key, backend.rng, padding,
+                                                            SignatureFormat(descriptor->algorithm));
+    } else if (descriptor->operation == OVF_CRYPTO_STREAM_VERIFY) {
+      const auto* padding = SignaturePadding(descriptor->algorithm);
+      if (key == nullptr || key->algorithm != descriptor->algorithm ||
+          !Permits(*key, OVF_CRYPTO_KEY_USAGE_VERIFY) || padding == nullptr) {
+        return Fail(backend, OVF_CRYPTO_STATUS_PERMISSION_DENIED,
+                    "verify stream key policy rejected the request");
+      }
+      std::unique_ptr<Botan::Public_Key> derived;
+      const Botan::Public_Key* public_key = key->public_key.get();
+      if (public_key == nullptr && key->private_key != nullptr) {
+        derived = key->private_key->public_key();
+        public_key = derived.get();
+      }
+      if (public_key == nullptr) {
+        return Fail(backend, OVF_CRYPTO_STATUS_PERMISSION_DENIED,
+                    "verification key has no public component");
+      }
+      stream.primitive = std::make_unique<Botan::PK_Verifier>(
+          *public_key, padding, SignatureFormat(descriptor->algorithm));
+    } else {
+      return Fail(backend, OVF_CRYPTO_STATUS_UNSUPPORTED, "unsupported stream operation");
+    }
+    return StoreStream(backend, std::move(stream), output);
+  } catch (const std::exception& exception) {
+    return BotanFailure(backend, exception);
+  }
+}
+
+ovf_crypto_status_v1 UpdateStream(ovf_crypto_backend_v1* self, ovf_crypto_handle_v1 handle,
+                                  ovf_crypto_bytes_view_v1 input) {
+  auto& backend = *Self(self);
+  std::scoped_lock lock(backend.mutex);
+  auto* stream = FindStream(backend, handle);
+  if (!backend.running || stream == nullptr || !ValidView(input) ||
+      input.size > kMaximumOperationSize) {
+    return Fail(backend, OVF_CRYPTO_STATUS_INVALID_ARGUMENT, "invalid stream update");
+  }
+  try {
+    std::visit([&](auto& primitive) { primitive->update(Span(input)); }, stream->primitive);
+    return OVF_CRYPTO_STATUS_OK;
+  } catch (const std::exception& exception) {
+    return BotanFailure(backend, exception);
+  }
+}
+
+void ReleaseStream(Backend& backend, ovf_crypto_handle_v1 handle) {
+  const auto index = static_cast<std::uint32_t>(handle) - 1U;
+  backend.streams[index].reset();
+  ++backend.stream_generations[index];
+  if (backend.stream_generations[index] == 0) {
+    backend.stream_generations[index] = 1;
+  }
+}
+
+ovf_crypto_status_v1 FinishStream(ovf_crypto_backend_v1* self, ovf_crypto_handle_v1 handle,
+                                  ovf_crypto_bytes_view_v1 terminal_input,
+                                  ovf_crypto_mutable_bytes_v1* output, std::uint8_t* valid) {
+  auto& backend = *Self(self);
+  std::scoped_lock lock(backend.mutex);
+  auto* stream = FindStream(backend, handle);
+  if (!backend.running || stream == nullptr || !ValidView(terminal_input)) {
+    return Fail(backend, OVF_CRYPTO_STATUS_INVALID_ARGUMENT, "invalid stream finalization");
+  }
+  try {
+    if (stream->operation == OVF_CRYPTO_STREAM_VERIFY) {
+      if (output != nullptr || valid == nullptr || terminal_input.size == 0) {
+        return Fail(backend, OVF_CRYPTO_STATUS_INVALID_ARGUMENT, "invalid verify finalization");
+      }
+      auto& verifier = *std::get<std::unique_ptr<Botan::PK_Verifier>>(stream->primitive);
+      *valid = verifier.check_signature(Span(terminal_input)) ? 1U : 0U;
+      ReleaseStream(backend, handle);
+      return OVF_CRYPTO_STATUS_OK;
+    }
+    if (output == nullptr || valid != nullptr || terminal_input.size != 0) {
+      return Fail(backend, OVF_CRYPTO_STATUS_INVALID_ARGUMENT, "invalid stream output request");
+    }
+    std::size_t required{};
+    if (stream->operation == OVF_CRYPTO_STREAM_HASH) {
+      required = std::get<std::unique_ptr<Botan::HashFunction>>(stream->primitive)->output_length();
+    } else if (stream->operation == OVF_CRYPTO_STREAM_MAC) {
+      required = std::get<std::unique_ptr<Botan::MessageAuthenticationCode>>(stream->primitive)
+                     ->output_length();
+    } else {
+      required = std::get<std::unique_ptr<Botan::PK_Signer>>(stream->primitive)->signature_length();
+    }
+    if (output->data == nullptr || output->size < required) {
+      output->size = required;
+      return OVF_CRYPTO_STATUS_BUFFER_TOO_SMALL;
+    }
+    std::vector<std::uint8_t> result;
+    if (stream->operation == OVF_CRYPTO_STREAM_HASH) {
+      result = std::get<std::unique_ptr<Botan::HashFunction>>(stream->primitive)->final_stdvec();
+    } else if (stream->operation == OVF_CRYPTO_STREAM_MAC) {
+      result = std::get<std::unique_ptr<Botan::MessageAuthenticationCode>>(stream->primitive)
+                   ->final_stdvec();
+    } else {
+      result =
+          std::get<std::unique_ptr<Botan::PK_Signer>>(stream->primitive)->signature(backend.rng);
+    }
+    const auto status = WriteOutput(output, result);
+    if (status == OVF_CRYPTO_STATUS_OK) {
+      ReleaseStream(backend, handle);
+    }
+    return status;
+  } catch (const std::exception& exception) {
+    ReleaseStream(backend, handle);
+    return BotanFailure(backend, exception);
+  }
+}
+
+ovf_crypto_status_v1 DestroyStream(ovf_crypto_backend_v1* self, ovf_crypto_handle_v1 handle) {
+  auto& backend = *Self(self);
+  std::scoped_lock lock(backend.mutex);
+  if (FindStream(backend, handle) == nullptr) {
+    return Fail(backend, OVF_CRYPTO_STATUS_NOT_FOUND, "stream handle is stale or unknown");
+  }
+  ReleaseStream(backend, handle);
+  return OVF_CRYPTO_STATUS_OK;
+}
+
 ovf_crypto_status_v1 LastError(ovf_crypto_backend_v1* self, ovf_crypto_mutable_bytes_v1* output) {
   auto& backend = *Self(self);
   std::scoped_lock lock(backend.mutex);
@@ -707,6 +912,8 @@ ovf_crypto_status_v1 Create(const ovf_crypto_host_api_v1* host,
     auto backend = std::make_unique<Backend>();
     backend->keys.resize(config->max_keys);
     backend->generations.resize(config->max_keys, 1);
+    backend->streams.resize(config->max_contexts);
+    backend->stream_generations.resize(config->max_contexts, 1);
     backend->abi = {sizeof(ovf_crypto_backend_v1),
                     OVF_CRYPTO_BACKEND_ABI_VERSION_1,
                     backend.get(),
@@ -727,6 +934,10 @@ ovf_crypto_status_v1 Create(const ovf_crypto_host_api_v1* host,
                     PublicValue,
                     Agree,
                     ValidateCertificate,
+                    CreateStream,
+                    UpdateStream,
+                    FinishStream,
+                    DestroyStream,
                     LastError};
     *output = &backend.release()->abi;
     return OVF_CRYPTO_STATUS_OK;

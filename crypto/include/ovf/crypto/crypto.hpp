@@ -166,6 +166,29 @@ private:
   ovf_crypto_handle_v1 handle_{};
 };
 
+class InputStream final {
+public:
+  InputStream() = default;
+  ~InputStream();
+  InputStream(InputStream const&) = delete;
+  InputStream& operator=(InputStream const&) = delete;
+  InputStream(InputStream&&) noexcept;
+  InputStream& operator=(InputStream&&) noexcept;
+  [[nodiscard]] bool valid() const noexcept;
+  [[nodiscard]] Result<bool> Update(std::span<const std::byte> input) noexcept;
+  [[nodiscard]] Result<std::vector<std::byte>> Finish() noexcept;
+  [[nodiscard]] Result<bool> FinishVerify(std::span<const std::byte> signature) noexcept;
+  void Cancel() noexcept;
+
+private:
+  friend class Runtime;
+  InputStream(std::shared_ptr<detail::RuntimeState>, ovf_crypto_handle_v1,
+              ovf_crypto_stream_operation_v1) noexcept;
+  std::shared_ptr<detail::RuntimeState> state_;
+  ovf_crypto_handle_v1 handle_{};
+  ovf_crypto_stream_operation_v1 operation_{};
+};
+
 struct RuntimeConfig final {
   std::string configuration;
   std::uint32_t max_keys{128};
@@ -213,10 +236,16 @@ public:
                                   KeyPolicy derived_key) const noexcept;
   [[nodiscard]] Result<CertificateValidationResult>
   ValidateCertificate(const CertificateValidationRequest& request) const noexcept;
+  [[nodiscard]] Result<InputStream> BeginHash(Algorithm algorithm) const noexcept;
+  [[nodiscard]] Result<InputStream> BeginMac(Algorithm algorithm, const Key& key) const noexcept;
+  [[nodiscard]] Result<InputStream> BeginSign(Algorithm algorithm, const Key& key) const noexcept;
+  [[nodiscard]] Result<InputStream> BeginVerify(Algorithm algorithm, const Key& key) const noexcept;
   void Stop() noexcept;
 
 private:
   Runtime(std::shared_ptr<detail::RuntimeState>, void* library) noexcept;
+  [[nodiscard]] Result<InputStream> BeginStream(ovf_crypto_stream_operation_v1 operation,
+                                                Algorithm algorithm, const Key* key) const noexcept;
   std::shared_ptr<detail::RuntimeState> state_;
   void* library_{};
 };

@@ -106,6 +106,21 @@ typedef struct ovf_crypto_aead_parameters_v1 {
   uint32_t tag_size;
 } ovf_crypto_aead_parameters_v1;
 
+typedef enum ovf_crypto_stream_operation_v1 {
+  OVF_CRYPTO_STREAM_HASH = 1,
+  OVF_CRYPTO_STREAM_MAC = 2,
+  OVF_CRYPTO_STREAM_SIGN = 3,
+  OVF_CRYPTO_STREAM_VERIFY = 4
+} ovf_crypto_stream_operation_v1;
+
+typedef struct ovf_crypto_stream_descriptor_v1 {
+  size_t struct_size;
+  ovf_crypto_stream_operation_v1 operation;
+  uint32_t algorithm;
+  ovf_crypto_handle_v1 key;
+  uint8_t reserved[8];
+} ovf_crypto_stream_descriptor_v1;
+
 typedef enum ovf_crypto_certificate_usage_v1 {
   OVF_CRYPTO_CERTIFICATE_USAGE_UNSPECIFIED = 0,
   OVF_CRYPTO_CERTIFICATE_USAGE_SERVER_AUTHENTICATION = 1,
@@ -213,6 +228,15 @@ struct ovf_crypto_backend_v1 {
   ovf_crypto_status_v1 (*certificate_validate)(ovf_crypto_backend_v1*,
                                                const ovf_crypto_certificate_validation_request_v1*,
                                                ovf_crypto_certificate_validation_result_v1*);
+  ovf_crypto_status_v1 (*stream_create)(ovf_crypto_backend_v1*,
+                                        const ovf_crypto_stream_descriptor_v1*,
+                                        ovf_crypto_handle_v1*);
+  ovf_crypto_status_v1 (*stream_update)(ovf_crypto_backend_v1*, ovf_crypto_handle_v1,
+                                        ovf_crypto_bytes_view_v1);
+  ovf_crypto_status_v1 (*stream_finish)(ovf_crypto_backend_v1*, ovf_crypto_handle_v1,
+                                        ovf_crypto_bytes_view_v1 terminal_input,
+                                        ovf_crypto_mutable_bytes_v1*, uint8_t* valid);
+  ovf_crypto_status_v1 (*stream_destroy)(ovf_crypto_backend_v1*, ovf_crypto_handle_v1);
   ovf_crypto_status_v1 (*last_error)(ovf_crypto_backend_v1*, ovf_crypto_mutable_bytes_v1* message);
 };
 
