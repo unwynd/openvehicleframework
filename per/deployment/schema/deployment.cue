@@ -14,6 +14,8 @@ package ovf_deployment
 	maxKeySize:        int & >=1 & <=4096 | *256
 	maxValueSize:      int & >=1 & <=67108864 | *65536
 	maxBlobSize:       int & >=1 & <=1099511627776 | *16777216
+	schemaId:          string & =~"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$" | *"dynamic"
+	schemaVersion:     int & >=1 | *1
 }
 
 #Persistence: {
@@ -33,6 +35,7 @@ package ovf_deployment
 		journalMode:   "persist" | "wal" | *"wal"
 		busyTimeoutMs: int & >=0 & <=60000 | *5000
 	}
+	providerDirectory: string & =~"^/.*" | *"/usr/lib/ovf/providers"
 }
 
 application: #Application

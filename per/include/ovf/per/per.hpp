@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -72,6 +73,8 @@ struct StoreOptions final {
   std::uint32_t max_key_size{256};
   std::uint32_t max_value_size{64U * 1024U};
   std::uint64_t max_blob_size{16U * 1024U * 1024U};
+  std::string schema_id{"dynamic"};
+  std::uint64_t schema_version{1};
 };
 
 struct Capabilities final {
@@ -113,6 +116,24 @@ struct Entry final {
   std::vector<std::byte> key;
   std::vector<std::byte> value;
 };
+
+struct MigrationPlan final {
+  std::string migration_id;
+  std::string source_schema_id;
+  std::uint64_t source_schema_version{};
+  std::string target_schema_id;
+  std::uint64_t target_schema_version{};
+  Durability durability{Durability::process_crash};
+  bool allow_downgrade{};
+};
+
+struct MigrationInfo final {
+  CommitInfo commit;
+  std::uint64_t processed_entries{};
+  bool resumed{};
+};
+
+using MigrationTransform = std::function<Result<std::optional<Entry>>(const Entry& source)>;
 
 namespace detail {
 class RuntimeState;
@@ -207,6 +228,10 @@ public:
   Reset(std::span<const Entry> initial_data,
         Durability durability = Durability::process_crash) const noexcept;
   [[nodiscard]] Result<StoreStatus> GetStatus() const noexcept;
+  [[nodiscard]] Result<MigrationInfo> Migrate(const MigrationPlan& plan,
+                                              const MigrationTransform& transform) const noexcept;
+  [[nodiscard]] Result<CommitInfo>
+  Rollback(Durability durability = Durability::process_crash) const noexcept;
   class BlobReader;
   class BlobWriter;
   [[nodiscard]] Result<BlobReader> OpenBlob(std::span<const std::byte> key) const noexcept;
@@ -278,6 +303,9 @@ public:
                                                  RuntimeConfig config = {}) noexcept;
   static Result<std::unique_ptr<Runtime>> Load(std::string_view provider,
                                                RuntimeConfig config = {}) noexcept;
+  static Result<std::unique_ptr<Runtime>> LoadFrom(std::string_view provider,
+                                                   std::string_view provider_directory,
+                                                   RuntimeConfig config = {}) noexcept;
   ~Runtime();
   Runtime(Runtime const&) = delete;
   Runtime& operator=(Runtime const&) = delete;

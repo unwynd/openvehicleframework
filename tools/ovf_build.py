@@ -323,6 +323,18 @@ def compile_per_deployment(args: argparse.Namespace) -> int:
     names = [store["name"] for store in stores]
     if len(names) != len(set(names)):
         raise ValueError("persistence store names must be unique within an application")
+    records = {
+        (record["id"], record["version"])
+        for path in args.record_schema
+        for record in read(path)["records"]
+    }
+    for store in stores:
+        identity = (store["schemaId"], store["schemaVersion"])
+        if store["schemaId"] != "dynamic" and identity not in records:
+            raise ValueError(
+                f"store {store['name']} references an undeclared persistent schema "
+                f"{store['schemaId']} version {store['schemaVersion']}"
+            )
     binding = source["provider"]
     root = binding["configuration"]["root"]
     if not root.startswith("/") or ".." in Path(root).parts:
@@ -366,6 +378,7 @@ def compile_per_deployment(args: argparse.Namespace) -> int:
         "application": source["app"]["name"],
         "namespace": args.namespace,
         "provider": binding["provider"],
+        "providerDirectory": binding["providerDirectory"],
         "configuration": json.dumps(configuration, sort_keys=True, separators=(",", ":")),
         "stores": sorted(rendered_stores, key=lambda store: store["name"]),
     }
@@ -1038,6 +1051,7 @@ def parser() -> argparse.ArgumentParser:
     persistence.add_argument("--deployment", required=True, type=Path)
     persistence.add_argument("--binding", required=True, type=Path)
     persistence.add_argument("--namespace", required=True)
+    persistence.add_argument("--record-schema", action="append", type=Path, default=[])
     persistence.add_argument("--output", required=True, type=Path)
     persistence.set_defaults(run=compile_per_deployment)
     per_contract = commands.add_parser("per-contract")

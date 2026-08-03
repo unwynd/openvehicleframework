@@ -78,6 +78,8 @@ typedef struct ovf_per_store_descriptor_v1 {
   uint32_t max_key_size;
   uint32_t max_value_size;
   uint64_t max_blob_size;
+  ovf_per_string_view_v1 schema_id;
+  uint64_t schema_version;
 } ovf_per_store_descriptor_v1;
 
 typedef struct ovf_per_capabilities_v1 {
@@ -123,6 +125,26 @@ typedef struct ovf_per_entry_v1 {
   ovf_per_bytes_view_v1 key;
   ovf_per_bytes_view_v1 value;
 } ovf_per_entry_v1;
+
+typedef struct ovf_per_migration_descriptor_v1 {
+  size_t struct_size;
+  ovf_per_string_view_v1 migration_id;
+  ovf_per_string_view_v1 source_schema_id;
+  uint64_t source_schema_version;
+  ovf_per_string_view_v1 target_schema_id;
+  uint64_t target_schema_version;
+  ovf_per_durability_v1 durability;
+  uint8_t allow_downgrade;
+  uint8_t reserved[7];
+} ovf_per_migration_descriptor_v1;
+
+typedef struct ovf_per_migration_status_v1 {
+  size_t struct_size;
+  uint64_t source_generation;
+  uint64_t processed_entries;
+  uint8_t resumed;
+  uint8_t reserved[7];
+} ovf_per_migration_status_v1;
 
 typedef struct ovf_per_backend_v1 ovf_per_backend_v1;
 
@@ -174,6 +196,17 @@ struct ovf_per_backend_v1 {
                                    size_t, ovf_per_durability_v1, ovf_per_commit_result_v1*);
   ovf_per_status_v1 (*store_status)(ovf_per_backend_v1*, ovf_per_handle_v1,
                                     ovf_per_store_status_v1*);
+  ovf_per_status_v1 (*migration_begin)(ovf_per_backend_v1*, ovf_per_handle_v1,
+                                       const ovf_per_migration_descriptor_v1*, ovf_per_handle_v1*,
+                                       ovf_per_migration_status_v1*, ovf_per_mutable_bytes_v1*);
+  ovf_per_status_v1 (*migration_apply)(ovf_per_backend_v1*, ovf_per_handle_v1,
+                                       ovf_per_bytes_view_v1, const ovf_per_entry_v1*, uint8_t);
+  ovf_per_status_v1 (*migration_commit)(ovf_per_backend_v1*, ovf_per_handle_v1,
+                                        ovf_per_commit_result_v1*);
+  ovf_per_status_v1 (*migration_abort)(ovf_per_backend_v1*, ovf_per_handle_v1);
+  ovf_per_status_v1 (*migration_close)(ovf_per_backend_v1*, ovf_per_handle_v1);
+  ovf_per_status_v1 (*store_rollback)(ovf_per_backend_v1*, ovf_per_handle_v1, ovf_per_durability_v1,
+                                      ovf_per_commit_result_v1*);
   ovf_per_status_v1 (*last_error)(ovf_per_backend_v1*, ovf_per_mutable_bytes_v1*);
 };
 

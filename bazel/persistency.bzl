@@ -94,11 +94,15 @@ def _per_model_impl(ctx):
     arguments.add("--deployment", ctx.file.deployment)
     arguments.add("--binding", ctx.file.binding)
     arguments.add("--namespace", ctx.attr.cpp_namespace)
+    inputs = [ctx.file._schema, ctx.file.deployment, ctx.file.binding]
+    for schema in ctx.attr.schemas:
+        arguments.add("--record-schema", schema[OvfPerContractInfo].ir)
+        inputs.append(schema[OvfPerContractInfo].ir)
     arguments.add("--output", model)
     ctx.actions.run(
         executable = ctx.executable._builder,
         arguments = [arguments],
-        inputs = [ctx.file._schema, ctx.file.deployment, ctx.file.binding],
+        inputs = inputs,
         tools = [ctx.file._cue],
         outputs = [model],
         mnemonic = "OvfPerDeployment",
@@ -125,6 +129,7 @@ _ovf_per_model = rule(
         "deployment": attr.label(mandatory = True, allow_single_file = [".cue"]),
         "binding": attr.label(mandatory = True, allow_single_file = [".cue"]),
         "cpp_namespace": attr.string(mandatory = True),
+        "schemas": attr.label_list(providers = [OvfPerContractInfo]),
         "_builder": attr.label(default = Label("//tools:ovf_build"), executable = True, cfg = "exec"),
         "_codegen": attr.label(default = Label("//codegen:ovf_codegen"), executable = True, cfg = "exec"),
         "_cue": attr.label(default = Label("//bazel/host_tools:cue"), allow_single_file = True, cfg = "exec"),
@@ -132,13 +137,14 @@ _ovf_per_model = rule(
     },
 )
 
-def ovf_per_application(name, deployment, cpp_namespace, binding = "//per/deployment/bindings:sqlite.cue", visibility = None):
+def ovf_per_application(name, deployment, cpp_namespace, schemas = [], binding = "//per/deployment/bindings:sqlite.cue", visibility = None):
     """Generates a persistence facade from application intent and platform binding.
 
     Args:
       name: Public generated C++ library target.
       deployment: Application-owned CUE deployment target.
       cpp_namespace: Namespace for generated named-store functions.
+      schemas: Persistent-record contract targets accepted by the deployment.
       binding: Platform-selected persistence provider policy.
       visibility: Visibility of the generated library.
     """
@@ -148,6 +154,7 @@ def ovf_per_application(name, deployment, cpp_namespace, binding = "//per/deploy
         deployment = deployment,
         binding = binding,
         cpp_namespace = cpp_namespace,
+        schemas = schemas,
     )
     native.filegroup(
         name = name + "_header",

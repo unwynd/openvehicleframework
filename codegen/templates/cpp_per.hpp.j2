@@ -17,8 +17,9 @@ namespace {{ deployment.namespace }} {
 }
 
 [[nodiscard]] inline ovf::per::Result<std::unique_ptr<ovf::per::Runtime>> CreateRuntime() noexcept {
-  return ovf::per::Runtime::Load(
+  return ovf::per::Runtime::LoadFrom(
       {{ deployment.provider|cpp_string }},
+      {{ deployment.providerDirectory|cpp_string }},
       ovf::per::RuntimeConfig{.configuration = {{ deployment.configuration|cpp_string }}});
 }
 
@@ -33,7 +34,9 @@ namespace {{ deployment.namespace }} {
       .max_entries = {{ store.maxEntries }}U,
       .max_key_size = {{ store.maxKeySize }}U,
       .max_value_size = {{ store.maxValueSize }}U,
-      .max_blob_size = {{ store.maxBlobSize }}ULL});
+      .max_blob_size = {{ store.maxBlobSize }}ULL,
+      .schema_id = {{ store.schemaId|cpp_string }},
+      .schema_version = {{ store.schemaVersion }}ULL});
 }
 
 {% endfor %}

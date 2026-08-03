@@ -27,16 +27,38 @@ struct StoreData final {
   std::uint32_t max_key_size{};
   std::uint32_t max_value_size{};
   std::uint64_t max_blob_size{};
+  std::string schema_id;
+  std::uint64_t schema_version{};
   bool writer_active{};
   std::uint64_t successful_commits{};
   std::uint64_t rejected_operations{};
   std::uint64_t recovery_count{};
   ovf_per_recovery_state_v1 recovery_state{OVF_PER_RECOVERY_CLEAN_V1};
+  Values rollback_values;
+  Values rollback_blobs;
+  std::string rollback_schema_id;
+  std::uint64_t rollback_schema_version{};
+  bool rollback_available{};
+  std::string migration_id;
+  std::string migration_source_schema_id;
+  std::uint64_t migration_source_schema_version{};
+  std::string migration_target_schema_id;
+  std::uint64_t migration_target_schema_version{};
+  std::uint64_t migration_source_generation{};
+  Values migration_values;
+  Bytes migration_checkpoint;
+  std::uint64_t migration_processed{};
+  bool migration_handle_active{};
 };
 
 struct Cursor final {
   std::vector<std::pair<Bytes, Bytes>> entries;
   std::size_t position{};
+};
+
+struct MigrationOperation final {
+  std::shared_ptr<StoreData> store;
+  ovf_per_durability_v1 durability{};
 };
 
 struct BlobOperation final {
@@ -72,6 +94,7 @@ struct MemoryBackend final {
   std::unordered_map<ovf_per_handle_v1, Transaction> transactions;
   std::unordered_map<ovf_per_handle_v1, BlobOperation> blobs;
   std::unordered_map<ovf_per_handle_v1, Cursor> cursors;
+  std::unordered_map<ovf_per_handle_v1, MigrationOperation> migrations;
   ovf_per_handle_v1 next_handle{1};
   std::uint32_t max_stores{};
   std::uint32_t max_transactions{};
@@ -127,6 +150,11 @@ void Stop(ovf_per_backend_v1* backend) {
   }
   self.blobs.clear();
   self.cursors.clear();
+  for (auto& [handle, migration] : self.migrations) {
+    static_cast<void>(handle);
+    migration.store->migration_handle_active = false;
+  }
+  self.migrations.clear();
   self.store_handles.clear();
 }
 
@@ -157,7 +185,8 @@ ovf_per_status_v1 OpenStore(ovf_per_backend_v1* backend,
       descriptor->logical_name.data == nullptr || descriptor->logical_name.size == 0 ||
       descriptor->capacity_bytes == 0 || descriptor->max_entries == 0 ||
       descriptor->max_key_size == 0 || descriptor->max_value_size == 0 ||
-      descriptor->max_blob_size == 0) {
+      descriptor->max_blob_size == 0 || descriptor->schema_id.data == nullptr ||
+      descriptor->schema_id.size == 0 || descriptor->schema_version == 0) {
     return OVF_PER_STATUS_INVALID_ARGUMENT;
   }
   std::scoped_lock lock(self.mutex);
@@ -181,12 +210,17 @@ ovf_per_status_v1 OpenStore(ovf_per_backend_v1* backend,
     store->max_key_size = descriptor->max_key_size;
     store->max_value_size = descriptor->max_value_size;
     store->max_blob_size = descriptor->max_blob_size;
+    store->schema_id.assign(descriptor->schema_id.data, descriptor->schema_id.size);
+    store->schema_version = descriptor->schema_version;
     iterator = self.stores.emplace(name, std::move(store)).first;
   } else if (iterator->second->capacity != descriptor->capacity_bytes ||
              iterator->second->max_entries != descriptor->max_entries ||
              iterator->second->max_key_size != descriptor->max_key_size ||
              iterator->second->max_value_size != descriptor->max_value_size ||
-             iterator->second->max_blob_size != descriptor->max_blob_size) {
+             iterator->second->max_blob_size != descriptor->max_blob_size ||
+             iterator->second->schema_id !=
+                 std::string_view(descriptor->schema_id.data, descriptor->schema_id.size) ||
+             iterator->second->schema_version != descriptor->schema_version) {
     SetError(self, "store was reopened with incompatible limits");
     return OVF_PER_STATUS_INVALID_ARGUMENT;
   }
@@ -227,6 +261,9 @@ ovf_per_status_v1 Begin(ovf_per_backend_v1* backend, ovf_per_handle_v1 store_han
     return OVF_PER_STATUS_UNSUPPORTED;
   }
   if (write && store->second.store->writer_active) {
+    return OVF_PER_STATUS_BUSY;
+  }
+  if (write && !store->second.store->migration_id.empty()) {
     return OVF_PER_STATUS_BUSY;
   }
   if (write && expected_generation != nullptr &&
@@ -437,6 +474,9 @@ ovf_per_status_v1 BeginBlobReplace(ovf_per_backend_v1* backend, ovf_per_handle_v
   if (store.writer_active) {
     return OVF_PER_STATUS_BUSY;
   }
+  if (!store.migration_id.empty()) {
+    return OVF_PER_STATUS_BUSY;
+  }
   if (key.size > store.max_key_size || size > store.max_blob_size) {
     return OVF_PER_STATUS_QUOTA_EXCEEDED;
   }
@@ -645,6 +685,9 @@ ovf_per_status_v1 ResetStore(ovf_per_backend_v1* backend, ovf_per_handle_v1 stor
   if (store.writer_active) {
     return OVF_PER_STATUS_BUSY;
   }
+  if (!store.migration_id.empty()) {
+    return OVF_PER_STATUS_BUSY;
+  }
   try {
     Values replacement;
     for (std::size_t index = 0; index < count; ++index) {
@@ -685,9 +728,213 @@ ovf_per_status_v1 StoreStatus(ovf_per_backend_v1* backend, ovf_per_handle_v1 sto
     return OVF_PER_STATUS_NOT_FOUND;
   }
   const auto& store = *handle->second.store;
-  *output = {sizeof(*output),      store.generation,         1,
+  *output = {sizeof(*output),      store.generation,         store.schema_version,
              store.recovery_state, store.successful_commits, store.rejected_operations,
              store.recovery_count};
+  return OVF_PER_STATUS_OK;
+}
+
+bool Same(ovf_per_string_view_v1 value, const std::string& expected) {
+  return value.data != nullptr && std::string_view(value.data, value.size) == expected;
+}
+
+ovf_per_status_v1 BeginMigration(ovf_per_backend_v1* backend, ovf_per_handle_v1 store_handle,
+                                 const ovf_per_migration_descriptor_v1* descriptor,
+                                 ovf_per_handle_v1* output, ovf_per_migration_status_v1* status,
+                                 ovf_per_mutable_bytes_v1* checkpoint) {
+  auto& self = *Self(backend);
+  if (descriptor == nullptr || descriptor->struct_size < sizeof(*descriptor) || output == nullptr ||
+      status == nullptr || status->struct_size < sizeof(*status) || checkpoint == nullptr ||
+      descriptor->migration_id.data == nullptr || descriptor->migration_id.size == 0 ||
+      descriptor->target_schema_id.data == nullptr || descriptor->target_schema_id.size == 0 ||
+      descriptor->target_schema_version == 0) {
+    return OVF_PER_STATUS_INVALID_ARGUMENT;
+  }
+  std::scoped_lock lock(self.mutex);
+  const auto handle = self.store_handles.find(store_handle);
+  if (handle == self.store_handles.end()) {
+    return OVF_PER_STATUS_NOT_FOUND;
+  }
+  auto& store = *handle->second.store;
+  if (handle->second.access != OVF_PER_ACCESS_READ_WRITE || store.writer_active ||
+      store.migration_handle_active) {
+    return handle->second.access != OVF_PER_ACCESS_READ_WRITE ? OVF_PER_STATUS_PERMISSION_DENIED
+                                                              : OVF_PER_STATUS_BUSY;
+  }
+  const std::string migration_id(descriptor->migration_id.data, descriptor->migration_id.size);
+  bool resumed = !store.migration_id.empty();
+  if (resumed) {
+    if (store.migration_id != migration_id ||
+        !Same(descriptor->source_schema_id, store.migration_source_schema_id) ||
+        descriptor->source_schema_version != store.migration_source_schema_version ||
+        !Same(descriptor->target_schema_id, store.migration_target_schema_id) ||
+        descriptor->target_schema_version != store.migration_target_schema_version) {
+      return OVF_PER_STATUS_CONFLICT;
+    }
+  } else {
+    if (!Same(descriptor->source_schema_id, store.schema_id) ||
+        descriptor->source_schema_version != store.schema_version) {
+      return OVF_PER_STATUS_CONFLICT;
+    }
+    store.migration_id = migration_id;
+    store.migration_source_schema_id = store.schema_id;
+    store.migration_source_schema_version = store.schema_version;
+    store.migration_target_schema_id.assign(descriptor->target_schema_id.data,
+                                            descriptor->target_schema_id.size);
+    store.migration_target_schema_version = descriptor->target_schema_version;
+    store.migration_source_generation = store.generation;
+    store.migration_values.clear();
+    store.migration_checkpoint.clear();
+    store.migration_processed = 0;
+  }
+  if (checkpoint->size < store.migration_checkpoint.size() ||
+      (checkpoint->data == nullptr && !store.migration_checkpoint.empty())) {
+    checkpoint->size = store.migration_checkpoint.size();
+    return OVF_PER_STATUS_BUFFER_TOO_SMALL;
+  }
+  if (!store.migration_checkpoint.empty()) {
+    std::memcpy(checkpoint->data, store.migration_checkpoint.data(),
+                store.migration_checkpoint.size());
+  }
+  checkpoint->size = store.migration_checkpoint.size();
+  store.migration_handle_active = true;
+  const auto migration_handle = self.next_handle++;
+  self.migrations.emplace(migration_handle,
+                          MigrationOperation{handle->second.store, descriptor->durability});
+  *output = migration_handle;
+  *status = {sizeof(*status),
+             store.migration_source_generation,
+             store.migration_processed,
+             static_cast<std::uint8_t>(resumed),
+             {}};
+  return OVF_PER_STATUS_OK;
+}
+
+ovf_per_status_v1 ApplyMigration(ovf_per_backend_v1* backend, ovf_per_handle_v1 handle,
+                                 ovf_per_bytes_view_v1 source_key, const ovf_per_entry_v1* target,
+                                 std::uint8_t write_target) {
+  auto& self = *Self(backend);
+  if (!Valid(source_key) || source_key.size == 0 || write_target > 1 ||
+      (write_target != 0 && target == nullptr)) {
+    return OVF_PER_STATUS_INVALID_ARGUMENT;
+  }
+  std::scoped_lock lock(self.mutex);
+  const auto operation = self.migrations.find(handle);
+  if (operation == self.migrations.end()) {
+    return OVF_PER_STATUS_NOT_FOUND;
+  }
+  auto& store = *operation->second.store;
+  const auto source = Copy(source_key);
+  if (!store.migration_checkpoint.empty() && source <= store.migration_checkpoint) {
+    return OVF_PER_STATUS_CONFLICT;
+  }
+  try {
+    auto candidate = store.migration_values;
+    if (write_target != 0) {
+      if (!Valid(target->key) || !Valid(target->value) || target->key.size == 0 ||
+          target->key.size > store.max_key_size || target->value.size > store.max_value_size) {
+        return OVF_PER_STATUS_INVALID_ARGUMENT;
+      }
+      candidate[Copy(target->key)] = Copy(target->value);
+    }
+    if (candidate.size() > store.max_entries || Size(candidate) > store.capacity) {
+      return OVF_PER_STATUS_QUOTA_EXCEEDED;
+    }
+    store.migration_values = std::move(candidate);
+    store.migration_checkpoint = source;
+    ++store.migration_processed;
+    return OVF_PER_STATUS_OK;
+  } catch (...) {
+    return OVF_PER_STATUS_RESOURCE_EXHAUSTED;
+  }
+}
+
+ovf_per_status_v1 CommitMigration(ovf_per_backend_v1* backend, ovf_per_handle_v1 handle,
+                                  ovf_per_commit_result_v1* output) {
+  auto& self = *Self(backend);
+  if (output == nullptr || output->struct_size < sizeof(*output)) {
+    return OVF_PER_STATUS_INVALID_ARGUMENT;
+  }
+  std::scoped_lock lock(self.mutex);
+  const auto operation = self.migrations.find(handle);
+  if (operation == self.migrations.end()) {
+    return OVF_PER_STATUS_NOT_FOUND;
+  }
+  auto& store = *operation->second.store;
+  if (store.generation != store.migration_source_generation) {
+    return OVF_PER_STATUS_CONFLICT;
+  }
+  store.rollback_values = store.values;
+  store.rollback_blobs = store.blobs;
+  store.rollback_schema_id = store.schema_id;
+  store.rollback_schema_version = store.schema_version;
+  store.rollback_available = true;
+  store.values = std::move(store.migration_values);
+  store.schema_id = std::move(store.migration_target_schema_id);
+  store.schema_version = store.migration_target_schema_version;
+  store.migration_id.clear();
+  store.migration_checkpoint.clear();
+  store.migration_handle_active = false;
+  ++store.generation;
+  ++store.successful_commits;
+  ++store.recovery_count;
+  store.recovery_state = OVF_PER_RECOVERY_MIGRATED_V1;
+  *output = {sizeof(*output), store.generation, operation->second.durability};
+  return OVF_PER_STATUS_OK;
+}
+
+ovf_per_status_v1 AbortMigration(ovf_per_backend_v1* backend, ovf_per_handle_v1 handle) {
+  auto& self = *Self(backend);
+  std::scoped_lock lock(self.mutex);
+  const auto operation = self.migrations.find(handle);
+  if (operation == self.migrations.end()) {
+    return OVF_PER_STATUS_NOT_FOUND;
+  }
+  operation->second.store->migration_handle_active = false;
+  return OVF_PER_STATUS_OK;
+}
+
+ovf_per_status_v1 CloseMigration(ovf_per_backend_v1* backend, ovf_per_handle_v1 handle) {
+  auto& self = *Self(backend);
+  std::scoped_lock lock(self.mutex);
+  const auto operation = self.migrations.find(handle);
+  if (operation == self.migrations.end()) {
+    return OVF_PER_STATUS_NOT_FOUND;
+  }
+  operation->second.store->migration_handle_active = false;
+  self.migrations.erase(operation);
+  return OVF_PER_STATUS_OK;
+}
+
+ovf_per_status_v1 RollbackStore(ovf_per_backend_v1* backend, ovf_per_handle_v1 store_handle,
+                                ovf_per_durability_v1 durability,
+                                ovf_per_commit_result_v1* output) {
+  auto& self = *Self(backend);
+  if (output == nullptr || output->struct_size < sizeof(*output)) {
+    return OVF_PER_STATUS_INVALID_ARGUMENT;
+  }
+  std::scoped_lock lock(self.mutex);
+  const auto handle = self.store_handles.find(store_handle);
+  if (handle == self.store_handles.end()) {
+    return OVF_PER_STATUS_NOT_FOUND;
+  }
+  auto& store = *handle->second.store;
+  if (handle->second.access != OVF_PER_ACCESS_READ_WRITE) {
+    return OVF_PER_STATUS_PERMISSION_DENIED;
+  }
+  if (!store.rollback_available) {
+    return OVF_PER_STATUS_NOT_FOUND;
+  }
+  store.values = std::move(store.rollback_values);
+  store.blobs = std::move(store.rollback_blobs);
+  store.schema_id = std::move(store.rollback_schema_id);
+  store.schema_version = store.rollback_schema_version;
+  store.rollback_available = false;
+  ++store.generation;
+  ++store.successful_commits;
+  ++store.recovery_count;
+  store.recovery_state = OVF_PER_RECOVERY_ROLLED_BACK_V1;
+  *output = {sizeof(*output), store.generation, durability};
   return OVF_PER_STATUS_OK;
 }
 
@@ -744,6 +991,12 @@ ovf_per_status_v1 Create(const ovf_per_backend_config_v1* config, ovf_per_backen
                     CloseCursor,
                     ResetStore,
                     StoreStatus,
+                    BeginMigration,
+                    ApplyMigration,
+                    CommitMigration,
+                    AbortMigration,
+                    CloseMigration,
+                    RollbackStore,
                     LastError};
     *output = &backend.release()->abi;
     return OVF_PER_STATUS_OK;

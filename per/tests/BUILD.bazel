@@ -29,6 +29,7 @@ ovf_per_application(
     name = "e2e_deployment",
     cpp_namespace = "ovf::deployment::per_e2e",
     deployment = "deployment.cue",
+    schemas = [":typed_state_model"],
 )
 
 cc_binary(
@@ -56,6 +57,17 @@ cc_test(
 )
 
 cc_test(
+    name = "dynamic_provider_test",
+    srcs = ["dynamic_provider_test.cpp"],
+    args = ["$(rootpath //per:sqlite_provider_plugin)"],
+    data = ["//per:sqlite_provider_plugin"],
+    deps = [
+        "//per:runtime",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "memory_provider_test",
     srcs = ["memory_provider_test.cpp"],
     deps = [
@@ -80,6 +92,7 @@ test_suite(
     name = "all_tests",
     tests = [
         ":c_abi_test",
+        ":dynamic_provider_test",
         ":memory_provider_test",
         ":process_e2e_test",
         ":sqlite_provider_test",

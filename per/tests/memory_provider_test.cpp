@@ -216,4 +216,52 @@ TEST(PerMemoryProviderTest, SupportsOrderedCursorsGenerationGuardsAndExplicitRes
   EXPECT_GE(status.value().rejected_operations, 1U);
 }
 
+TEST(PerMemoryProviderTest, ResumesStagedMigrationAndRollsBackExplicitly) {
+  auto runtime_result = ovf::per::Runtime::Create(*ovf_per_backend_query_v1());
+  ASSERT_TRUE(runtime_result);
+  auto runtime = std::move(runtime_result).value();
+  auto options = Options();
+  options.schema_id = "legacy-state";
+  auto store_result = runtime->OpenStore(options);
+  ASSERT_TRUE(store_result);
+  auto store = std::move(store_result).value();
+  const std::array initial{Entry("a", "one"), Entry("b", "two")};
+  ASSERT_TRUE(store.Reset(initial, ovf::per::Durability::buffered));
+  const ovf::per::MigrationPlan plan{.migration_id = "legacy-to-current",
+                                     .source_schema_id = "legacy-state",
+                                     .source_schema_version = 1,
+                                     .target_schema_id = "current-state",
+                                     .target_schema_version = 2,
+                                     .durability = ovf::per::Durability::buffered};
+  std::size_t calls{};
+  const auto interrupted = store.Migrate(
+      plan,
+      [&calls](const ovf::per::Entry& source) -> ovf::per::Result<std::optional<ovf::per::Entry>> {
+        ++calls;
+        if (calls == 2) {
+          return ovf::per::Error{ovf::per::ErrorCode::backend_failure, "interrupted"};
+        }
+        return std::optional<ovf::per::Entry>(source);
+      });
+  ASSERT_FALSE(interrupted);
+  const auto resumed = store.Migrate(
+      plan, [](const ovf::per::Entry& source) -> ovf::per::Result<std::optional<ovf::per::Entry>> {
+        return std::optional<ovf::per::Entry>(source);
+      });
+  ASSERT_TRUE(resumed) << resumed.error().message;
+  EXPECT_TRUE(resumed.value().resumed);
+  EXPECT_EQ(resumed.value().processed_entries, 2U);
+  const auto migrated = store.GetStatus();
+  ASSERT_TRUE(migrated);
+  EXPECT_EQ(migrated.value().schema_version, 2U);
+  EXPECT_EQ(migrated.value().recovery_state, ovf::per::RecoveryState::migrated);
+
+  const auto rollback = store.Rollback(ovf::per::Durability::buffered);
+  ASSERT_TRUE(rollback) << rollback.error().message;
+  const auto restored = store.GetStatus();
+  ASSERT_TRUE(restored);
+  EXPECT_EQ(restored.value().schema_version, 1U);
+  EXPECT_EQ(restored.value().recovery_state, ovf::per::RecoveryState::rolled_back);
+}
+
 } // namespace

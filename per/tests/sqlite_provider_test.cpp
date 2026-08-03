@@ -6,10 +6,14 @@
 
 #include <array>
 #include <cstdlib>
+#include <fstream>
+#include <iterator>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include <sys/stat.h>
 
 extern "C" const ovf_per_backend_factory_v1* ovf_per_backend_query_v1(void);
 
@@ -126,6 +130,12 @@ TEST(PerSqliteProviderTest, DeploymentMismatchCannotReinterpretExistingStore) {
   const auto incompatible = runtime->OpenStore(Options(2048));
   ASSERT_FALSE(incompatible);
   EXPECT_EQ(incompatible.error().code, ovf::per::ErrorCode::invalid_argument);
+
+  auto incompatible_schema = Options();
+  incompatible_schema.schema_version = 2;
+  const auto schema_rejected = runtime->OpenStore(std::move(incompatible_schema));
+  ASSERT_FALSE(schema_rejected);
+  EXPECT_EQ(schema_rejected.error().code, ovf::per::ErrorCode::invalid_argument);
 }
 
 TEST(PerSqliteProviderTest, StreamsAndPersistsAtomicBlobReplacement) {
@@ -251,6 +261,87 @@ TEST(PerSqliteProviderTest, SupportsOrderedCursorsGenerationGuardsAndAtomicReset
   const auto status = store.GetStatus();
   ASSERT_TRUE(status);
   EXPECT_EQ(status.value().generation, reset.value().generation);
+}
+
+TEST(PerSqliteProviderTest, CorruptStoreFailsClosedAndPreservesEvidence) {
+  const auto root = TestRoot("corrupt");
+  ASSERT_EQ(::mkdir(root.c_str(), S_IRWXU), 0);
+  const auto database = root + "/76656869636c652f6c6561726e65642d7374617465.db";
+  const std::string evidence = "not-a-sqlite-database";
+  {
+    std::ofstream output(database, std::ios::binary);
+    ASSERT_TRUE(output);
+    output.write(evidence.data(), static_cast<std::streamsize>(evidence.size()));
+  }
+  auto runtime_result = ovf::per::Runtime::Create(*ovf_per_backend_query_v1(),
+                                                  {.configuration = Configuration(root)});
+  ASSERT_TRUE(runtime_result);
+  auto runtime = std::move(runtime_result).value();
+  const auto rejected = runtime->OpenStore(Options());
+  ASSERT_FALSE(rejected);
+  EXPECT_EQ(rejected.error().code, ovf::per::ErrorCode::corrupted);
+  std::ifstream input(database, std::ios::binary);
+  const std::string retained{std::istreambuf_iterator<char>(input),
+                             std::istreambuf_iterator<char>()};
+  EXPECT_EQ(retained, evidence);
+}
+
+TEST(PerSqliteProviderTest, ResumesMigrationAcrossRuntimeRestartAndRetainsRollback) {
+  const auto root = TestRoot("migration");
+  auto options = Options();
+  options.schema_id = "legacy-state";
+  const ovf::per::MigrationPlan plan{.migration_id = "legacy-to-current",
+                                     .source_schema_id = "legacy-state",
+                                     .source_schema_version = 1,
+                                     .target_schema_id = "current-state",
+                                     .target_schema_version = 2};
+  {
+    auto runtime_result = ovf::per::Runtime::Create(*ovf_per_backend_query_v1(),
+                                                    {.configuration = Configuration(root, "wal")});
+    ASSERT_TRUE(runtime_result);
+    auto runtime = std::move(runtime_result).value();
+    auto store_result = runtime->OpenStore(options);
+    ASSERT_TRUE(store_result);
+    auto store = std::move(store_result).value();
+    const std::array initial{Entry("a", "one"), Entry("b", "two")};
+    ASSERT_TRUE(store.Reset(initial));
+    std::size_t calls{};
+    const auto interrupted = store.Migrate(
+        plan,
+        [&calls](
+            const ovf::per::Entry& source) -> ovf::per::Result<std::optional<ovf::per::Entry>> {
+          ++calls;
+          if (calls == 2) {
+            return ovf::per::Error{ovf::per::ErrorCode::backend_failure, "interrupted"};
+          }
+          return std::optional<ovf::per::Entry>(source);
+        });
+    ASSERT_FALSE(interrupted);
+  }
+  auto runtime_result = ovf::per::Runtime::Create(*ovf_per_backend_query_v1(),
+                                                  {.configuration = Configuration(root, "wal")});
+  ASSERT_TRUE(runtime_result);
+  auto runtime = std::move(runtime_result).value();
+  auto store_result = runtime->OpenStore(options);
+  ASSERT_TRUE(store_result) << store_result.error().message;
+  auto store = std::move(store_result).value();
+  const auto resumed = store.Migrate(
+      plan, [](const ovf::per::Entry& source) -> ovf::per::Result<std::optional<ovf::per::Entry>> {
+        return std::optional<ovf::per::Entry>(source);
+      });
+  ASSERT_TRUE(resumed) << resumed.error().message;
+  EXPECT_TRUE(resumed.value().resumed);
+  EXPECT_EQ(resumed.value().processed_entries, 2U);
+  const auto migrated = store.GetStatus();
+  ASSERT_TRUE(migrated);
+  EXPECT_EQ(migrated.value().schema_version, 2U);
+  EXPECT_EQ(migrated.value().recovery_state, ovf::per::RecoveryState::migrated);
+  const auto rollback = store.Rollback();
+  ASSERT_TRUE(rollback) << rollback.error().message;
+  const auto restored = store.GetStatus();
+  ASSERT_TRUE(restored);
+  EXPECT_EQ(restored.value().schema_version, 1U);
+  EXPECT_EQ(restored.value().recovery_state, ovf::per::RecoveryState::rolled_back);
 }
 
 } // namespace

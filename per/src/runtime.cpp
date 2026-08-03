@@ -2,6 +2,8 @@
 
 #include "ovf/per/per.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstring>
 #include <mutex>
@@ -475,6 +477,132 @@ Result<StoreStatus> Store::GetStatus() const noexcept {
                    status_value.rejected_operations, status_value.recovery_count})
              : Result<StoreStatus>(state_->MakeError(status));
 }
+Result<MigrationInfo> Store::Migrate(const MigrationPlan& plan,
+                                     const MigrationTransform& transform) const noexcept {
+  if (!valid() || plan.migration_id.empty() || plan.source_schema_id.empty() ||
+      plan.target_schema_id.empty() || plan.source_schema_version == 0 ||
+      plan.target_schema_version == 0 ||
+      (!plan.allow_downgrade && plan.target_schema_version <= plan.source_schema_version) ||
+      !transform) {
+    return Error{ErrorCode::invalid_argument, "migration plan is invalid"};
+  }
+  ovf_per_handle_v1 migration{};
+  ovf_per_migration_status_v1 migration_status{};
+  migration_status.struct_size = sizeof(migration_status);
+  std::array<std::byte, 4096> checkpoint_storage{};
+  ovf_per_mutable_bytes_v1 checkpoint{reinterpret_cast<std::uint8_t*>(checkpoint_storage.data()),
+                                      checkpoint_storage.size()};
+  const ovf_per_migration_descriptor_v1 descriptor{
+      sizeof(descriptor),
+      {plan.migration_id.data(), plan.migration_id.size()},
+      {plan.source_schema_id.data(), plan.source_schema_id.size()},
+      plan.source_schema_version,
+      {plan.target_schema_id.data(), plan.target_schema_id.size()},
+      plan.target_schema_version,
+      ToAbi(plan.durability),
+      static_cast<std::uint8_t>(plan.allow_downgrade),
+      {}};
+  {
+    std::scoped_lock lock(state_->mutex_);
+    const auto status = state_->backend_->migration_begin(
+        state_->backend_, handle_, &descriptor, &migration, &migration_status, &checkpoint);
+    if (status != OVF_PER_STATUS_OK) {
+      return state_->MakeError(status);
+    }
+  }
+  auto close_migration = [&]() noexcept {
+    std::scoped_lock lock(state_->mutex_);
+    static_cast<void>(state_->backend_->migration_abort(state_->backend_, migration));
+    static_cast<void>(state_->backend_->migration_close(state_->backend_, migration));
+    migration = OVF_PER_INVALID_HANDLE_V1;
+  };
+  try {
+    std::uint64_t processed_entries = migration_status.processed_entries;
+    auto read_result = BeginRead();
+    if (!read_result) {
+      close_migration();
+      return read_result.error();
+    }
+    auto read = std::move(read_result).value();
+    auto cursor_result = read.Iterate();
+    if (!cursor_result) {
+      close_migration();
+      return cursor_result.error();
+    }
+    auto cursor = std::move(cursor_result).value();
+    const auto checkpoint_bytes = std::span(checkpoint_storage).first(checkpoint.size);
+    while (true) {
+      auto next = cursor.Next();
+      if (!next) {
+        close_migration();
+        return next.error();
+      }
+      if (!next.value()) {
+        break;
+      }
+      Entry source = std::move(*next.value());
+      if (!checkpoint_bytes.empty() &&
+          !std::lexicographical_compare(checkpoint_bytes.begin(), checkpoint_bytes.end(),
+                                        source.key.begin(), source.key.end())) {
+        continue;
+      }
+      auto transformed = transform(source);
+      if (!transformed) {
+        close_migration();
+        return transformed.error();
+      }
+      ovf_per_entry_v1 target{};
+      const ovf_per_entry_v1* target_pointer{};
+      if (transformed.value()) {
+        target = {View(transformed.value()->key), View(transformed.value()->value)};
+        target_pointer = &target;
+      }
+      std::scoped_lock lock(state_->mutex_);
+      const auto status = state_->backend_->migration_apply(
+          state_->backend_, migration, View(source.key), target_pointer,
+          transformed.value().has_value() ? 1 : 0);
+      if (status != OVF_PER_STATUS_OK) {
+        const auto error = state_->MakeError(status);
+        static_cast<void>(state_->backend_->migration_abort(state_->backend_, migration));
+        static_cast<void>(state_->backend_->migration_close(state_->backend_, migration));
+        migration = OVF_PER_INVALID_HANDLE_V1;
+        return error;
+      }
+      ++processed_entries;
+    }
+    cursor.Close();
+    read.Close();
+    std::scoped_lock lock(state_->mutex_);
+    ovf_per_commit_result_v1 result{};
+    result.struct_size = sizeof(result);
+    const auto status = state_->backend_->migration_commit(state_->backend_, migration, &result);
+    if (status != OVF_PER_STATUS_OK) {
+      const auto error = state_->MakeError(status);
+      static_cast<void>(state_->backend_->migration_close(state_->backend_, migration));
+      return error;
+    }
+    static_cast<void>(state_->backend_->migration_close(state_->backend_, migration));
+    return MigrationInfo{{result.generation, FromAbi(result.achieved_durability)},
+                         processed_entries,
+                         migration_status.resumed != 0};
+  } catch (...) {
+    close_migration();
+    return Error{ErrorCode::backend_failure, "migration transform raised an exception"};
+  }
+}
+Result<CommitInfo> Store::Rollback(Durability durability) const noexcept {
+  if (!valid()) {
+    return Error{ErrorCode::invalid_state, "store is not open"};
+  }
+  std::scoped_lock lock(state_->mutex_);
+  ovf_per_commit_result_v1 result{};
+  result.struct_size = sizeof(result);
+  const auto status =
+      state_->backend_->store_rollback(state_->backend_, handle_, ToAbi(durability), &result);
+  return status == OVF_PER_STATUS_OK ? Result<CommitInfo>(CommitInfo{
+                                           result.generation, FromAbi(result.achieved_durability)})
+                                     : Result<CommitInfo>(state_->MakeError(status));
+}
 void Store::Close() noexcept {
   if (valid()) {
     std::scoped_lock lock(state_->mutex_);
@@ -526,7 +654,10 @@ Result<std::unique_ptr<Runtime>> Runtime::Create(const ovf_per_backend_factory_v
         backend->blob_close != nullptr && backend->write_begin_at != nullptr &&
         backend->cursor_open != nullptr && backend->cursor_next != nullptr &&
         backend->cursor_close != nullptr && backend->store_reset != nullptr &&
-        backend->store_status != nullptr && backend->last_error != nullptr;
+        backend->store_status != nullptr && backend->migration_begin != nullptr &&
+        backend->migration_apply != nullptr && backend->migration_commit != nullptr &&
+        backend->migration_abort != nullptr && backend->migration_close != nullptr &&
+        backend->store_rollback != nullptr && backend->last_error != nullptr;
     if (!valid) {
       factory.destroy(backend);
       return Error{ErrorCode::incompatible_abi, "persistency provider table is incomplete"};
@@ -547,15 +678,26 @@ Result<std::unique_ptr<Runtime>> Runtime::Create(const ovf_per_backend_factory_v
 
 Result<std::unique_ptr<Runtime>> Runtime::Load(std::string_view provider,
                                                RuntimeConfig config) noexcept {
+  return LoadFrom(provider, {}, std::move(config));
+}
+
+Result<std::unique_ptr<Runtime>> Runtime::LoadFrom(std::string_view provider,
+                                                   std::string_view provider_directory,
+                                                   RuntimeConfig config) noexcept {
 #if defined(__unix__) || defined(__APPLE__)
   if (!ValidProviderName(provider)) {
     return Error{ErrorCode::invalid_argument, "invalid persistency provider name"};
   }
 #if defined(__APPLE__)
-  const std::string library_name = "libovf_per_provider_" + std::string(provider) + ".dylib";
+  const std::string filename = "libovf_per_provider_" + std::string(provider) + ".dylib";
 #else
-  const std::string library_name = "libovf_per_provider_" + std::string(provider) + ".so";
+  const std::string filename = "libovf_per_provider_" + std::string(provider) + ".so";
 #endif
+  if (!provider_directory.empty() && provider_directory.front() != '/') {
+    return Error{ErrorCode::invalid_argument, "provider directory must be absolute"};
+  }
+  const std::string library_name =
+      provider_directory.empty() ? filename : std::string(provider_directory) + "/" + filename;
   void* library = ::dlopen(library_name.c_str(), RTLD_NOW | RTLD_LOCAL);
   if (library == nullptr) {
     return Error{ErrorCode::not_found, "cannot load persistency provider"};
@@ -575,6 +717,7 @@ Result<std::unique_ptr<Runtime>> Runtime::Load(std::string_view provider,
   return created;
 #else
   static_cast<void>(provider);
+  static_cast<void>(provider_directory);
   static_cast<void>(config);
   return Error{ErrorCode::unsupported, "dynamic providers are unsupported on this target"};
 #endif
@@ -605,7 +748,7 @@ Result<Capabilities> Runtime::GetCapabilities() const noexcept {
 Result<Store> Runtime::OpenStore(StoreOptions options) const noexcept {
   if (state_ == nullptr || options.logical_name.empty() || options.capacity_bytes == 0 ||
       options.max_entries == 0 || options.max_key_size == 0 || options.max_value_size == 0 ||
-      options.max_blob_size == 0) {
+      options.max_blob_size == 0 || options.schema_id.empty() || options.schema_version == 0) {
     return Error{ErrorCode::invalid_argument, "store options are invalid"};
   }
   std::scoped_lock lock(state_->mutex_);
@@ -618,7 +761,9 @@ Result<Store> Runtime::OpenStore(StoreOptions options) const noexcept {
       options.max_entries,
       options.max_key_size,
       options.max_value_size,
-      options.max_blob_size};
+      options.max_blob_size,
+      {options.schema_id.data(), options.schema_id.size()},
+      options.schema_version};
   ovf_per_handle_v1 handle{};
   const auto status = state_->backend_->store_open(state_->backend_, &descriptor, &handle);
   return status == OVF_PER_STATUS_OK ? Result<Store>(Store(state_, handle))

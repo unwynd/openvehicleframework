@@ -17,7 +17,9 @@
 #include <unordered_map>
 #include <utility>
 
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 namespace {
 
@@ -29,7 +31,10 @@ struct StoreData final {
   std::uint32_t max_key_size{};
   std::uint32_t max_value_size{};
   std::uint64_t max_blob_size{};
+  std::string schema_id;
+  std::uint64_t schema_version{};
   ovf_per_durability_v1 minimum_durability{};
+  ovf_per_recovery_state_v1 open_recovery_state{OVF_PER_RECOVERY_CLEAN_V1};
 };
 
 struct StoreHandle final {
@@ -66,6 +71,15 @@ struct Cursor final {
   bool row_ready{};
 };
 
+struct MigrationOperation final {
+  std::shared_ptr<StoreData> store;
+  std::string migration_id;
+  std::uint64_t source_generation{};
+  std::string target_schema_id;
+  std::uint64_t target_schema_version{};
+  ovf_per_durability_v1 durability{};
+};
+
 struct SqliteBackend final {
   ovf_per_backend_v1 abi{};
   std::mutex mutex;
@@ -79,6 +93,7 @@ struct SqliteBackend final {
   std::unordered_map<ovf_per_handle_v1, Transaction> transactions;
   std::unordered_map<ovf_per_handle_v1, BlobOperation> blobs;
   std::unordered_map<ovf_per_handle_v1, Cursor> cursors;
+  std::unordered_map<ovf_per_handle_v1, MigrationOperation> migrations;
   ovf_per_handle_v1 next_handle{1};
   bool running{};
   std::string error;
@@ -218,6 +233,18 @@ bool EnsureDirectory(const std::string& path) {
   return true;
 }
 
+bool HasHotJournal(const std::string& database_path) noexcept {
+  const std::string journal = database_path + "-journal";
+  const int descriptor = ::open(journal.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+  if (descriptor < 0) {
+    return false;
+  }
+  unsigned char first{};
+  const auto count = ::read(descriptor, &first, 1);
+  ::close(descriptor);
+  return count == 1 && first != 0;
+}
+
 int ConfigureConnection(sqlite3* database, const StoreData& store, std::uint32_t busy_timeout_ms) {
   sqlite3_extended_result_codes(database, 1);
   sqlite3_busy_timeout(database, static_cast<int>(busy_timeout_ms));
@@ -244,7 +271,7 @@ int OpenDatabase(const StoreData& store, std::uint32_t busy_timeout_ms, sqlite3*
 bool ReadMetadata(sqlite3* database, StoreData& store, std::uint64_t* generation) {
   constexpr const char* sql =
       "SELECT generation,capacity,max_entries,max_key_size,max_value_size,max_blob_size,"
-      "minimum_durability "
+      "minimum_durability,schema_id,schema_version "
       "FROM ovf_meta WHERE id=1";
   sqlite3_stmt* statement{};
   if (sqlite3_prepare_v2(database, sql, -1, &statement, nullptr) != SQLITE_OK) {
@@ -261,7 +288,11 @@ bool ReadMetadata(sqlite3* database, StoreData& store, std::uint64_t* generation
         static_cast<std::uint32_t>(sqlite3_column_int(statement, 3)) == store.max_key_size &&
         static_cast<std::uint32_t>(sqlite3_column_int(statement, 4)) == store.max_value_size &&
         static_cast<std::uint64_t>(sqlite3_column_int64(statement, 5)) == store.max_blob_size &&
-        sqlite3_column_int(statement, 6) == static_cast<int>(store.minimum_durability);
+        sqlite3_column_int(statement, 6) == static_cast<int>(store.minimum_durability) &&
+        std::string_view(reinterpret_cast<const char*>(sqlite3_column_text(statement, 7)),
+                         static_cast<std::size_t>(sqlite3_column_bytes(statement, 7))) ==
+            store.schema_id &&
+        static_cast<std::uint64_t>(sqlite3_column_int64(statement, 8)) == store.schema_version;
     sqlite3_finalize(statement);
     return matches;
   }
@@ -275,16 +306,32 @@ int InitializeDatabase(sqlite3* database, const StoreData& store) {
       "CREATE TABLE IF NOT EXISTS ovf_meta("
       "id INTEGER PRIMARY KEY CHECK(id=1),generation INTEGER NOT NULL,capacity INTEGER NOT NULL,"
       "max_entries INTEGER NOT NULL,max_key_size INTEGER NOT NULL,max_value_size INTEGER NOT NULL,"
-      "max_blob_size INTEGER NOT NULL,minimum_durability INTEGER NOT NULL);"
+      "max_blob_size INTEGER NOT NULL,minimum_durability INTEGER NOT NULL,"
+      "schema_id TEXT NOT NULL,schema_version INTEGER NOT NULL,"
+      "successful_commits INTEGER NOT NULL,rejected_operations INTEGER NOT NULL,"
+      "recovery_count INTEGER NOT NULL,recovery_state INTEGER NOT NULL);"
       "CREATE TABLE IF NOT EXISTS ovf_values(key BLOB PRIMARY KEY,value BLOB NOT NULL) WITHOUT "
       "ROWID;"
       "CREATE TABLE IF NOT EXISTS ovf_blobs(key BLOB UNIQUE NOT NULL,value BLOB NOT NULL);"
+      "CREATE TABLE IF NOT EXISTS ovf_migration("
+      "id TEXT PRIMARY KEY,source_generation INTEGER NOT NULL,source_schema_id TEXT NOT NULL,"
+      "source_schema_version INTEGER NOT NULL,target_schema_id TEXT NOT NULL,"
+      "target_schema_version INTEGER NOT NULL,last_key BLOB NOT NULL,processed INTEGER NOT NULL);"
+      "CREATE TABLE IF NOT EXISTS ovf_migration_values("
+      "key BLOB PRIMARY KEY,value BLOB NOT NULL) WITHOUT ROWID;"
+      "CREATE TABLE IF NOT EXISTS ovf_rollback_meta("
+      "schema_id TEXT NOT NULL,schema_version INTEGER NOT NULL);"
+      "CREATE TABLE IF NOT EXISTS ovf_rollback_values("
+      "key BLOB PRIMARY KEY,value BLOB NOT NULL) WITHOUT ROWID;"
+      "CREATE TABLE IF NOT EXISTS ovf_rollback_blobs("
+      "key BLOB UNIQUE NOT NULL,value BLOB NOT NULL);"
       "COMMIT;";
   int status = Execute(database, schema);
   if (status != SQLITE_OK) {
     return status;
   }
-  constexpr const char* insert = "INSERT OR IGNORE INTO ovf_meta VALUES(1,0,?1,?2,?3,?4,?5,?6)";
+  constexpr const char* insert =
+      "INSERT OR IGNORE INTO ovf_meta VALUES(1,0,?1,?2,?3,?4,?5,?6,?7,?8,0,0,0,?9)";
   sqlite3_stmt* statement{};
   status = sqlite3_prepare_v2(database, insert, -1, &statement, nullptr);
   if (status != SQLITE_OK) {
@@ -296,6 +343,10 @@ int InitializeDatabase(sqlite3* database, const StoreData& store) {
   sqlite3_bind_int(statement, 4, static_cast<int>(store.max_value_size));
   sqlite3_bind_int64(statement, 5, static_cast<sqlite3_int64>(store.max_blob_size));
   sqlite3_bind_int(statement, 6, static_cast<int>(store.minimum_durability));
+  sqlite3_bind_text64(statement, 7, store.schema_id.data(), store.schema_id.size(), SQLITE_STATIC,
+                      SQLITE_UTF8);
+  sqlite3_bind_int64(statement, 8, static_cast<sqlite3_int64>(store.schema_version));
+  sqlite3_bind_int(statement, 9, static_cast<int>(OVF_PER_RECOVERY_CLEAN_V1));
   status = sqlite3_step(statement);
   sqlite3_finalize(statement);
   return status == SQLITE_DONE ? SQLITE_OK : status;
@@ -321,6 +372,7 @@ void Stop(ovf_per_backend_v1* backend) {
     sqlite3_finalize(cursor.statement);
   }
   self.cursors.clear();
+  self.migrations.clear();
   for (auto& [handle, transaction] : self.transactions) {
     static_cast<void>(handle);
     if (!transaction.finished) {
@@ -370,7 +422,9 @@ ovf_per_status_v1 OpenStore(ovf_per_backend_v1* backend,
       descriptor->logical_name.data == nullptr || descriptor->logical_name.size == 0 ||
       descriptor->logical_name.size > 256 || descriptor->capacity_bytes == 0 ||
       descriptor->max_entries == 0 || descriptor->max_key_size == 0 ||
-      descriptor->max_value_size == 0 || descriptor->max_blob_size == 0) {
+      descriptor->max_value_size == 0 || descriptor->max_blob_size == 0 ||
+      descriptor->schema_id.data == nullptr || descriptor->schema_id.size == 0 ||
+      descriptor->schema_version == 0) {
     return OVF_PER_STATUS_INVALID_ARGUMENT;
   }
   std::scoped_lock lock(self.mutex);
@@ -390,7 +444,10 @@ ovf_per_status_v1 OpenStore(ovf_per_backend_v1* backend,
     store = std::make_shared<StoreData>(StoreData{
         self.root + "/" + Hex(name) + ".db", self.journal_mode, descriptor->capacity_bytes,
         descriptor->max_entries, descriptor->max_key_size, descriptor->max_value_size,
-        descriptor->max_blob_size, descriptor->minimum_durability});
+        descriptor->max_blob_size,
+        std::string(descriptor->schema_id.data, descriptor->schema_id.size),
+        descriptor->schema_version, descriptor->minimum_durability, OVF_PER_RECOVERY_CLEAN_V1});
+    const bool hot_journal = HasHotJournal(store->path);
     sqlite3* database{};
     int status = OpenDatabase(*store, self.busy_timeout_ms, &database);
     if (status == SQLITE_OK) {
@@ -408,6 +465,18 @@ ovf_per_status_v1 OpenStore(ovf_per_backend_v1* backend,
       sqlite3_close(database);
       return OVF_PER_STATUS_INVALID_ARGUMENT;
     }
+    if (hot_journal) {
+      const int recovery_status = Execute(
+          database,
+          "UPDATE ovf_meta SET recovery_count=recovery_count+1,recovery_state=2 WHERE id=1;");
+      if (recovery_status != SQLITE_OK) {
+        const auto result =
+            Fail(self, database, recovery_status, "cannot record SQLite journal recovery");
+        sqlite3_close(database);
+        return result;
+      }
+      store->open_recovery_state = OVF_PER_RECOVERY_JOURNAL_REPLAYED_V1;
+    }
     sqlite3_close(database);
     self.stores[name] = store;
   } else if (store->capacity != descriptor->capacity_bytes ||
@@ -415,6 +484,9 @@ ovf_per_status_v1 OpenStore(ovf_per_backend_v1* backend,
              store->max_key_size != descriptor->max_key_size ||
              store->max_value_size != descriptor->max_value_size ||
              store->max_blob_size != descriptor->max_blob_size ||
+             store->schema_id !=
+                 std::string_view(descriptor->schema_id.data, descriptor->schema_id.size) ||
+             store->schema_version != descriptor->schema_version ||
              store->minimum_durability != descriptor->minimum_durability) {
     SetError(self, "SQLite store was reopened with incompatible deployment");
     return OVF_PER_STATUS_INVALID_ARGUMENT;
@@ -430,6 +502,8 @@ ovf_per_status_v1 CloseStore(ovf_per_backend_v1* backend, ovf_per_handle_v1 hand
   std::scoped_lock lock(self.mutex);
   return self.store_handles.erase(handle) == 1 ? OVF_PER_STATUS_OK : OVF_PER_STATUS_NOT_FOUND;
 }
+
+bool MigrationActive(sqlite3* database);
 
 ovf_per_status_v1 Begin(ovf_per_backend_v1* backend, ovf_per_handle_v1 store_handle,
                         ovf_per_durability_v1 durability, bool write,
@@ -470,6 +544,11 @@ ovf_per_status_v1 Begin(ovf_per_backend_v1* backend, ovf_per_handle_v1 store_han
   std::uint64_t current_generation{};
   if (status == SQLITE_OK && !ReadMetadata(database, *store->second.store, &current_generation)) {
     status = SQLITE_CORRUPT;
+  }
+  if (status == SQLITE_OK && write && MigrationActive(database)) {
+    Execute(database, "ROLLBACK;");
+    sqlite3_close(database);
+    return OVF_PER_STATUS_BUSY;
   }
   if (status == SQLITE_OK && write && expected_generation != nullptr &&
       current_generation != *expected_generation) {
@@ -572,6 +651,18 @@ bool WithinQuota(sqlite3* database, const StoreData& store) {
   return valid;
 }
 
+bool MigrationActive(sqlite3* database) {
+  sqlite3_stmt* statement{};
+  if (sqlite3_prepare_v2(database, "SELECT count(*) FROM ovf_migration", -1, &statement, nullptr) !=
+      SQLITE_OK) {
+    return true;
+  }
+  const bool active =
+      sqlite3_step(statement) != SQLITE_ROW || sqlite3_column_int(statement, 0) != 0;
+  sqlite3_finalize(statement);
+  return active;
+}
+
 ovf_per_status_v1 Put(ovf_per_backend_v1* backend, ovf_per_handle_v1 handle,
                       ovf_per_bytes_view_v1 key, ovf_per_bytes_view_v1 value) {
   auto& self = *Self(backend);
@@ -666,7 +757,9 @@ ovf_per_status_v1 Commit(ovf_per_backend_v1* backend, ovf_per_handle_v1 handle,
   if (!item.commit_prepared) {
     sqlite3_stmt* statement{};
     status = sqlite3_prepare_v2(
-        item.database, "UPDATE ovf_meta SET generation=generation+1 WHERE id=1 AND generation=?1",
+        item.database,
+        "UPDATE ovf_meta SET generation=generation+1,successful_commits=successful_commits+1 "
+        "WHERE id=1 AND generation=?1",
         -1, &statement, nullptr);
     if (status == SQLITE_OK) {
       status = sqlite3_bind_int64(statement, 1, static_cast<sqlite3_int64>(item.base_generation));
@@ -965,7 +1058,9 @@ ovf_per_status_v1 CommitBlob(ovf_per_backend_v1* backend, ovf_per_handle_v1 hand
   if (!item.commit_prepared) {
     sqlite3_stmt* statement{};
     status = sqlite3_prepare_v2(
-        item.database, "UPDATE ovf_meta SET generation=generation+1 WHERE id=1 AND generation=?1",
+        item.database,
+        "UPDATE ovf_meta SET generation=generation+1,successful_commits=successful_commits+1 "
+        "WHERE id=1 AND generation=?1",
         -1, &statement, nullptr);
     if (status == SQLITE_OK) {
       status = sqlite3_bind_int64(statement, 1, static_cast<sqlite3_int64>(item.base_generation));
@@ -1186,7 +1281,10 @@ ovf_per_status_v1 ResetStore(ovf_per_backend_v1* backend, ovf_per_handle_v1 stor
     status = SQLITE_CORRUPT;
   }
   if (status == SQLITE_OK) {
-    status = Execute(database, "UPDATE ovf_meta SET generation=generation+1 WHERE id=1; COMMIT;");
+    status =
+        Execute(database, "UPDATE ovf_meta SET generation=generation+1,"
+                          "successful_commits=successful_commits+1,recovery_count=recovery_count+1,"
+                          "recovery_state=4 WHERE id=1; COMMIT;");
   }
   if (status != SQLITE_OK) {
     Execute(database, "ROLLBACK;");
@@ -1223,8 +1321,425 @@ ovf_per_status_v1 StoreStatus(ovf_per_backend_v1* backend, ovf_per_handle_v1 sto
     sqlite3_close(database);
     return result;
   }
+  sqlite3_stmt* statement{};
+  status = sqlite3_prepare_v2(database,
+                              "SELECT generation,schema_version,recovery_state,"
+                              "successful_commits,rejected_operations,recovery_count "
+                              "FROM ovf_meta WHERE id=1",
+                              -1, &statement, nullptr);
+  if (status == SQLITE_OK) {
+    status = sqlite3_step(statement);
+  }
+  if (status != SQLITE_ROW) {
+    const auto result = Fail(self, database, status, "cannot read SQLite health counters");
+    sqlite3_finalize(statement);
+    sqlite3_close(database);
+    return result;
+  }
+  *output = {sizeof(*output),
+             static_cast<std::uint64_t>(sqlite3_column_int64(statement, 0)),
+             static_cast<std::uint64_t>(sqlite3_column_int64(statement, 1)),
+             static_cast<ovf_per_recovery_state_v1>(sqlite3_column_int(statement, 2)),
+             static_cast<std::uint64_t>(sqlite3_column_int64(statement, 3)),
+             static_cast<std::uint64_t>(sqlite3_column_int64(statement, 4)),
+             static_cast<std::uint64_t>(sqlite3_column_int64(statement, 5))};
+  sqlite3_finalize(statement);
   sqlite3_close(database);
-  *output = {sizeof(*output), generation, 1, OVF_PER_RECOVERY_CLEAN_V1, generation, 0, 0};
+  return OVF_PER_STATUS_OK;
+}
+
+bool Same(ovf_per_string_view_v1 value, const std::string& expected) {
+  return value.data != nullptr && std::string_view(value.data, value.size) == expected;
+}
+
+ovf_per_status_v1 BeginMigration(ovf_per_backend_v1* backend, ovf_per_handle_v1 store_handle,
+                                 const ovf_per_migration_descriptor_v1* descriptor,
+                                 ovf_per_handle_v1* output,
+                                 ovf_per_migration_status_v1* migration_status,
+                                 ovf_per_mutable_bytes_v1* checkpoint) {
+  auto& self = *Self(backend);
+  if (descriptor == nullptr || descriptor->struct_size < sizeof(*descriptor) || output == nullptr ||
+      migration_status == nullptr || migration_status->struct_size < sizeof(*migration_status) ||
+      checkpoint == nullptr || descriptor->migration_id.data == nullptr ||
+      descriptor->migration_id.size == 0 || descriptor->target_schema_id.data == nullptr ||
+      descriptor->target_schema_id.size == 0 || descriptor->target_schema_version == 0) {
+    return OVF_PER_STATUS_INVALID_ARGUMENT;
+  }
+  std::scoped_lock lock(self.mutex);
+  const auto handle = self.store_handles.find(store_handle);
+  if (handle == self.store_handles.end()) {
+    return OVF_PER_STATUS_NOT_FOUND;
+  }
+  auto& store = *handle->second.store;
+  if (handle->second.access != OVF_PER_ACCESS_READ_WRITE) {
+    return OVF_PER_STATUS_PERMISSION_DENIED;
+  }
+  if (!Same(descriptor->source_schema_id, store.schema_id) ||
+      descriptor->source_schema_version != store.schema_version) {
+    return OVF_PER_STATUS_CONFLICT;
+  }
+  const std::string migration_id(descriptor->migration_id.data, descriptor->migration_id.size);
+  const std::string target_schema(descriptor->target_schema_id.data,
+                                  descriptor->target_schema_id.size);
+  sqlite3* database{};
+  int status = OpenDatabase(store, self.busy_timeout_ms, &database);
+  if (status == SQLITE_OK) {
+    status = Execute(database, "BEGIN IMMEDIATE;");
+  }
+  std::uint64_t generation{};
+  if (status == SQLITE_OK && !ReadMetadata(database, store, &generation)) {
+    status = SQLITE_CORRUPT;
+  }
+  sqlite3_stmt* statement{};
+  bool resumed{};
+  std::uint64_t processed{};
+  std::vector<std::uint8_t> last_key;
+  if (status == SQLITE_OK) {
+    status = sqlite3_prepare_v2(
+        database,
+        "SELECT source_generation,source_schema_id,source_schema_version,target_schema_id,"
+        "target_schema_version,last_key,processed FROM ovf_migration WHERE id=?1",
+        -1, &statement, nullptr);
+  }
+  if (status == SQLITE_OK) {
+    status = sqlite3_bind_text64(statement, 1, migration_id.data(), migration_id.size(),
+                                 SQLITE_STATIC, SQLITE_UTF8);
+  }
+  if (status == SQLITE_OK) {
+    status = sqlite3_step(statement);
+  }
+  if (status == SQLITE_ROW) {
+    resumed = true;
+    generation = static_cast<std::uint64_t>(sqlite3_column_int64(statement, 0));
+    const std::string_view source_id(
+        reinterpret_cast<const char*>(sqlite3_column_text(statement, 1)),
+        static_cast<std::size_t>(sqlite3_column_bytes(statement, 1)));
+    const auto source_version = static_cast<std::uint64_t>(sqlite3_column_int64(statement, 2));
+    const std::string_view target_id(
+        reinterpret_cast<const char*>(sqlite3_column_text(statement, 3)),
+        static_cast<std::size_t>(sqlite3_column_bytes(statement, 3)));
+    const auto target_version = static_cast<std::uint64_t>(sqlite3_column_int64(statement, 4));
+    const auto* bytes = static_cast<const std::uint8_t*>(sqlite3_column_blob(statement, 5));
+    const auto size = static_cast<std::size_t>(sqlite3_column_bytes(statement, 5));
+    if (size != 0) {
+      last_key.assign(bytes, bytes + size);
+    }
+    processed = static_cast<std::uint64_t>(sqlite3_column_int64(statement, 6));
+    if (source_id != store.schema_id || source_version != store.schema_version ||
+        target_id != target_schema || target_version != descriptor->target_schema_version) {
+      status = SQLITE_CONSTRAINT;
+    } else {
+      status = SQLITE_OK;
+    }
+  } else if (status == SQLITE_DONE) {
+    sqlite3_finalize(statement);
+    statement = nullptr;
+    if (MigrationActive(database)) {
+      status = SQLITE_CONSTRAINT;
+    } else {
+      status =
+          sqlite3_prepare_v2(database, "INSERT INTO ovf_migration VALUES(?1,?2,?3,?4,?5,?6,x'',0)",
+                             -1, &statement, nullptr);
+      if (status == SQLITE_OK) {
+        sqlite3_bind_text64(statement, 1, migration_id.data(), migration_id.size(), SQLITE_STATIC,
+                            SQLITE_UTF8);
+        sqlite3_bind_int64(statement, 2, static_cast<sqlite3_int64>(generation));
+        sqlite3_bind_text64(statement, 3, store.schema_id.data(), store.schema_id.size(),
+                            SQLITE_STATIC, SQLITE_UTF8);
+        sqlite3_bind_int64(statement, 4, static_cast<sqlite3_int64>(store.schema_version));
+        sqlite3_bind_text64(statement, 5, target_schema.data(), target_schema.size(), SQLITE_STATIC,
+                            SQLITE_UTF8);
+        sqlite3_bind_int64(statement, 6,
+                           static_cast<sqlite3_int64>(descriptor->target_schema_version));
+        status = sqlite3_step(statement) == SQLITE_DONE ? SQLITE_OK : sqlite3_errcode(database);
+      }
+    }
+  }
+  sqlite3_finalize(statement);
+  if (status == SQLITE_OK && checkpoint->size < last_key.size()) {
+    checkpoint->size = last_key.size();
+    status = SQLITE_TOOBIG;
+  }
+  if (status == SQLITE_OK) {
+    if (!last_key.empty()) {
+      std::memcpy(checkpoint->data, last_key.data(), last_key.size());
+    }
+    checkpoint->size = last_key.size();
+    status = Execute(database, "COMMIT;");
+  }
+  if (status != SQLITE_OK) {
+    Execute(database, "ROLLBACK;");
+    const auto result = status == SQLITE_CONSTRAINT
+                            ? OVF_PER_STATUS_CONFLICT
+                            : Fail(self, database, status, "cannot begin SQLite migration");
+    sqlite3_close(database);
+    return result;
+  }
+  sqlite3_close(database);
+  const auto migration_handle = self.next_handle++;
+  self.migrations.emplace(migration_handle,
+                          MigrationOperation{handle->second.store, migration_id, generation,
+                                             target_schema, descriptor->target_schema_version,
+                                             descriptor->durability});
+  *output = migration_handle;
+  *migration_status = {
+      sizeof(*migration_status), generation, processed, static_cast<std::uint8_t>(resumed), {}};
+  return OVF_PER_STATUS_OK;
+}
+
+ovf_per_status_v1 ApplyMigration(ovf_per_backend_v1* backend, ovf_per_handle_v1 handle,
+                                 ovf_per_bytes_view_v1 source_key, const ovf_per_entry_v1* target,
+                                 std::uint8_t write_target) {
+  auto& self = *Self(backend);
+  if (source_key.data == nullptr || source_key.size == 0 || write_target > 1 ||
+      (write_target != 0 && target == nullptr)) {
+    return OVF_PER_STATUS_INVALID_ARGUMENT;
+  }
+  std::scoped_lock lock(self.mutex);
+  const auto operation = self.migrations.find(handle);
+  if (operation == self.migrations.end()) {
+    return OVF_PER_STATUS_NOT_FOUND;
+  }
+  const auto& store = *operation->second.store;
+  if (write_target != 0 && (target->key.data == nullptr || target->key.size == 0 ||
+                            target->key.size > store.max_key_size ||
+                            (target->value.data == nullptr && target->value.size != 0) ||
+                            target->value.size > store.max_value_size)) {
+    return OVF_PER_STATUS_INVALID_ARGUMENT;
+  }
+  sqlite3* database{};
+  int status = OpenDatabase(store, self.busy_timeout_ms, &database);
+  if (status == SQLITE_OK) {
+    status = Execute(database, "BEGIN IMMEDIATE;");
+  }
+  sqlite3_stmt* statement{};
+  if (status == SQLITE_OK && write_target != 0) {
+    status = sqlite3_prepare_v2(
+        database,
+        "INSERT INTO ovf_migration_values VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET "
+        "value=excluded.value",
+        -1, &statement, nullptr);
+    if (status == SQLITE_OK) {
+      sqlite3_bind_blob64(statement, 1, target->key.data, target->key.size, SQLITE_STATIC);
+      sqlite3_bind_blob64(statement, 2, target->value.data, target->value.size, SQLITE_STATIC);
+      status = sqlite3_step(statement) == SQLITE_DONE ? SQLITE_OK : sqlite3_errcode(database);
+    }
+    sqlite3_finalize(statement);
+    statement = nullptr;
+  }
+  if (status == SQLITE_OK) {
+    status = sqlite3_prepare_v2(
+        database, "UPDATE ovf_migration SET last_key=?1,processed=processed+1 WHERE id=?2", -1,
+        &statement, nullptr);
+    if (status == SQLITE_OK) {
+      sqlite3_bind_blob64(statement, 1, source_key.data, source_key.size, SQLITE_STATIC);
+      sqlite3_bind_text64(statement, 2, operation->second.migration_id.data(),
+                          operation->second.migration_id.size(), SQLITE_STATIC, SQLITE_UTF8);
+      status = sqlite3_step(statement) == SQLITE_DONE && sqlite3_changes(database) == 1
+                   ? SQLITE_OK
+                   : SQLITE_CONSTRAINT;
+    }
+  }
+  sqlite3_finalize(statement);
+  if (status == SQLITE_OK) {
+    sqlite3_stmt* quota{};
+    status = sqlite3_prepare_v2(
+        database,
+        "SELECT count(*),coalesce(sum(length(key)+length(value)),0) FROM ovf_migration_values", -1,
+        &quota, nullptr);
+    if (status == SQLITE_OK && sqlite3_step(quota) == SQLITE_ROW &&
+        (static_cast<std::uint64_t>(sqlite3_column_int64(quota, 0)) > store.max_entries ||
+         static_cast<std::uint64_t>(sqlite3_column_int64(quota, 1)) > store.capacity)) {
+      status = SQLITE_FULL;
+    }
+    sqlite3_finalize(quota);
+  }
+  if (status == SQLITE_OK) {
+    status = Execute(database, "COMMIT;");
+  }
+  if (status != SQLITE_OK) {
+    Execute(database, "ROLLBACK;");
+    const auto result = Fail(self, database, status, "cannot stage SQLite migration entry");
+    sqlite3_close(database);
+    return result;
+  }
+  sqlite3_close(database);
+  return OVF_PER_STATUS_OK;
+}
+
+ovf_per_status_v1 CommitMigration(ovf_per_backend_v1* backend, ovf_per_handle_v1 handle,
+                                  ovf_per_commit_result_v1* output) {
+  auto& self = *Self(backend);
+  if (output == nullptr || output->struct_size < sizeof(*output)) {
+    return OVF_PER_STATUS_INVALID_ARGUMENT;
+  }
+  std::scoped_lock lock(self.mutex);
+  const auto operation = self.migrations.find(handle);
+  if (operation == self.migrations.end()) {
+    return OVF_PER_STATUS_NOT_FOUND;
+  }
+  auto& item = operation->second;
+  sqlite3* database{};
+  int status = OpenDatabase(*item.store, self.busy_timeout_ms, &database);
+  if (status == SQLITE_OK) {
+    status = Execute(
+        database,
+        "BEGIN EXCLUSIVE;DELETE FROM ovf_rollback_meta;DELETE FROM ovf_rollback_values;"
+        "DELETE FROM ovf_rollback_blobs;INSERT INTO ovf_rollback_values SELECT * FROM ovf_values;"
+        "INSERT INTO ovf_rollback_blobs SELECT key,value FROM ovf_blobs;");
+  }
+  sqlite3_stmt* statement{};
+  if (status == SQLITE_OK) {
+    status = sqlite3_prepare_v2(database, "INSERT INTO ovf_rollback_meta VALUES(?1,?2)", -1,
+                                &statement, nullptr);
+    if (status == SQLITE_OK) {
+      sqlite3_bind_text64(statement, 1, item.store->schema_id.data(), item.store->schema_id.size(),
+                          SQLITE_STATIC, SQLITE_UTF8);
+      sqlite3_bind_int64(statement, 2, static_cast<sqlite3_int64>(item.store->schema_version));
+      status = sqlite3_step(statement) == SQLITE_DONE ? SQLITE_OK : sqlite3_errcode(database);
+    }
+    sqlite3_finalize(statement);
+    statement = nullptr;
+  }
+  if (status == SQLITE_OK) {
+    status = Execute(database, "DELETE FROM ovf_values;INSERT INTO ovf_values SELECT * FROM "
+                               "ovf_migration_values;");
+  }
+  if (status == SQLITE_OK) {
+    status = sqlite3_prepare_v2(
+        database,
+        "UPDATE ovf_meta SET generation=generation+1,schema_id=?1,schema_version=?2,"
+        "successful_commits=successful_commits+1,recovery_count=recovery_count+1,"
+        "recovery_state=5 WHERE id=1 AND generation=?3",
+        -1, &statement, nullptr);
+    if (status == SQLITE_OK) {
+      sqlite3_bind_text64(statement, 1, item.target_schema_id.data(), item.target_schema_id.size(),
+                          SQLITE_STATIC, SQLITE_UTF8);
+      sqlite3_bind_int64(statement, 2, static_cast<sqlite3_int64>(item.target_schema_version));
+      sqlite3_bind_int64(statement, 3, static_cast<sqlite3_int64>(item.source_generation));
+      status = sqlite3_step(statement) == SQLITE_DONE && sqlite3_changes(database) == 1
+                   ? SQLITE_OK
+                   : SQLITE_CONSTRAINT;
+    }
+    sqlite3_finalize(statement);
+  }
+  if (status == SQLITE_OK) {
+    status =
+        Execute(database, "DELETE FROM ovf_migration_values;DELETE FROM ovf_migration;COMMIT;");
+  }
+  if (status != SQLITE_OK) {
+    Execute(database, "ROLLBACK;");
+    const auto result = status == SQLITE_CONSTRAINT
+                            ? OVF_PER_STATUS_CONFLICT
+                            : Fail(self, database, status, "cannot activate SQLite migration");
+    sqlite3_close(database);
+    return result;
+  }
+  sqlite3_close(database);
+  item.store->schema_id = item.target_schema_id;
+  item.store->schema_version = item.target_schema_version;
+  *output = {sizeof(*output), item.source_generation + 1, item.durability};
+  return OVF_PER_STATUS_OK;
+}
+
+ovf_per_status_v1 AbortMigration(ovf_per_backend_v1* backend, ovf_per_handle_v1 handle) {
+  auto& self = *Self(backend);
+  std::scoped_lock lock(self.mutex);
+  return self.migrations.contains(handle) ? OVF_PER_STATUS_OK : OVF_PER_STATUS_NOT_FOUND;
+}
+
+ovf_per_status_v1 CloseMigration(ovf_per_backend_v1* backend, ovf_per_handle_v1 handle) {
+  auto& self = *Self(backend);
+  std::scoped_lock lock(self.mutex);
+  return self.migrations.erase(handle) == 1 ? OVF_PER_STATUS_OK : OVF_PER_STATUS_NOT_FOUND;
+}
+
+ovf_per_status_v1 RollbackStore(ovf_per_backend_v1* backend, ovf_per_handle_v1 store_handle,
+                                ovf_per_durability_v1 durability,
+                                ovf_per_commit_result_v1* output) {
+  auto& self = *Self(backend);
+  if (output == nullptr || output->struct_size < sizeof(*output)) {
+    return OVF_PER_STATUS_INVALID_ARGUMENT;
+  }
+  std::scoped_lock lock(self.mutex);
+  const auto handle = self.store_handles.find(store_handle);
+  if (handle == self.store_handles.end()) {
+    return OVF_PER_STATUS_NOT_FOUND;
+  }
+  auto& store = *handle->second.store;
+  if (handle->second.access != OVF_PER_ACCESS_READ_WRITE || durability < store.minimum_durability) {
+    return OVF_PER_STATUS_PERMISSION_DENIED;
+  }
+  sqlite3* database{};
+  int status = OpenDatabase(store, self.busy_timeout_ms, &database);
+  if (status == SQLITE_OK) {
+    status = Execute(database, "BEGIN EXCLUSIVE;");
+  }
+  sqlite3_stmt* statement{};
+  std::string schema_id;
+  std::uint64_t schema_version{};
+  if (status == SQLITE_OK) {
+    status = sqlite3_prepare_v2(database, "SELECT schema_id,schema_version FROM ovf_rollback_meta",
+                                -1, &statement, nullptr);
+  }
+  if (status == SQLITE_OK) {
+    status = sqlite3_step(statement);
+  }
+  if (status == SQLITE_ROW) {
+    schema_id.assign(reinterpret_cast<const char*>(sqlite3_column_text(statement, 0)),
+                     static_cast<std::size_t>(sqlite3_column_bytes(statement, 0)));
+    schema_version = static_cast<std::uint64_t>(sqlite3_column_int64(statement, 1));
+    status = SQLITE_OK;
+  } else if (status == SQLITE_DONE) {
+    status = SQLITE_NOTFOUND;
+  }
+  sqlite3_finalize(statement);
+  if (status == SQLITE_OK) {
+    status = Execute(database,
+                     "DELETE FROM ovf_values;INSERT INTO ovf_values SELECT * FROM "
+                     "ovf_rollback_values;DELETE FROM ovf_blobs;INSERT INTO ovf_blobs(key,value) "
+                     "SELECT key,value FROM ovf_rollback_blobs;");
+  }
+  if (status == SQLITE_OK) {
+    status = sqlite3_prepare_v2(
+        database,
+        "UPDATE ovf_meta SET generation=generation+1,schema_id=?1,schema_version=?2,"
+        "successful_commits=successful_commits+1,recovery_count=recovery_count+1,"
+        "recovery_state=6 WHERE id=1",
+        -1, &statement, nullptr);
+    if (status == SQLITE_OK) {
+      sqlite3_bind_text64(statement, 1, schema_id.data(), schema_id.size(), SQLITE_STATIC,
+                          SQLITE_UTF8);
+      sqlite3_bind_int64(statement, 2, static_cast<sqlite3_int64>(schema_version));
+      status = sqlite3_step(statement) == SQLITE_DONE ? SQLITE_OK : sqlite3_errcode(database);
+    }
+    sqlite3_finalize(statement);
+  }
+  std::uint64_t generation{};
+  if (status == SQLITE_OK) {
+    status = Execute(database, "DELETE FROM ovf_rollback_values;DELETE FROM ovf_rollback_blobs;"
+                               "DELETE FROM ovf_rollback_meta;COMMIT;");
+  }
+  if (status == SQLITE_OK) {
+    StoreData expected = store;
+    expected.schema_id = schema_id;
+    expected.schema_version = schema_version;
+    if (!ReadMetadata(database, expected, &generation)) {
+      status = SQLITE_CORRUPT;
+    }
+  }
+  if (status != SQLITE_OK) {
+    Execute(database, "ROLLBACK;");
+    const auto result = status == SQLITE_NOTFOUND
+                            ? OVF_PER_STATUS_NOT_FOUND
+                            : Fail(self, database, status, "cannot roll back SQLite migration");
+    sqlite3_close(database);
+    return result;
+  }
+  sqlite3_close(database);
+  store.schema_id = std::move(schema_id);
+  store.schema_version = schema_version;
+  *output = {sizeof(*output), generation, durability};
   return OVF_PER_STATUS_OK;
 }
 
@@ -1284,6 +1799,12 @@ ovf_per_status_v1 Create(const ovf_per_backend_config_v1* config, ovf_per_backen
                     CloseCursor,
                     ResetStore,
                     StoreStatus,
+                    BeginMigration,
+                    ApplyMigration,
+                    CommitMigration,
+                    AbortMigration,
+                    CloseMigration,
+                    RollbackStore,
                     LastError};
     *output = &backend.release()->abi;
     return OVF_PER_STATUS_OK;
