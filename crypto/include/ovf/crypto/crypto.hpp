@@ -189,6 +189,25 @@ private:
   ovf_crypto_stream_operation_v1 operation_{};
 };
 
+class AeadRecordStream final {
+public:
+  AeadRecordStream() = default;
+  ~AeadRecordStream();
+  AeadRecordStream(AeadRecordStream const&) = delete;
+  AeadRecordStream& operator=(AeadRecordStream const&) = delete;
+  AeadRecordStream(AeadRecordStream&&) noexcept;
+  AeadRecordStream& operator=(AeadRecordStream&&) noexcept;
+  [[nodiscard]] bool valid() const noexcept;
+  [[nodiscard]] Result<std::vector<std::byte>> Process(std::span<const std::byte> record) noexcept;
+  void Close() noexcept;
+
+private:
+  friend class Runtime;
+  AeadRecordStream(std::shared_ptr<detail::RuntimeState>, ovf_crypto_handle_v1) noexcept;
+  std::shared_ptr<detail::RuntimeState> state_;
+  ovf_crypto_handle_v1 handle_{};
+};
+
 struct RuntimeConfig final {
   std::string configuration;
   std::uint32_t max_keys{128};
@@ -240,12 +259,21 @@ public:
   [[nodiscard]] Result<InputStream> BeginMac(Algorithm algorithm, const Key& key) const noexcept;
   [[nodiscard]] Result<InputStream> BeginSign(Algorithm algorithm, const Key& key) const noexcept;
   [[nodiscard]] Result<InputStream> BeginVerify(Algorithm algorithm, const Key& key) const noexcept;
+  [[nodiscard]] Result<AeadRecordStream>
+  BeginRecordEncryption(Algorithm algorithm, const Key& key,
+                        AeadParameters parameters) const noexcept;
+  [[nodiscard]] Result<AeadRecordStream>
+  BeginRecordDecryption(Algorithm algorithm, const Key& key,
+                        AeadParameters parameters) const noexcept;
   void Stop() noexcept;
 
 private:
   Runtime(std::shared_ptr<detail::RuntimeState>, void* library) noexcept;
   [[nodiscard]] Result<InputStream> BeginStream(ovf_crypto_stream_operation_v1 operation,
                                                 Algorithm algorithm, const Key* key) const noexcept;
+  [[nodiscard]] Result<AeadRecordStream>
+  BeginRecordStream(ovf_crypto_stream_operation_v1 operation, Algorithm algorithm, const Key& key,
+                    AeadParameters parameters) const noexcept;
   std::shared_ptr<detail::RuntimeState> state_;
   void* library_{};
 };

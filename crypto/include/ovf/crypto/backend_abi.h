@@ -110,7 +110,9 @@ typedef enum ovf_crypto_stream_operation_v1 {
   OVF_CRYPTO_STREAM_HASH = 1,
   OVF_CRYPTO_STREAM_MAC = 2,
   OVF_CRYPTO_STREAM_SIGN = 3,
-  OVF_CRYPTO_STREAM_VERIFY = 4
+  OVF_CRYPTO_STREAM_VERIFY = 4,
+  OVF_CRYPTO_STREAM_AEAD_ENCRYPT_RECORDS = 5,
+  OVF_CRYPTO_STREAM_AEAD_DECRYPT_RECORDS = 6
 } ovf_crypto_stream_operation_v1;
 
 typedef struct ovf_crypto_stream_descriptor_v1 {
@@ -118,6 +120,7 @@ typedef struct ovf_crypto_stream_descriptor_v1 {
   ovf_crypto_stream_operation_v1 operation;
   uint32_t algorithm;
   ovf_crypto_handle_v1 key;
+  ovf_crypto_aead_parameters_v1 aead;
   uint8_t reserved[8];
 } ovf_crypto_stream_descriptor_v1;
 
@@ -237,6 +240,9 @@ struct ovf_crypto_backend_v1 {
                                         ovf_crypto_bytes_view_v1 terminal_input,
                                         ovf_crypto_mutable_bytes_v1*, uint8_t* valid);
   ovf_crypto_status_v1 (*stream_destroy)(ovf_crypto_backend_v1*, ovf_crypto_handle_v1);
+  ovf_crypto_status_v1 (*stream_process_record)(ovf_crypto_backend_v1*, ovf_crypto_handle_v1,
+                                                ovf_crypto_bytes_view_v1,
+                                                ovf_crypto_mutable_bytes_v1*);
   ovf_crypto_status_v1 (*last_error)(ovf_crypto_backend_v1*, ovf_crypto_mutable_bytes_v1* message);
 };
 

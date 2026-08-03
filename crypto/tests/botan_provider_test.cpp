@@ -273,4 +273,51 @@ TEST(BotanProviderTest, BoundsAndReclaimsStreamingContexts) {
   EXPECT_TRUE(replacement);
 }
 
+TEST(BotanProviderTest, AuthenticatesEveryAeadStreamRecordBeforeRelease) {
+  auto runtime = CreateRuntime();
+  ASSERT_NE(runtime, nullptr);
+  const auto key_material = Hex<32>("000102030405060708090a0b0c0d0e0f"
+                                    "101112131415161718191a1b1c1d1e1f");
+  auto key_result =
+      runtime->ImportKey({ovf::crypto::Algorithm::aes_256_gcm,
+                          ovf::crypto::KeyUsage::encrypt | ovf::crypto::KeyUsage::decrypt},
+                         ovf::crypto::KeyFormat::raw, key_material);
+  ASSERT_TRUE(key_result);
+  auto key = std::move(key_result).value();
+  const auto nonce = Hex<12>("101112131415161718191a1b");
+  const ovf::crypto::AeadParameters parameters{nonce, Bytes("record-stream-v1"), 16};
+  auto encrypt_result =
+      runtime->BeginRecordEncryption(ovf::crypto::Algorithm::aes_256_gcm, key, parameters);
+  auto decrypt_result =
+      runtime->BeginRecordDecryption(ovf::crypto::Algorithm::aes_256_gcm, key, parameters);
+  ASSERT_TRUE(encrypt_result);
+  ASSERT_TRUE(decrypt_result);
+  auto encrypt = std::move(encrypt_result).value();
+  auto decrypt = std::move(decrypt_result).value();
+
+  const auto first_ciphertext = encrypt.Process(Bytes("first record"));
+  const auto second_ciphertext = encrypt.Process(Bytes("second record"));
+  ASSERT_TRUE(first_ciphertext);
+  ASSERT_TRUE(second_ciphertext);
+  EXPECT_NE(first_ciphertext.value(), second_ciphertext.value());
+  const auto first_plaintext = decrypt.Process(first_ciphertext.value());
+  const auto second_plaintext = decrypt.Process(second_ciphertext.value());
+  ASSERT_TRUE(first_plaintext);
+  ASSERT_TRUE(second_plaintext);
+  EXPECT_EQ(first_plaintext.value(),
+            std::vector<std::byte>(Bytes("first record").begin(), Bytes("first record").end()));
+  EXPECT_EQ(second_plaintext.value(),
+            std::vector<std::byte>(Bytes("second record").begin(), Bytes("second record").end()));
+
+  auto rejecting_result =
+      runtime->BeginRecordDecryption(ovf::crypto::Algorithm::aes_256_gcm, key, parameters);
+  ASSERT_TRUE(rejecting_result);
+  auto rejecting = std::move(rejecting_result).value();
+  auto tampered = first_ciphertext.value();
+  tampered.back() ^= std::byte{1};
+  const auto rejected = rejecting.Process(tampered);
+  ASSERT_FALSE(rejected);
+  EXPECT_EQ(rejected.error().code, ovf::crypto::ErrorCode::authentication_failed);
+}
+
 } // namespace

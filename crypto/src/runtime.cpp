@@ -187,6 +187,36 @@ bool InputStream::valid() const noexcept {
   return state_ != nullptr && handle_ != OVF_CRYPTO_INVALID_HANDLE_V1;
 }
 
+AeadRecordStream::AeadRecordStream(std::shared_ptr<detail::RuntimeState> state,
+                                   ovf_crypto_handle_v1 handle) noexcept
+    : state_(std::move(state)), handle_(handle) {}
+
+AeadRecordStream::~AeadRecordStream() { Close(); }
+
+AeadRecordStream::AeadRecordStream(AeadRecordStream&& other) noexcept
+    : state_(std::move(other.state_)), handle_(std::exchange(other.handle_, 0)) {}
+
+AeadRecordStream& AeadRecordStream::operator=(AeadRecordStream&& other) noexcept {
+  if (this != &other) {
+    Close();
+    state_ = std::move(other.state_);
+    handle_ = std::exchange(other.handle_, 0);
+  }
+  return *this;
+}
+
+bool AeadRecordStream::valid() const noexcept {
+  return state_ != nullptr && handle_ != OVF_CRYPTO_INVALID_HANDLE_V1;
+}
+
+void AeadRecordStream::Close() noexcept {
+  if (valid()) {
+    static_cast<void>(state_->DestroyStream(handle_));
+    handle_ = OVF_CRYPTO_INVALID_HANDLE_V1;
+    state_.reset();
+  }
+}
+
 Result<bool> InputStream::Update(std::span<const std::byte> input) noexcept {
   if (!valid()) {
     return Error{ErrorCode::invalid_state, "stream is not active"};
@@ -285,19 +315,20 @@ Result<std::unique_ptr<Runtime>> Runtime::Create(const ovf_crypto_backend_factor
     }
     constexpr auto required_backend_size =
         offsetof(ovf_crypto_backend_v1, last_error) + sizeof(backend->last_error);
-    const bool valid =
-        backend->struct_size >= required_backend_size &&
-        backend->abi_version == OVF_CRYPTO_BACKEND_ABI_VERSION_1 && backend->start != nullptr &&
-        backend->stop != nullptr && backend->get_capabilities != nullptr &&
-        backend->random_bytes != nullptr && backend->key_import != nullptr &&
-        backend->key_generate != nullptr && backend->key_destroy != nullptr &&
-        backend->hash != nullptr && backend->mac != nullptr && backend->aead_encrypt != nullptr &&
-        backend->aead_decrypt != nullptr && backend->sign != nullptr &&
-        backend->verify != nullptr && backend->derive != nullptr &&
-        backend->key_public_value != nullptr && backend->key_agree != nullptr &&
-        backend->certificate_validate != nullptr && backend->stream_create != nullptr &&
-        backend->stream_update != nullptr && backend->stream_finish != nullptr &&
-        backend->stream_destroy != nullptr && backend->last_error != nullptr;
+    const bool valid = backend->struct_size >= required_backend_size &&
+                       backend->abi_version == OVF_CRYPTO_BACKEND_ABI_VERSION_1 &&
+                       backend->start != nullptr && backend->stop != nullptr &&
+                       backend->get_capabilities != nullptr && backend->random_bytes != nullptr &&
+                       backend->key_import != nullptr && backend->key_generate != nullptr &&
+                       backend->key_destroy != nullptr && backend->hash != nullptr &&
+                       backend->mac != nullptr && backend->aead_encrypt != nullptr &&
+                       backend->aead_decrypt != nullptr && backend->sign != nullptr &&
+                       backend->verify != nullptr && backend->derive != nullptr &&
+                       backend->key_public_value != nullptr && backend->key_agree != nullptr &&
+                       backend->certificate_validate != nullptr &&
+                       backend->stream_create != nullptr && backend->stream_update != nullptr &&
+                       backend->stream_finish != nullptr && backend->stream_destroy != nullptr &&
+                       backend->stream_process_record != nullptr && backend->last_error != nullptr;
     if (!valid) {
       factory.destroy(backend);
       return Error{ErrorCode::incompatible_abi, "incomplete cryptographic provider ABI"};
@@ -510,6 +541,17 @@ Result<std::vector<std::byte>> VariableOutput(detail::RuntimeState& state,
 }
 
 } // namespace
+
+Result<std::vector<std::byte>>
+AeadRecordStream::Process(std::span<const std::byte> record) noexcept {
+  if (!valid() || record.empty()) {
+    return Error{ErrorCode::invalid_state, "record stream is not active"};
+  }
+  std::scoped_lock lock(state_->mutex_);
+  return VariableOutput(*state_, [&](ovf_crypto_mutable_bytes_v1* output) {
+    return state_->backend_->stream_process_record(state_->backend_, handle_, View(record), output);
+  });
+}
 
 Result<std::vector<std::byte>> Runtime::Hash(Algorithm algorithm,
                                              std::span<const std::byte> input) const noexcept {
@@ -725,6 +767,7 @@ Result<InputStream> Runtime::BeginStream(ovf_crypto_stream_operation_v1 operatio
                                                    static_cast<std::uint32_t>(algorithm),
                                                    key == nullptr ? OVF_CRYPTO_INVALID_HANDLE_V1
                                                                   : key->handle_,
+                                                   {},
                                                    {}};
   ovf_crypto_handle_v1 handle{};
   std::scoped_lock lock(state_->mutex_);
@@ -752,6 +795,43 @@ Result<InputStream> Runtime::BeginSign(Algorithm algorithm, const Key& key) cons
 
 Result<InputStream> Runtime::BeginVerify(Algorithm algorithm, const Key& key) const noexcept {
   return BeginStream(OVF_CRYPTO_STREAM_VERIFY, algorithm, &key);
+}
+
+Result<AeadRecordStream> Runtime::BeginRecordStream(ovf_crypto_stream_operation_v1 operation,
+                                                    Algorithm algorithm, const Key& key,
+                                                    AeadParameters parameters) const noexcept {
+  if (!key.valid() || key.state_ != state_ || parameters.nonce.size() != 12 ||
+      parameters.tag_size != 16) {
+    return Error{ErrorCode::invalid_argument, "invalid AEAD record-stream request"};
+  }
+  const ovf_crypto_stream_descriptor_v1 descriptor{
+      sizeof(descriptor),
+      operation,
+      static_cast<std::uint32_t>(algorithm),
+      key.handle_,
+      {sizeof(ovf_crypto_aead_parameters_v1), View(parameters.nonce),
+       View(parameters.associated_data), parameters.tag_size},
+      {}};
+  ovf_crypto_handle_v1 handle{};
+  std::scoped_lock lock(state_->mutex_);
+  const auto status = state_->backend_->stream_create(state_->backend_, &descriptor, &handle);
+  if (status != OVF_CRYPTO_STATUS_OK) {
+    return state_->MakeError(status);
+  }
+  if (handle == OVF_CRYPTO_INVALID_HANDLE_V1) {
+    return Error{ErrorCode::incompatible_abi, "provider returned an invalid stream handle"};
+  }
+  return AeadRecordStream(state_, handle);
+}
+
+Result<AeadRecordStream> Runtime::BeginRecordEncryption(Algorithm algorithm, const Key& key,
+                                                        AeadParameters parameters) const noexcept {
+  return BeginRecordStream(OVF_CRYPTO_STREAM_AEAD_ENCRYPT_RECORDS, algorithm, key, parameters);
+}
+
+Result<AeadRecordStream> Runtime::BeginRecordDecryption(Algorithm algorithm, const Key& key,
+                                                        AeadParameters parameters) const noexcept {
+  return BeginRecordStream(OVF_CRYPTO_STREAM_AEAD_DECRYPT_RECORDS, algorithm, key, parameters);
 }
 
 void Runtime::Stop() noexcept {

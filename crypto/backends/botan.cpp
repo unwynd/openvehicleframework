@@ -24,6 +24,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -51,10 +52,20 @@ using StreamPrimitive =
                  std::unique_ptr<Botan::MessageAuthenticationCode>,
                  std::unique_ptr<Botan::PK_Signer>, std::unique_ptr<Botan::PK_Verifier>>;
 
+struct AeadRecordState final {
+  std::uint32_t algorithm{};
+  Botan::secure_vector<std::uint8_t> key;
+  std::vector<std::uint8_t> base_nonce;
+  std::vector<std::uint8_t> associated_data;
+  std::uint64_t sequence{};
+  bool encrypt{};
+};
+
 struct StreamEntry final {
   std::uint32_t generation{1};
   ovf_crypto_stream_operation_v1 operation{};
   StreamPrimitive primitive;
+  std::optional<AeadRecordState> aead;
 };
 
 struct Backend final {
@@ -793,6 +804,31 @@ ovf_crypto_status_v1 CreateStream(ovf_crypto_backend_v1* self,
       }
       stream.primitive = std::make_unique<Botan::PK_Verifier>(
           *public_key, padding, SignatureFormat(descriptor->algorithm));
+    } else if (descriptor->operation == OVF_CRYPTO_STREAM_AEAD_ENCRYPT_RECORDS ||
+               descriptor->operation == OVF_CRYPTO_STREAM_AEAD_DECRYPT_RECORDS) {
+      const auto usage = descriptor->operation == OVF_CRYPTO_STREAM_AEAD_ENCRYPT_RECORDS
+                             ? OVF_CRYPTO_KEY_USAGE_ENCRYPT
+                             : OVF_CRYPTO_KEY_USAGE_DECRYPT;
+      if (CipherName(descriptor->algorithm) == nullptr || key == nullptr ||
+          key->algorithm != descriptor->algorithm || !Permits(*key, usage) ||
+          descriptor->aead.struct_size < sizeof(descriptor->aead) ||
+          !ValidView(descriptor->aead.nonce) || descriptor->aead.nonce.size != 12 ||
+          !ValidView(descriptor->aead.associated_data) || descriptor->aead.tag_size != 16) {
+        return Fail(backend, OVF_CRYPTO_STATUS_PERMISSION_DENIED,
+                    "AEAD record stream request or key policy is invalid");
+      }
+      AeadRecordState state;
+      state.algorithm = descriptor->algorithm;
+      state.key = key->secret;
+      state.base_nonce.assign(descriptor->aead.nonce.data,
+                              descriptor->aead.nonce.data + descriptor->aead.nonce.size);
+      if (descriptor->aead.associated_data.size != 0) {
+        state.associated_data.assign(descriptor->aead.associated_data.data,
+                                     descriptor->aead.associated_data.data +
+                                         descriptor->aead.associated_data.size);
+      }
+      state.encrypt = descriptor->operation == OVF_CRYPTO_STREAM_AEAD_ENCRYPT_RECORDS;
+      stream.aead.emplace(std::move(state));
     } else {
       return Fail(backend, OVF_CRYPTO_STATUS_UNSUPPORTED, "unsupported stream operation");
     }
@@ -808,7 +844,7 @@ ovf_crypto_status_v1 UpdateStream(ovf_crypto_backend_v1* self, ovf_crypto_handle
   std::scoped_lock lock(backend.mutex);
   auto* stream = FindStream(backend, handle);
   if (!backend.running || stream == nullptr || !ValidView(input) ||
-      input.size > kMaximumOperationSize) {
+      input.size > kMaximumOperationSize || stream->aead.has_value()) {
     return Fail(backend, OVF_CRYPTO_STATUS_INVALID_ARGUMENT, "invalid stream update");
   }
   try {
@@ -836,6 +872,10 @@ ovf_crypto_status_v1 FinishStream(ovf_crypto_backend_v1* self, ovf_crypto_handle
   auto* stream = FindStream(backend, handle);
   if (!backend.running || stream == nullptr || !ValidView(terminal_input)) {
     return Fail(backend, OVF_CRYPTO_STATUS_INVALID_ARGUMENT, "invalid stream finalization");
+  }
+  if (stream->aead.has_value()) {
+    return Fail(backend, OVF_CRYPTO_STATUS_INVALID_STATE,
+                "AEAD record streams are closed rather than finalized");
   }
   try {
     if (stream->operation == OVF_CRYPTO_STREAM_VERIFY) {
@@ -894,6 +934,73 @@ ovf_crypto_status_v1 DestroyStream(ovf_crypto_backend_v1* self, ovf_crypto_handl
   return OVF_CRYPTO_STATUS_OK;
 }
 
+void AppendBigEndian(std::vector<std::uint8_t>& output, std::uint64_t value) {
+  for (int shift = 56; shift >= 0; shift -= 8) {
+    output.push_back(static_cast<std::uint8_t>(value >> static_cast<unsigned>(shift)));
+  }
+}
+
+ovf_crypto_status_v1 ProcessRecord(ovf_crypto_backend_v1* self, ovf_crypto_handle_v1 handle,
+                                   ovf_crypto_bytes_view_v1 input,
+                                   ovf_crypto_mutable_bytes_v1* output) {
+  constexpr std::size_t maximum_record_size = 1024U * 1024U;
+  constexpr std::size_t tag_size = 16;
+  auto& backend = *Self(self);
+  std::scoped_lock lock(backend.mutex);
+  auto* stream = FindStream(backend, handle);
+  if (!backend.running || stream == nullptr || !stream->aead.has_value() || !ValidView(input) ||
+      input.size == 0 || input.size > maximum_record_size + tag_size || output == nullptr) {
+    return Fail(backend, OVF_CRYPTO_STATUS_INVALID_ARGUMENT, "invalid AEAD record");
+  }
+  auto& state = *stream->aead;
+  if (!state.encrypt && input.size < tag_size) {
+    return Fail(backend, OVF_CRYPTO_STATUS_INVALID_ARGUMENT, "encrypted record is truncated");
+  }
+  const auto plaintext_size = state.encrypt ? input.size : input.size - tag_size;
+  const auto required = state.encrypt ? input.size + tag_size : plaintext_size;
+  if (output->data == nullptr || output->size < required) {
+    output->size = required;
+    return OVF_CRYPTO_STATUS_BUFFER_TOO_SMALL;
+  }
+  try {
+    auto nonce = state.base_nonce;
+    for (std::size_t index = 0; index < 8; ++index) {
+      nonce[nonce.size() - 1U - index] ^=
+          static_cast<std::uint8_t>(state.sequence >> static_cast<unsigned>(index * 8U));
+    }
+    auto associated_data = state.associated_data;
+    AppendBigEndian(associated_data, state.sequence);
+    AppendBigEndian(associated_data, plaintext_size);
+    auto cipher = Botan::AEAD_Mode::create_or_throw(CipherName(state.algorithm),
+                                                    state.encrypt ? Botan::Cipher_Dir::Encryption
+                                                                  : Botan::Cipher_Dir::Decryption);
+    cipher->set_key(state.key);
+    cipher->set_associated_data(associated_data);
+    cipher->start(nonce);
+    Botan::secure_vector<std::uint8_t> buffer(input.data, input.data + input.size);
+    cipher->finish(buffer);
+    if (buffer.size() != required) {
+      ReleaseStream(backend, handle);
+      return Fail(backend, OVF_CRYPTO_STATUS_BACKEND_ERROR,
+                  "AEAD provider returned an unexpected record size");
+    }
+    std::memcpy(output->data, buffer.data(), buffer.size());
+    output->size = buffer.size();
+    if (state.sequence == std::numeric_limits<std::uint64_t>::max()) {
+      ReleaseStream(backend, handle);
+    } else {
+      ++state.sequence;
+    }
+    return OVF_CRYPTO_STATUS_OK;
+  } catch (const Botan::Integrity_Failure& exception) {
+    ReleaseStream(backend, handle);
+    return Fail(backend, OVF_CRYPTO_STATUS_AUTHENTICATION_FAILED, exception.what());
+  } catch (const std::exception& exception) {
+    ReleaseStream(backend, handle);
+    return BotanFailure(backend, exception);
+  }
+}
+
 ovf_crypto_status_v1 LastError(ovf_crypto_backend_v1* self, ovf_crypto_mutable_bytes_v1* output) {
   auto& backend = *Self(self);
   std::scoped_lock lock(backend.mutex);
@@ -938,6 +1045,7 @@ ovf_crypto_status_v1 Create(const ovf_crypto_host_api_v1* host,
                     UpdateStream,
                     FinishStream,
                     DestroyStream,
+                    ProcessRecord,
                     LastError};
     *output = &backend.release()->abi;
     return OVF_CRYPTO_STATUS_OK;
