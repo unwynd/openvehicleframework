@@ -73,6 +73,24 @@ Durability FromAbi(ovf_per_durability_v1 value) noexcept {
   return Durability::buffered;
 }
 
+RecoveryState FromAbi(ovf_per_recovery_state_v1 value) noexcept {
+  switch (value) {
+  case OVF_PER_RECOVERY_CLEAN_V1:
+    return RecoveryState::clean;
+  case OVF_PER_RECOVERY_JOURNAL_REPLAYED_V1:
+    return RecoveryState::journal_replayed;
+  case OVF_PER_RECOVERY_FAILED_CLOSED_V1:
+    return RecoveryState::failed_closed;
+  case OVF_PER_RECOVERY_RESET_V1:
+    return RecoveryState::reset;
+  case OVF_PER_RECOVERY_MIGRATED_V1:
+    return RecoveryState::migrated;
+  case OVF_PER_RECOVERY_ROLLED_BACK_V1:
+    return RecoveryState::rolled_back;
+  }
+  return RecoveryState::failed_closed;
+}
+
 ovf_per_bytes_view_v1 View(std::span<const std::byte> value) noexcept {
   return {reinterpret_cast<const std::uint8_t*>(value.data()), value.size()};
 }
@@ -216,6 +234,78 @@ ReadTransaction::Get(std::span<const std::byte> key) const noexcept {
 }
 void ReadTransaction::Close() noexcept { CloseTransaction(state_, handle_); }
 
+ReadTransaction::Cursor::Cursor(std::shared_ptr<detail::RuntimeState> state,
+                                ovf_per_handle_v1 handle) noexcept
+    : state_(std::move(state)), handle_(handle) {}
+ReadTransaction::Cursor::~Cursor() { Close(); }
+ReadTransaction::Cursor::Cursor(Cursor&& other) noexcept
+    : state_(std::move(other.state_)), handle_(std::exchange(other.handle_, 0)) {}
+ReadTransaction::Cursor& ReadTransaction::Cursor::operator=(Cursor&& other) noexcept {
+  if (this != &other) {
+    Close();
+    state_ = std::move(other.state_);
+    handle_ = std::exchange(other.handle_, 0);
+  }
+  return *this;
+}
+bool ReadTransaction::Cursor::valid() const noexcept {
+  return state_ != nullptr && handle_ != OVF_PER_INVALID_HANDLE_V1;
+}
+Result<std::optional<Entry>> ReadTransaction::Cursor::Next() noexcept {
+  if (!valid()) {
+    return Error{ErrorCode::invalid_state, "cursor is not open"};
+  }
+  std::scoped_lock lock(state_->mutex_);
+  try {
+    ovf_per_mutable_bytes_v1 key{nullptr, 0};
+    ovf_per_mutable_bytes_v1 value{nullptr, 0};
+    auto status = state_->backend_->cursor_next(state_->backend_, handle_, &key, &value);
+    if (status == OVF_PER_STATUS_NOT_FOUND) {
+      return std::optional<Entry>{};
+    }
+    if (status != OVF_PER_STATUS_BUFFER_TOO_SMALL) {
+      return state_->MakeError(status);
+    }
+    Entry entry{std::vector<std::byte>(key.size), std::vector<std::byte>(value.size)};
+    key.data = reinterpret_cast<std::uint8_t*>(entry.key.data());
+    value.data = reinterpret_cast<std::uint8_t*>(entry.value.data());
+    status = state_->backend_->cursor_next(state_->backend_, handle_, &key, &value);
+    if (status != OVF_PER_STATUS_OK || key.size > entry.key.size() ||
+        value.size > entry.value.size()) {
+      return status == OVF_PER_STATUS_OK
+                 ? Error{ErrorCode::incompatible_abi, "provider returned invalid cursor sizes"}
+                 : state_->MakeError(status);
+    }
+    entry.key.resize(key.size);
+    entry.value.resize(value.size);
+    return std::optional<Entry>(std::move(entry));
+  } catch (...) {
+    return Error{ErrorCode::resource_exhausted, "cannot allocate cursor entry"};
+  }
+}
+void ReadTransaction::Cursor::Close() noexcept {
+  if (valid()) {
+    std::scoped_lock lock(state_->mutex_);
+    if (state_->running_) {
+      static_cast<void>(state_->backend_->cursor_close(state_->backend_, handle_));
+    }
+  }
+  handle_ = OVF_PER_INVALID_HANDLE_V1;
+  state_.reset();
+}
+Result<ReadTransaction::Cursor>
+ReadTransaction::Iterate(std::span<const std::byte> prefix) const noexcept {
+  if (!valid()) {
+    return Error{ErrorCode::invalid_state, "read transaction is not active"};
+  }
+  std::scoped_lock lock(state_->mutex_);
+  ovf_per_handle_v1 cursor{};
+  const auto status =
+      state_->backend_->cursor_open(state_->backend_, handle_, View(prefix), &cursor);
+  return status == OVF_PER_STATUS_OK ? Result<Cursor>(Cursor(state_, cursor))
+                                     : Result<Cursor>(state_->MakeError(status));
+}
+
 WriteTransaction::WriteTransaction(std::shared_ptr<detail::RuntimeState> state,
                                    ovf_per_handle_v1 handle, std::uint64_t generation) noexcept
     : state_(std::move(state)), handle_(handle), generation_(generation) {}
@@ -330,6 +420,61 @@ Result<WriteTransaction> Store::BeginWrite(Durability durability) const noexcept
              ? Result<WriteTransaction>(WriteTransaction(state_, transaction, generation))
              : Result<WriteTransaction>(state_->MakeError(status));
 }
+Result<WriteTransaction> Store::BeginWriteAt(std::uint64_t expected_generation,
+                                             Durability durability) const noexcept {
+  if (!valid()) {
+    return Error{ErrorCode::invalid_state, "store is not open"};
+  }
+  std::scoped_lock lock(state_->mutex_);
+  ovf_per_handle_v1 transaction{};
+  std::uint64_t generation{};
+  const auto status = state_->backend_->write_begin_at(
+      state_->backend_, handle_, ToAbi(durability), expected_generation, &transaction, &generation);
+  return status == OVF_PER_STATUS_OK
+             ? Result<WriteTransaction>(WriteTransaction(state_, transaction, generation))
+             : Result<WriteTransaction>(state_->MakeError(status));
+}
+Result<CommitInfo> Store::Reset(std::span<const Entry> initial_data,
+                                Durability durability) const noexcept {
+  if (!valid()) {
+    return Error{ErrorCode::invalid_state, "store is not open"};
+  }
+  try {
+    std::vector<ovf_per_entry_v1> entries;
+    entries.reserve(initial_data.size());
+    for (const auto& entry : initial_data) {
+      if (entry.key.empty()) {
+        return Error{ErrorCode::invalid_argument, "initial-data key is empty"};
+      }
+      entries.push_back({View(entry.key), View(entry.value)});
+    }
+    std::scoped_lock lock(state_->mutex_);
+    ovf_per_commit_result_v1 result{sizeof(result), 0, OVF_PER_DURABILITY_BUFFERED};
+    const auto status = state_->backend_->store_reset(state_->backend_, handle_, entries.data(),
+                                                      entries.size(), ToAbi(durability), &result);
+    return status == OVF_PER_STATUS_OK
+               ? Result<CommitInfo>(
+                     CommitInfo{result.generation, FromAbi(result.achieved_durability)})
+               : Result<CommitInfo>(state_->MakeError(status));
+  } catch (...) {
+    return Error{ErrorCode::resource_exhausted, "cannot allocate reset entries"};
+  }
+}
+Result<StoreStatus> Store::GetStatus() const noexcept {
+  if (!valid()) {
+    return Error{ErrorCode::invalid_state, "store is not open"};
+  }
+  std::scoped_lock lock(state_->mutex_);
+  ovf_per_store_status_v1 status_value{};
+  status_value.struct_size = sizeof(status_value);
+  const auto status = state_->backend_->store_status(state_->backend_, handle_, &status_value);
+  return status == OVF_PER_STATUS_OK
+             ? Result<StoreStatus>(StoreStatus{
+                   status_value.generation, status_value.schema_version,
+                   FromAbi(status_value.recovery_state), status_value.successful_commits,
+                   status_value.rejected_operations, status_value.recovery_count})
+             : Result<StoreStatus>(state_->MakeError(status));
+}
 void Store::Close() noexcept {
   if (valid()) {
     std::scoped_lock lock(state_->mutex_);
@@ -378,7 +523,10 @@ Result<std::unique_ptr<Runtime>> Runtime::Create(const ovf_per_backend_factory_v
         backend->blob_read_open != nullptr && backend->blob_replace_begin != nullptr &&
         backend->blob_read != nullptr && backend->blob_write != nullptr &&
         backend->blob_commit != nullptr && backend->blob_abort != nullptr &&
-        backend->blob_close != nullptr && backend->last_error != nullptr;
+        backend->blob_close != nullptr && backend->write_begin_at != nullptr &&
+        backend->cursor_open != nullptr && backend->cursor_next != nullptr &&
+        backend->cursor_close != nullptr && backend->store_reset != nullptr &&
+        backend->store_status != nullptr && backend->last_error != nullptr;
     if (!valid) {
       factory.destroy(backend);
       return Error{ErrorCode::incompatible_abi, "persistency provider table is incomplete"};

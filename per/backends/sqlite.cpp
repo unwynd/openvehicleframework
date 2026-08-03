@@ -60,6 +60,12 @@ struct BlobOperation final {
   bool commit_prepared{};
 };
 
+struct Cursor final {
+  ovf_per_handle_v1 transaction{};
+  sqlite3_stmt* statement{};
+  bool row_ready{};
+};
+
 struct SqliteBackend final {
   ovf_per_backend_v1 abi{};
   std::mutex mutex;
@@ -72,6 +78,7 @@ struct SqliteBackend final {
   std::unordered_map<ovf_per_handle_v1, StoreHandle> store_handles;
   std::unordered_map<ovf_per_handle_v1, Transaction> transactions;
   std::unordered_map<ovf_per_handle_v1, BlobOperation> blobs;
+  std::unordered_map<ovf_per_handle_v1, Cursor> cursors;
   ovf_per_handle_v1 next_handle{1};
   bool running{};
   std::string error;
@@ -309,6 +316,11 @@ void Stop(ovf_per_backend_v1* backend) {
   auto& self = *Self(backend);
   std::scoped_lock lock(self.mutex);
   self.running = false;
+  for (auto& [handle, cursor] : self.cursors) {
+    static_cast<void>(handle);
+    sqlite3_finalize(cursor.statement);
+  }
+  self.cursors.clear();
   for (auto& [handle, transaction] : self.transactions) {
     static_cast<void>(handle);
     if (!transaction.finished) {
@@ -420,7 +432,8 @@ ovf_per_status_v1 CloseStore(ovf_per_backend_v1* backend, ovf_per_handle_v1 hand
 }
 
 ovf_per_status_v1 Begin(ovf_per_backend_v1* backend, ovf_per_handle_v1 store_handle,
-                        ovf_per_durability_v1 durability, bool write, ovf_per_handle_v1* output,
+                        ovf_per_durability_v1 durability, bool write,
+                        const std::uint64_t* expected_generation, ovf_per_handle_v1* output,
                         std::uint64_t* generation) {
   auto& self = *Self(backend);
   if (output == nullptr || generation == nullptr || durability < OVF_PER_DURABILITY_BUFFERED ||
@@ -458,6 +471,12 @@ ovf_per_status_v1 Begin(ovf_per_backend_v1* backend, ovf_per_handle_v1 store_han
   if (status == SQLITE_OK && !ReadMetadata(database, *store->second.store, &current_generation)) {
     status = SQLITE_CORRUPT;
   }
+  if (status == SQLITE_OK && write && expected_generation != nullptr &&
+      current_generation != *expected_generation) {
+    Execute(database, "ROLLBACK;");
+    sqlite3_close(database);
+    return OVF_PER_STATUS_CONFLICT;
+  }
   if (status != SQLITE_OK) {
     const auto result = Fail(self, database, status, "cannot begin SQLite transaction");
     if (database != nullptr) {
@@ -475,13 +494,19 @@ ovf_per_status_v1 Begin(ovf_per_backend_v1* backend, ovf_per_handle_v1 store_han
 
 ovf_per_status_v1 BeginRead(ovf_per_backend_v1* backend, ovf_per_handle_v1 store,
                             ovf_per_handle_v1* output, std::uint64_t* generation) {
-  return Begin(backend, store, OVF_PER_DURABILITY_BUFFERED, false, output, generation);
+  return Begin(backend, store, OVF_PER_DURABILITY_BUFFERED, false, nullptr, output, generation);
 }
 
 ovf_per_status_v1 BeginWrite(ovf_per_backend_v1* backend, ovf_per_handle_v1 store,
                              ovf_per_durability_v1 durability, ovf_per_handle_v1* output,
                              std::uint64_t* generation) {
-  return Begin(backend, store, durability, true, output, generation);
+  return Begin(backend, store, durability, true, nullptr, output, generation);
+}
+
+ovf_per_status_v1 BeginWriteAt(ovf_per_backend_v1* backend, ovf_per_handle_v1 store,
+                               ovf_per_durability_v1 durability, std::uint64_t expected_generation,
+                               ovf_per_handle_v1* output, std::uint64_t* generation) {
+  return Begin(backend, store, durability, true, &expected_generation, output, generation);
 }
 
 ovf_per_status_v1 Get(ovf_per_backend_v1* backend, ovf_per_handle_v1 handle,
@@ -691,6 +716,14 @@ ovf_per_status_v1 CloseTransaction(ovf_per_backend_v1* backend, ovf_per_handle_v
   const auto transaction = self.transactions.find(handle);
   if (transaction == self.transactions.end()) {
     return OVF_PER_STATUS_NOT_FOUND;
+  }
+  for (auto cursor = self.cursors.begin(); cursor != self.cursors.end();) {
+    if (cursor->second.transaction == handle) {
+      sqlite3_finalize(cursor->second.statement);
+      cursor = self.cursors.erase(cursor);
+    } else {
+      ++cursor;
+    }
   }
   if (!transaction->second.finished) {
     Execute(transaction->second.database, "ROLLBACK;");
@@ -998,6 +1031,203 @@ ovf_per_status_v1 CloseBlob(ovf_per_backend_v1* backend, ovf_per_handle_v1 handl
                              : Fail(self, nullptr, status, "cannot close SQLite blob operation");
 }
 
+ovf_per_status_v1 OpenCursor(ovf_per_backend_v1* backend, ovf_per_handle_v1 transaction_handle,
+                             ovf_per_bytes_view_v1 prefix, ovf_per_handle_v1* output) {
+  auto& self = *Self(backend);
+  if ((prefix.data == nullptr && prefix.size != 0) || output == nullptr) {
+    return OVF_PER_STATUS_INVALID_ARGUMENT;
+  }
+  std::scoped_lock lock(self.mutex);
+  const auto transaction = self.transactions.find(transaction_handle);
+  if (transaction == self.transactions.end() || transaction->second.finished ||
+      transaction->second.write) {
+    return OVF_PER_STATUS_INVALID_STATE;
+  }
+  sqlite3_stmt* statement{};
+  const char* sql = prefix.size == 0
+                        ? "SELECT key,value FROM ovf_values ORDER BY key"
+                        : "SELECT key,value FROM ovf_values WHERE substr(key,1,?1)=?2 ORDER BY key";
+  int status = sqlite3_prepare_v2(transaction->second.database, sql, -1, &statement, nullptr);
+  if (status == SQLITE_OK && prefix.size != 0) {
+    status = sqlite3_bind_int64(statement, 1, static_cast<sqlite3_int64>(prefix.size));
+  }
+  if (status == SQLITE_OK && prefix.size != 0) {
+    status = sqlite3_bind_blob64(statement, 2, prefix.data, prefix.size, SQLITE_STATIC);
+  }
+  if (status != SQLITE_OK) {
+    sqlite3_finalize(statement);
+    return Fail(self, transaction->second.database, status, "cannot open SQLite cursor");
+  }
+  const auto handle = self.next_handle++;
+  self.cursors.emplace(handle, Cursor{transaction_handle, statement, false});
+  *output = handle;
+  return OVF_PER_STATUS_OK;
+}
+
+ovf_per_status_v1 NextCursor(ovf_per_backend_v1* backend, ovf_per_handle_v1 handle,
+                             ovf_per_mutable_bytes_v1* key, ovf_per_mutable_bytes_v1* value) {
+  auto& self = *Self(backend);
+  if (key == nullptr || value == nullptr) {
+    return OVF_PER_STATUS_INVALID_ARGUMENT;
+  }
+  std::scoped_lock lock(self.mutex);
+  const auto cursor = self.cursors.find(handle);
+  if (cursor == self.cursors.end()) {
+    return OVF_PER_STATUS_NOT_FOUND;
+  }
+  if (!cursor->second.row_ready) {
+    const int status = sqlite3_step(cursor->second.statement);
+    if (status == SQLITE_DONE) {
+      return OVF_PER_STATUS_NOT_FOUND;
+    }
+    if (status != SQLITE_ROW) {
+      return Fail(self, sqlite3_db_handle(cursor->second.statement), status,
+                  "cannot advance SQLite cursor");
+    }
+    cursor->second.row_ready = true;
+  }
+  const auto key_size = static_cast<std::size_t>(sqlite3_column_bytes(cursor->second.statement, 0));
+  const auto value_size =
+      static_cast<std::size_t>(sqlite3_column_bytes(cursor->second.statement, 1));
+  if ((key_size != 0 && (key->data == nullptr || key->size < key_size)) ||
+      (value_size != 0 && (value->data == nullptr || value->size < value_size))) {
+    key->size = key_size;
+    value->size = value_size;
+    return OVF_PER_STATUS_BUFFER_TOO_SMALL;
+  }
+  if (key_size != 0) {
+    std::memcpy(key->data, sqlite3_column_blob(cursor->second.statement, 0), key_size);
+  }
+  if (value_size != 0) {
+    std::memcpy(value->data, sqlite3_column_blob(cursor->second.statement, 1), value_size);
+  }
+  key->size = key_size;
+  value->size = value_size;
+  cursor->second.row_ready = false;
+  return OVF_PER_STATUS_OK;
+}
+
+ovf_per_status_v1 CloseCursor(ovf_per_backend_v1* backend, ovf_per_handle_v1 handle) {
+  auto& self = *Self(backend);
+  std::scoped_lock lock(self.mutex);
+  const auto cursor = self.cursors.find(handle);
+  if (cursor == self.cursors.end()) {
+    return OVF_PER_STATUS_NOT_FOUND;
+  }
+  const int status = sqlite3_finalize(cursor->second.statement);
+  self.cursors.erase(cursor);
+  return status == SQLITE_OK ? OVF_PER_STATUS_OK
+                             : Fail(self, nullptr, status, "cannot close SQLite cursor");
+}
+
+ovf_per_status_v1 ResetStore(ovf_per_backend_v1* backend, ovf_per_handle_v1 store_handle,
+                             const ovf_per_entry_v1* entries, std::size_t count,
+                             ovf_per_durability_v1 durability, ovf_per_commit_result_v1* output) {
+  auto& self = *Self(backend);
+  if ((entries == nullptr && count != 0) || output == nullptr ||
+      output->struct_size < sizeof(*output)) {
+    return OVF_PER_STATUS_INVALID_ARGUMENT;
+  }
+  std::scoped_lock lock(self.mutex);
+  const auto handle = self.store_handles.find(store_handle);
+  if (handle == self.store_handles.end()) {
+    return OVF_PER_STATUS_NOT_FOUND;
+  }
+  const auto& store = *handle->second.store;
+  if (handle->second.access != OVF_PER_ACCESS_READ_WRITE) {
+    return OVF_PER_STATUS_PERMISSION_DENIED;
+  }
+  if (durability < store.minimum_durability) {
+    return OVF_PER_STATUS_PERMISSION_DENIED;
+  }
+  sqlite3* database{};
+  int status = OpenDatabase(store, self.busy_timeout_ms, &database);
+  if (status == SQLITE_OK) {
+    const char* synchronous = durability == OVF_PER_DURABILITY_MEDIA ? "PRAGMA synchronous=EXTRA;"
+                              : durability == OVF_PER_DURABILITY_PROCESS_CRASH
+                                  ? "PRAGMA synchronous=NORMAL;"
+                                  : "PRAGMA synchronous=OFF;";
+    status = Execute(database, synchronous);
+  }
+  if (status == SQLITE_OK) {
+    status = Execute(database, "BEGIN IMMEDIATE; DELETE FROM ovf_values; DELETE FROM ovf_blobs;");
+  }
+  sqlite3_stmt* statement{};
+  if (status == SQLITE_OK) {
+    status = sqlite3_prepare_v2(database, "INSERT INTO ovf_values VALUES(?1,?2)", -1, &statement,
+                                nullptr);
+  }
+  for (std::size_t index = 0; status == SQLITE_OK && index < count; ++index) {
+    if (entries[index].key.data == nullptr || entries[index].key.size == 0 ||
+        entries[index].key.size > store.max_key_size ||
+        (entries[index].value.data == nullptr && entries[index].value.size != 0) ||
+        entries[index].value.size > store.max_value_size) {
+      status = SQLITE_MISUSE;
+      break;
+    }
+    sqlite3_reset(statement);
+    sqlite3_clear_bindings(statement);
+    status = sqlite3_bind_blob64(statement, 1, entries[index].key.data, entries[index].key.size,
+                                 SQLITE_STATIC);
+    if (status == SQLITE_OK) {
+      status = sqlite3_bind_blob64(statement, 2, entries[index].value.data,
+                                   entries[index].value.size, SQLITE_STATIC);
+    }
+    if (status == SQLITE_OK) {
+      status = sqlite3_step(statement) == SQLITE_DONE ? SQLITE_OK : sqlite3_errcode(database);
+    }
+  }
+  sqlite3_finalize(statement);
+  if (status == SQLITE_OK && !WithinQuota(database, store)) {
+    status = SQLITE_FULL;
+  }
+  std::uint64_t generation{};
+  if (status == SQLITE_OK && !ReadMetadata(database, *handle->second.store, &generation)) {
+    status = SQLITE_CORRUPT;
+  }
+  if (status == SQLITE_OK) {
+    status = Execute(database, "UPDATE ovf_meta SET generation=generation+1 WHERE id=1; COMMIT;");
+  }
+  if (status != SQLITE_OK) {
+    Execute(database, "ROLLBACK;");
+    const auto result = status == SQLITE_MISUSE
+                            ? OVF_PER_STATUS_INVALID_ARGUMENT
+                            : Fail(self, database, status, "cannot reset SQLite store");
+    sqlite3_close(database);
+    return result;
+  }
+  sqlite3_close(database);
+  *output = {sizeof(*output), generation + 1, durability};
+  return OVF_PER_STATUS_OK;
+}
+
+ovf_per_status_v1 StoreStatus(ovf_per_backend_v1* backend, ovf_per_handle_v1 store_handle,
+                              ovf_per_store_status_v1* output) {
+  auto& self = *Self(backend);
+  if (output == nullptr || output->struct_size < sizeof(*output)) {
+    return OVF_PER_STATUS_INVALID_ARGUMENT;
+  }
+  std::scoped_lock lock(self.mutex);
+  const auto handle = self.store_handles.find(store_handle);
+  if (handle == self.store_handles.end()) {
+    return OVF_PER_STATUS_NOT_FOUND;
+  }
+  sqlite3* database{};
+  int status = OpenDatabase(*handle->second.store, self.busy_timeout_ms, &database);
+  std::uint64_t generation{};
+  if (status == SQLITE_OK && !ReadMetadata(database, *handle->second.store, &generation)) {
+    status = SQLITE_CORRUPT;
+  }
+  if (status != SQLITE_OK) {
+    const auto result = Fail(self, database, status, "cannot read SQLite store status");
+    sqlite3_close(database);
+    return result;
+  }
+  sqlite3_close(database);
+  *output = {sizeof(*output), generation, 1, OVF_PER_RECOVERY_CLEAN_V1, generation, 0, 0};
+  return OVF_PER_STATUS_OK;
+}
+
 ovf_per_status_v1 LastError(ovf_per_backend_v1* backend, ovf_per_mutable_bytes_v1* output) {
   auto& self = *Self(backend);
   if (output == nullptr) {
@@ -1048,6 +1278,12 @@ ovf_per_status_v1 Create(const ovf_per_backend_config_v1* config, ovf_per_backen
                     CommitBlob,
                     AbortBlob,
                     CloseBlob,
+                    BeginWriteAt,
+                    OpenCursor,
+                    NextCursor,
+                    CloseCursor,
+                    ResetStore,
+                    StoreStatus,
                     LastError};
     *output = &backend.release()->abi;
     return OVF_PER_STATUS_OK;

@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <span>
+#include <string>
 #include <string_view>
 
 extern "C" const ovf_per_backend_factory_v1* ovf_per_backend_query_v1(void);
@@ -15,6 +16,14 @@ namespace {
 
 std::span<const std::byte> Bytes(std::string_view value) {
   return {reinterpret_cast<const std::byte*>(value.data()), value.size()};
+}
+
+ovf::per::Entry Entry(std::string_view key, std::string_view value) {
+  return {{Bytes(key).begin(), Bytes(key).end()}, {Bytes(value).begin(), Bytes(value).end()}};
+}
+
+std::string Text(const std::vector<std::byte>& value) {
+  return {reinterpret_cast<const char*>(value.data()), value.size()};
 }
 
 ovf::per::StoreOptions Options(std::uint64_t capacity = 128) {
@@ -163,6 +172,48 @@ TEST(PerMemoryProviderTest, ReplacesBlobsAtomicallyWithBoundedStreaming) {
   auto retained_result = store.OpenBlob(Bytes("map"));
   ASSERT_TRUE(retained_result);
   EXPECT_EQ(retained_result.value().size(), 6U);
+}
+
+TEST(PerMemoryProviderTest, SupportsOrderedCursorsGenerationGuardsAndExplicitReset) {
+  auto runtime_result = ovf::per::Runtime::Create(*ovf_per_backend_query_v1());
+  ASSERT_TRUE(runtime_result);
+  auto runtime = std::move(runtime_result).value();
+  auto store_result = runtime->OpenStore(Options());
+  ASSERT_TRUE(store_result);
+  auto store = std::move(store_result).value();
+
+  const std::array initial{Entry("config/z", "last"), Entry("config/a", "first"),
+                           Entry("other", "ignored")};
+  const auto reset = store.Reset(initial, ovf::per::Durability::buffered);
+  ASSERT_TRUE(reset) << reset.error().message;
+  const auto stale = store.BeginWriteAt(0, ovf::per::Durability::buffered);
+  ASSERT_FALSE(stale);
+  EXPECT_EQ(stale.error().code, ovf::per::ErrorCode::conflict);
+
+  auto read_result = store.BeginRead();
+  ASSERT_TRUE(read_result);
+  auto read = std::move(read_result).value();
+  auto cursor_result = read.Iterate(Bytes("config/"));
+  ASSERT_TRUE(cursor_result);
+  auto cursor = std::move(cursor_result).value();
+  const auto first = cursor.Next();
+  const auto second = cursor.Next();
+  const auto end = cursor.Next();
+  ASSERT_TRUE(first);
+  ASSERT_TRUE(second);
+  ASSERT_TRUE(end);
+  ASSERT_TRUE(first.value());
+  ASSERT_TRUE(second.value());
+  EXPECT_FALSE(end.value());
+  EXPECT_EQ(Text(first.value()->key), "config/a");
+  EXPECT_EQ(Text(second.value()->key), "config/z");
+
+  const auto status = store.GetStatus();
+  ASSERT_TRUE(status);
+  EXPECT_EQ(status.value().generation, reset.value().generation);
+  EXPECT_EQ(status.value().recovery_state, ovf::per::RecoveryState::reset);
+  EXPECT_EQ(status.value().recovery_count, 1U);
+  EXPECT_GE(status.value().rejected_operations, 1U);
 }
 
 } // namespace

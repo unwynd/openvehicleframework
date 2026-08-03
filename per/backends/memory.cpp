@@ -28,6 +28,15 @@ struct StoreData final {
   std::uint32_t max_value_size{};
   std::uint64_t max_blob_size{};
   bool writer_active{};
+  std::uint64_t successful_commits{};
+  std::uint64_t rejected_operations{};
+  std::uint64_t recovery_count{};
+  ovf_per_recovery_state_v1 recovery_state{OVF_PER_RECOVERY_CLEAN_V1};
+};
+
+struct Cursor final {
+  std::vector<std::pair<Bytes, Bytes>> entries;
+  std::size_t position{};
 };
 
 struct BlobOperation final {
@@ -62,6 +71,7 @@ struct MemoryBackend final {
   std::unordered_map<ovf_per_handle_v1, StoreHandle> store_handles;
   std::unordered_map<ovf_per_handle_v1, Transaction> transactions;
   std::unordered_map<ovf_per_handle_v1, BlobOperation> blobs;
+  std::unordered_map<ovf_per_handle_v1, Cursor> cursors;
   ovf_per_handle_v1 next_handle{1};
   std::uint32_t max_stores{};
   std::uint32_t max_transactions{};
@@ -116,6 +126,7 @@ void Stop(ovf_per_backend_v1* backend) {
     }
   }
   self.blobs.clear();
+  self.cursors.clear();
   self.store_handles.clear();
 }
 
@@ -192,7 +203,8 @@ ovf_per_status_v1 CloseStore(ovf_per_backend_v1* backend, ovf_per_handle_v1 hand
 }
 
 ovf_per_status_v1 Begin(ovf_per_backend_v1* backend, ovf_per_handle_v1 store_handle,
-                        ovf_per_durability_v1 durability, bool write, ovf_per_handle_v1* output,
+                        ovf_per_durability_v1 durability, bool write,
+                        const std::uint64_t* expected_generation, ovf_per_handle_v1* output,
                         std::uint64_t* generation) {
   auto& self = *Self(backend);
   if (output == nullptr || generation == nullptr) {
@@ -217,6 +229,11 @@ ovf_per_status_v1 Begin(ovf_per_backend_v1* backend, ovf_per_handle_v1 store_han
   if (write && store->second.store->writer_active) {
     return OVF_PER_STATUS_BUSY;
   }
+  if (write && expected_generation != nullptr &&
+      store->second.store->generation != *expected_generation) {
+    ++store->second.store->rejected_operations;
+    return OVF_PER_STATUS_CONFLICT;
+  }
   if (write) {
     store->second.store->writer_active = true;
   }
@@ -231,13 +248,19 @@ ovf_per_status_v1 Begin(ovf_per_backend_v1* backend, ovf_per_handle_v1 store_han
 
 ovf_per_status_v1 BeginRead(ovf_per_backend_v1* backend, ovf_per_handle_v1 store,
                             ovf_per_handle_v1* output, std::uint64_t* generation) {
-  return Begin(backend, store, OVF_PER_DURABILITY_BUFFERED, false, output, generation);
+  return Begin(backend, store, OVF_PER_DURABILITY_BUFFERED, false, nullptr, output, generation);
 }
 
 ovf_per_status_v1 BeginWrite(ovf_per_backend_v1* backend, ovf_per_handle_v1 store,
                              ovf_per_durability_v1 durability, ovf_per_handle_v1* output,
                              std::uint64_t* generation) {
-  return Begin(backend, store, durability, true, output, generation);
+  return Begin(backend, store, durability, true, nullptr, output, generation);
+}
+
+ovf_per_status_v1 BeginWriteAt(ovf_per_backend_v1* backend, ovf_per_handle_v1 store,
+                               ovf_per_durability_v1 durability, std::uint64_t expected_generation,
+                               ovf_per_handle_v1* output, std::uint64_t* generation) {
+  return Begin(backend, store, durability, true, &expected_generation, output, generation);
 }
 
 ovf_per_status_v1 Get(ovf_per_backend_v1* backend, ovf_per_handle_v1 handle,
@@ -328,6 +351,7 @@ ovf_per_status_v1 Commit(ovf_per_backend_v1* backend, ovf_per_handle_v1 handle,
   }
   item.store->values = item.values;
   ++item.store->generation;
+  ++item.store->successful_commits;
   item.store->writer_active = false;
   item.finished = true;
   *output = {sizeof(*output), item.store->generation, OVF_PER_DURABILITY_BUFFERED};
@@ -493,6 +517,7 @@ ovf_per_status_v1 CommitBlob(ovf_per_backend_v1* backend, ovf_per_handle_v1 hand
   }
   item.store->blobs[item.key] = item.value;
   ++item.store->generation;
+  ++item.store->successful_commits;
   item.store->writer_active = false;
   item.finished = true;
   *output = {sizeof(*output), item.store->generation, item.durability};
@@ -524,6 +549,145 @@ ovf_per_status_v1 CloseBlob(ovf_per_backend_v1* backend, ovf_per_handle_v1 handl
     blob->second.store->writer_active = false;
   }
   self.blobs.erase(blob);
+  return OVF_PER_STATUS_OK;
+}
+
+ovf_per_status_v1 OpenCursor(ovf_per_backend_v1* backend, ovf_per_handle_v1 transaction_handle,
+                             ovf_per_bytes_view_v1 prefix, ovf_per_handle_v1* output) {
+  auto& self = *Self(backend);
+  if (!Valid(prefix) || output == nullptr) {
+    return OVF_PER_STATUS_INVALID_ARGUMENT;
+  }
+  std::scoped_lock lock(self.mutex);
+  const auto transaction = self.transactions.find(transaction_handle);
+  if (transaction == self.transactions.end() || transaction->second.finished ||
+      transaction->second.write) {
+    return OVF_PER_STATUS_INVALID_STATE;
+  }
+  try {
+    Cursor cursor;
+    const auto prefix_bytes = Copy(prefix);
+    auto iterator = transaction->second.values.lower_bound(prefix_bytes);
+    while (iterator != transaction->second.values.end() &&
+           iterator->first.size() >= prefix_bytes.size() &&
+           std::equal(prefix_bytes.begin(), prefix_bytes.end(), iterator->first.begin())) {
+      cursor.entries.push_back(*iterator);
+      ++iterator;
+    }
+    const auto handle = self.next_handle++;
+    self.cursors.emplace(handle, std::move(cursor));
+    *output = handle;
+    return OVF_PER_STATUS_OK;
+  } catch (...) {
+    return OVF_PER_STATUS_RESOURCE_EXHAUSTED;
+  }
+}
+
+ovf_per_status_v1 NextCursor(ovf_per_backend_v1* backend, ovf_per_handle_v1 handle,
+                             ovf_per_mutable_bytes_v1* key, ovf_per_mutable_bytes_v1* value) {
+  auto& self = *Self(backend);
+  if (key == nullptr || value == nullptr) {
+    return OVF_PER_STATUS_INVALID_ARGUMENT;
+  }
+  std::scoped_lock lock(self.mutex);
+  const auto cursor = self.cursors.find(handle);
+  if (cursor == self.cursors.end()) {
+    return OVF_PER_STATUS_NOT_FOUND;
+  }
+  if (cursor->second.position == cursor->second.entries.size()) {
+    return OVF_PER_STATUS_NOT_FOUND;
+  }
+  const auto& entry = cursor->second.entries[cursor->second.position];
+  if ((entry.first.size() != 0 && (key->data == nullptr || key->size < entry.first.size())) ||
+      (entry.second.size() != 0 && (value->data == nullptr || value->size < entry.second.size()))) {
+    key->size = entry.first.size();
+    value->size = entry.second.size();
+    return OVF_PER_STATUS_BUFFER_TOO_SMALL;
+  }
+  if (!entry.first.empty()) {
+    std::memcpy(key->data, entry.first.data(), entry.first.size());
+  }
+  if (!entry.second.empty()) {
+    std::memcpy(value->data, entry.second.data(), entry.second.size());
+  }
+  key->size = entry.first.size();
+  value->size = entry.second.size();
+  ++cursor->second.position;
+  return OVF_PER_STATUS_OK;
+}
+
+ovf_per_status_v1 CloseCursor(ovf_per_backend_v1* backend, ovf_per_handle_v1 handle) {
+  auto& self = *Self(backend);
+  std::scoped_lock lock(self.mutex);
+  return self.cursors.erase(handle) == 1 ? OVF_PER_STATUS_OK : OVF_PER_STATUS_NOT_FOUND;
+}
+
+ovf_per_status_v1 ResetStore(ovf_per_backend_v1* backend, ovf_per_handle_v1 store_handle,
+                             const ovf_per_entry_v1* entries, std::size_t count,
+                             ovf_per_durability_v1 durability, ovf_per_commit_result_v1* output) {
+  auto& self = *Self(backend);
+  if ((entries == nullptr && count != 0) || output == nullptr ||
+      output->struct_size < sizeof(*output)) {
+    return OVF_PER_STATUS_INVALID_ARGUMENT;
+  }
+  std::scoped_lock lock(self.mutex);
+  const auto handle = self.store_handles.find(store_handle);
+  if (handle == self.store_handles.end()) {
+    return OVF_PER_STATUS_NOT_FOUND;
+  }
+  auto& store = *handle->second.store;
+  if (handle->second.access != OVF_PER_ACCESS_READ_WRITE) {
+    return OVF_PER_STATUS_PERMISSION_DENIED;
+  }
+  if (durability != OVF_PER_DURABILITY_BUFFERED) {
+    return OVF_PER_STATUS_UNSUPPORTED;
+  }
+  if (store.writer_active) {
+    return OVF_PER_STATUS_BUSY;
+  }
+  try {
+    Values replacement;
+    for (std::size_t index = 0; index < count; ++index) {
+      if (!Valid(entries[index].key) || !Valid(entries[index].value) ||
+          entries[index].key.size == 0 || entries[index].key.size > store.max_key_size ||
+          entries[index].value.size > store.max_value_size ||
+          !replacement.emplace(Copy(entries[index].key), Copy(entries[index].value)).second) {
+        ++store.rejected_operations;
+        return OVF_PER_STATUS_INVALID_ARGUMENT;
+      }
+    }
+    if (replacement.size() > store.max_entries || Size(replacement) > store.capacity) {
+      ++store.rejected_operations;
+      return OVF_PER_STATUS_QUOTA_EXCEEDED;
+    }
+    store.values = std::move(replacement);
+    store.blobs.clear();
+    ++store.generation;
+    ++store.successful_commits;
+    ++store.recovery_count;
+    store.recovery_state = OVF_PER_RECOVERY_RESET_V1;
+    *output = {sizeof(*output), store.generation, durability};
+    return OVF_PER_STATUS_OK;
+  } catch (...) {
+    return OVF_PER_STATUS_RESOURCE_EXHAUSTED;
+  }
+}
+
+ovf_per_status_v1 StoreStatus(ovf_per_backend_v1* backend, ovf_per_handle_v1 store_handle,
+                              ovf_per_store_status_v1* output) {
+  auto& self = *Self(backend);
+  if (output == nullptr || output->struct_size < sizeof(*output)) {
+    return OVF_PER_STATUS_INVALID_ARGUMENT;
+  }
+  std::scoped_lock lock(self.mutex);
+  const auto handle = self.store_handles.find(store_handle);
+  if (handle == self.store_handles.end()) {
+    return OVF_PER_STATUS_NOT_FOUND;
+  }
+  const auto& store = *handle->second.store;
+  *output = {sizeof(*output),      store.generation,         1,
+             store.recovery_state, store.successful_commits, store.rejected_operations,
+             store.recovery_count};
   return OVF_PER_STATUS_OK;
 }
 
@@ -574,6 +738,12 @@ ovf_per_status_v1 Create(const ovf_per_backend_config_v1* config, ovf_per_backen
                     CommitBlob,
                     AbortBlob,
                     CloseBlob,
+                    BeginWriteAt,
+                    OpenCursor,
+                    NextCursor,
+                    CloseCursor,
+                    ResetStore,
+                    StoreStatus,
                     LastError};
     *output = &backend.release()->abi;
     return OVF_PER_STATUS_OK;

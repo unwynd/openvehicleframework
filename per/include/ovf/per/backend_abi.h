@@ -100,6 +100,30 @@ typedef struct ovf_per_commit_result_v1 {
   ovf_per_durability_v1 achieved_durability;
 } ovf_per_commit_result_v1;
 
+typedef enum ovf_per_recovery_state_v1 {
+  OVF_PER_RECOVERY_CLEAN_V1 = 1,
+  OVF_PER_RECOVERY_JOURNAL_REPLAYED_V1 = 2,
+  OVF_PER_RECOVERY_FAILED_CLOSED_V1 = 3,
+  OVF_PER_RECOVERY_RESET_V1 = 4,
+  OVF_PER_RECOVERY_MIGRATED_V1 = 5,
+  OVF_PER_RECOVERY_ROLLED_BACK_V1 = 6
+} ovf_per_recovery_state_v1;
+
+typedef struct ovf_per_store_status_v1 {
+  size_t struct_size;
+  uint64_t generation;
+  uint64_t schema_version;
+  ovf_per_recovery_state_v1 recovery_state;
+  uint64_t successful_commits;
+  uint64_t rejected_operations;
+  uint64_t recovery_count;
+} ovf_per_store_status_v1;
+
+typedef struct ovf_per_entry_v1 {
+  ovf_per_bytes_view_v1 key;
+  ovf_per_bytes_view_v1 value;
+} ovf_per_entry_v1;
+
 typedef struct ovf_per_backend_v1 ovf_per_backend_v1;
 
 struct ovf_per_backend_v1 {
@@ -139,6 +163,17 @@ struct ovf_per_backend_v1 {
                                    ovf_per_commit_result_v1*);
   ovf_per_status_v1 (*blob_abort)(ovf_per_backend_v1*, ovf_per_handle_v1);
   ovf_per_status_v1 (*blob_close)(ovf_per_backend_v1*, ovf_per_handle_v1);
+  ovf_per_status_v1 (*write_begin_at)(ovf_per_backend_v1*, ovf_per_handle_v1, ovf_per_durability_v1,
+                                      uint64_t, ovf_per_handle_v1*, uint64_t*);
+  ovf_per_status_v1 (*cursor_open)(ovf_per_backend_v1*, ovf_per_handle_v1, ovf_per_bytes_view_v1,
+                                   ovf_per_handle_v1*);
+  ovf_per_status_v1 (*cursor_next)(ovf_per_backend_v1*, ovf_per_handle_v1,
+                                   ovf_per_mutable_bytes_v1*, ovf_per_mutable_bytes_v1*);
+  ovf_per_status_v1 (*cursor_close)(ovf_per_backend_v1*, ovf_per_handle_v1);
+  ovf_per_status_v1 (*store_reset)(ovf_per_backend_v1*, ovf_per_handle_v1, const ovf_per_entry_v1*,
+                                   size_t, ovf_per_durability_v1, ovf_per_commit_result_v1*);
+  ovf_per_status_v1 (*store_status)(ovf_per_backend_v1*, ovf_per_handle_v1,
+                                    ovf_per_store_status_v1*);
   ovf_per_status_v1 (*last_error)(ovf_per_backend_v1*, ovf_per_mutable_bytes_v1*);
 };
 

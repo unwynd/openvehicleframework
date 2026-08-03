@@ -91,12 +91,36 @@ struct CommitInfo final {
   Durability achieved_durability{};
 };
 
+enum class RecoveryState : std::uint8_t {
+  clean,
+  journal_replayed,
+  failed_closed,
+  reset,
+  migrated,
+  rolled_back
+};
+
+struct StoreStatus final {
+  std::uint64_t generation{};
+  std::uint64_t schema_version{};
+  RecoveryState recovery_state{};
+  std::uint64_t successful_commits{};
+  std::uint64_t rejected_operations{};
+  std::uint64_t recovery_count{};
+};
+
+struct Entry final {
+  std::vector<std::byte> key;
+  std::vector<std::byte> value;
+};
+
 namespace detail {
 class RuntimeState;
 }
 
 class ReadTransaction final {
 public:
+  class Cursor;
   ReadTransaction() = default;
   ~ReadTransaction();
   ReadTransaction(ReadTransaction const&) = delete;
@@ -107,6 +131,7 @@ public:
   [[nodiscard]] std::uint64_t generation() const noexcept;
   [[nodiscard]] Result<std::optional<std::vector<std::byte>>>
   Get(std::span<const std::byte> key) const noexcept;
+  [[nodiscard]] Result<Cursor> Iterate(std::span<const std::byte> prefix = {}) const noexcept;
   void Close() noexcept;
 
 private:
@@ -115,6 +140,25 @@ private:
   std::shared_ptr<detail::RuntimeState> state_;
   ovf_per_handle_v1 handle_{};
   std::uint64_t generation_{};
+};
+
+class ReadTransaction::Cursor final {
+public:
+  Cursor() = default;
+  ~Cursor();
+  Cursor(Cursor const&) = delete;
+  Cursor& operator=(Cursor const&) = delete;
+  Cursor(Cursor&&) noexcept;
+  Cursor& operator=(Cursor&&) noexcept;
+  [[nodiscard]] bool valid() const noexcept;
+  [[nodiscard]] Result<std::optional<Entry>> Next() noexcept;
+  void Close() noexcept;
+
+private:
+  friend class ReadTransaction;
+  Cursor(std::shared_ptr<detail::RuntimeState>, ovf_per_handle_v1) noexcept;
+  std::shared_ptr<detail::RuntimeState> state_;
+  ovf_per_handle_v1 handle_{};
 };
 
 class WriteTransaction final {
@@ -156,6 +200,13 @@ public:
   [[nodiscard]] Result<ReadTransaction> BeginRead() const noexcept;
   [[nodiscard]] Result<WriteTransaction>
   BeginWrite(Durability durability = Durability::process_crash) const noexcept;
+  [[nodiscard]] Result<WriteTransaction>
+  BeginWriteAt(std::uint64_t expected_generation,
+               Durability durability = Durability::process_crash) const noexcept;
+  [[nodiscard]] Result<CommitInfo>
+  Reset(std::span<const Entry> initial_data,
+        Durability durability = Durability::process_crash) const noexcept;
+  [[nodiscard]] Result<StoreStatus> GetStatus() const noexcept;
   class BlobReader;
   class BlobWriter;
   [[nodiscard]] Result<BlobReader> OpenBlob(std::span<const std::byte> key) const noexcept;

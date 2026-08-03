@@ -23,6 +23,10 @@ std::string Text(const std::vector<std::byte>& value) {
   return {reinterpret_cast<const char*>(value.data()), value.size()};
 }
 
+ovf::per::Entry Entry(std::string_view key, std::string_view value) {
+  return {{Bytes(key).begin(), Bytes(key).end()}, {Bytes(value).begin(), Bytes(value).end()}};
+}
+
 std::string TestRoot(std::string_view name) {
   const char* directory = std::getenv("TEST_TMPDIR");
   EXPECT_NE(directory, nullptr);
@@ -207,6 +211,46 @@ TEST(PerSqliteProviderTest, ReadSnapshotRemainsStableWhileWalWriterCommits) {
   ASSERT_TRUE(after);
   ASSERT_TRUE(after.value());
   EXPECT_EQ(Text(*after.value()), "active");
+}
+
+TEST(PerSqliteProviderTest, SupportsOrderedCursorsGenerationGuardsAndAtomicReset) {
+  auto runtime_result = ovf::per::Runtime::Create(
+      *ovf_per_backend_query_v1(), {.configuration = Configuration(TestRoot("cursor"), "wal")});
+  ASSERT_TRUE(runtime_result);
+  auto runtime = std::move(runtime_result).value();
+  auto store_result = runtime->OpenStore(Options());
+  ASSERT_TRUE(store_result);
+  auto store = std::move(store_result).value();
+
+  const std::array initial{Entry("state/z", "last"), Entry("state/a", "first"),
+                           Entry("other", "ignored")};
+  const auto reset = store.Reset(initial);
+  ASSERT_TRUE(reset) << reset.error().message;
+  const auto stale = store.BeginWriteAt(0);
+  ASSERT_FALSE(stale);
+  EXPECT_EQ(stale.error().code, ovf::per::ErrorCode::conflict);
+
+  auto read_result = store.BeginRead();
+  ASSERT_TRUE(read_result);
+  auto read = std::move(read_result).value();
+  auto cursor_result = read.Iterate(Bytes("state/"));
+  ASSERT_TRUE(cursor_result) << cursor_result.error().message;
+  auto cursor = std::move(cursor_result).value();
+  const auto first = cursor.Next();
+  const auto second = cursor.Next();
+  const auto end = cursor.Next();
+  ASSERT_TRUE(first);
+  ASSERT_TRUE(second);
+  ASSERT_TRUE(end);
+  ASSERT_TRUE(first.value());
+  ASSERT_TRUE(second.value());
+  EXPECT_FALSE(end.value());
+  EXPECT_EQ(Text(first.value()->key), "state/a");
+  EXPECT_EQ(Text(second.value()->key), "state/z");
+
+  const auto status = store.GetStatus();
+  ASSERT_TRUE(status);
+  EXPECT_EQ(status.value().generation, reset.value().generation);
 }
 
 } // namespace
