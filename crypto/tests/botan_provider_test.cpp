@@ -483,4 +483,26 @@ TEST(BotanProviderTest, EnforcesAsynchronousDeadlines) {
   EXPECT_EQ(outcome.error().code, ovf::crypto::ErrorCode::deadline_exceeded);
 }
 
+TEST(BotanProviderTest, DrainsCompletionsBeforeProviderShutdownReturns) {
+  using namespace std::chrono_literals;
+  auto runtime = CreateRuntime();
+  ASSERT_NE(runtime, nullptr);
+  const std::vector<std::byte> input(8U * 1024U * 1024U, std::byte{0x77});
+  const auto deadline = std::chrono::steady_clock::now() + 10s;
+  auto first_result = runtime->AsyncHash(ovf::crypto::Algorithm::sha2_512, input, deadline);
+  auto second_result = runtime->AsyncHash(ovf::crypto::Algorithm::sha2_512, input, deadline);
+  ASSERT_TRUE(first_result);
+  ASSERT_TRUE(second_result);
+  auto first = std::move(first_result).value();
+  auto second = std::move(second_result).value();
+  runtime->Stop();
+  const auto first_outcome = first.Wait();
+  const auto second_outcome = second.Wait();
+  const auto completed_or_stopped = [](const ovf::crypto::Result<ovf::crypto::AsyncValue>& result) {
+    return result || result.error().code == ovf::crypto::ErrorCode::shutting_down;
+  };
+  EXPECT_TRUE(completed_or_stopped(first_outcome));
+  EXPECT_TRUE(completed_or_stopped(second_outcome));
+}
+
 } // namespace
