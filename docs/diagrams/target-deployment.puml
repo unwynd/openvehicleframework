@@ -34,7 +34,7 @@ package "Separately shippable artifacts" as artifacts #FFF8E1 {
   artifact "Application bundles\n/opt/<application>" as app_bundles
   artifact "Communication runtime\ndeployments" as com_deployments
   artifact "Execution model and\ndinit service descriptions" as exec_deployment
-  artifact "Middleware bundles\nproviders, routing manager, DLT" as middleware
+  artifact "Middleware bundles\ntransport, routing, logging, crypto" as middleware
 }
 
 artifact "Deterministic target\nfilesystem" as rootfs <<assembled>>
@@ -66,6 +66,7 @@ node "Target ECU" as ecu #F7F9FA {
       component "Managed application\nprocesses" as applications
     }
 
+    artifact "Botan provider\nlibrary" as botan
     database "/run\nruntime endpoints" as run
     database "/var/lib/ovf\nexecution journal" as journal
   }
@@ -77,6 +78,7 @@ supervisor --> execd : start after bootstrap units
 execd --> applications : mode transitions and lifecycle
 applications --> routing : communication
 applications --> dlt_daemon : structured logs
+applications ..> botan : loads provider ABI
 services --> run : sockets and IPC
 execd --> run : control sockets
 execd --> journal : recovery evidence

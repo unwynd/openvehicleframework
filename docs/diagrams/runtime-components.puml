@@ -31,18 +31,21 @@ package "Public framework API" as public_api #F3F8FC {
   interface "ovf::com" as icom
   interface "ovf::exec" as iexec
   interface "ovf::log" as ilog
+  interface "ovf::crypto" as icrypto
 }
 
 package "Framework runtime" as framework #F7F9FA {
   component "Communication\nruntime" as com_runtime
   component "Execution\ncoordinator" as exec_runtime
   component "Bounded logging\nruntime" as log_runtime
+  component "Cryptographic\nruntime" as crypto_runtime
 }
 
 package "Versioned backend contracts" as contracts #FFF8E1 {
   interface "Transport ABI v1\nC" as transport_abi
   interface "Execution backend ABI v1\nC" as execution_abi
   interface "Sink interface\nC++ / internal" as sink_interface
+  interface "Cryptographic provider ABI v1\nC" as crypto_abi
 }
 
 package "Backend implementations" as backends #F5F5F5 {
@@ -53,19 +56,23 @@ package "Backend implementations" as backends #F5F5F5 {
   component "dinit backend" as dinit <<experimental>>
   component "Console sink" as console
   component "DLT sink" as dlt <<experimental>>
+  component "Botan provider" as botan <<experimental>>
 }
 
 generated --> icom
 app --> iexec
 app --> ilog
+app --> icrypto
 
 icom -- com_runtime
 iexec -- exec_runtime
 ilog -- log_runtime
+icrypto -- crypto_runtime
 
 com_runtime ..> transport_abi : loads provider
 exec_runtime ..> execution_abi : loads backend
 log_runtime ..> sink_interface : owns sink
+crypto_runtime ..> crypto_abi : loads provider
 
 transport_abi <|.. inproc
 transport_abi <|.. iceoryx2
@@ -74,6 +81,7 @@ transport_abi <|.. dds
 execution_abi <|.. dinit
 sink_interface <|.. console
 sink_interface <|.. dlt
+crypto_abi <|.. botan
 
 note bottom of dds
   Provider not implemented

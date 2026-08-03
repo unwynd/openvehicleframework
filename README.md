@@ -6,7 +6,7 @@ communication, application execution, deployment generation, and structured
 logging. It is not a finished vehicle software platform.
 
 > [!WARNING]
-> Version 0.0.2 is experimental. It is not production-ready, safety-qualified,
+> Version 0.0.3 is experimental. It is not production-ready, safety-qualified,
 > or intended for use in a vehicle. APIs, generated artifacts, deployment
 > formats, and binary interfaces may change without compatibility guarantees.
 
@@ -23,8 +23,9 @@ The repository currently contains:
 - dinit-backed process supervision through the `ovf-execd` coordinator;
 - bounded structured logging with typed fields, stable event identifiers,
   filtering, loss accounting, and a DLT binding;
-- a versioned cryptographic provider ABI, opaque policy-bound keys, and a
-  checksum-pinned Botan software provider;
+- a versioned cryptographic provider ABI with opaque policy-bound keys,
+  certificate validation, key agreement, bounded streaming and asynchronous
+  operations, and a checksum-pinned Botan software provider;
 - deterministic target-filesystem assembly with executable integrity binding;
 - an in-process reference transport;
 - experimental iceoryx2 and vSomeIP transport integrations;
@@ -52,8 +53,18 @@ Backend status is intentionally explicit:
 | Cryptography | Botan | versioned C cryptographic-provider ABI | Experimental software provider |
 
 The logging sink interface is not currently a stable binary plugin contract.
-Only the communication transport ABI and execution backend ABI are versioned C
-boundaries in this release.
+The communication transport, execution backend, and cryptographic provider
+ABIs are versioned C boundaries in this release.
+
+The cryptographic API keeps provider-owned key material behind opaque handles
+and enforces algorithm and usage policy at the provider boundary. It supports
+random generation, hashing, authentication, authenticated encryption,
+signatures, key derivation and agreement, certificate-path validation, bounded
+input and record streaming, and bounded asynchronous hash/sign/verify work.
+Cancellation, deadlines, and runtime shutdown have explicit outcomes. The
+Botan binding is an experimental software provider; this release does not
+claim hardware-backed keys, durable key storage, or a complete credential
+provisioning lifecycle.
 
 Service contracts are separate from deployment configuration. Applications use
 generated types, generated deployment facades, and `ovf::com` APIs. Deployment
