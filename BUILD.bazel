@@ -27,5 +27,6 @@ test_suite(
         "//crypto/tests:all_tests",
         "//exec/tests:all_tests",
         "//log/tests:all_tests",
+        "//per/tests:all_tests",
     ],
 )

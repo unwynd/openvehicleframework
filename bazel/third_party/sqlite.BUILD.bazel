@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "sqlite",
+    srcs = ["sqlite3.c"],
+    hdrs = ["sqlite3.h"],
+    copts = [
+        "-w",
+        "-DSQLITE_DEFAULT_FOREIGN_KEYS=1",
+        "-DSQLITE_DEFAULT_MEMSTATUS=0",
+        "-DSQLITE_DEFAULT_SYNCHRONOUS=2",
+        "-DSQLITE_DQS=0",
+        "-DSQLITE_ENABLE_API_ARMOR",
+        "-DSQLITE_MAX_MMAP_SIZE=0",
+        "-DSQLITE_OMIT_DEPRECATED",
+        "-DSQLITE_OMIT_LOAD_EXTENSION",
+        "-DSQLITE_TEMP_STORE=3",
+        "-DSQLITE_THREADSAFE=1",
+    ],
+    includes = ["."],
+)

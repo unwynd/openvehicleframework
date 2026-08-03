@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_test(
+    name = "c_abi_test",
+    srcs = ["c_abi_test.c"],
+    deps = ["//per:provider_abi"],
+)
+
+cc_test(
+    name = "memory_provider_test",
+    srcs = ["memory_provider_test.cpp"],
+    deps = [
+        "//per:memory_provider",
+        "//per:runtime",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "sqlite_provider_test",
+    size = "medium",
+    srcs = ["sqlite_provider_test.cpp"],
+    deps = [
+        "//per:runtime",
+        "//per:sqlite_provider",
+        "@googletest//:gtest_main",
+    ],
+)
+
+test_suite(
+    name = "all_tests",
+    tests = [
+        ":c_abi_test",
+        ":memory_provider_test",
+        ":sqlite_provider_test",
+    ],
+)

@@ -106,6 +106,14 @@ http_archive(
 )
 
 http_archive(
+    name = "sqlite_source",
+    build_file = "//bazel/third_party:sqlite.BUILD.bazel",
+    sha256 = "646421e12aac110282ef8cc68f1a62d4bb15fc7b8f09da0b53e29ee690500431",
+    strip_prefix = "sqlite-amalgamation-3530300",
+    urls = ["https://sqlite.org/2026/sqlite-amalgamation-3530300.zip"],
+)
+
+http_archive(
     name = "boost_source",
     build_file = "//bazel/third_party:boost.BUILD.bazel",
     sha256 = "0a9cc56ceae46986f5f4d43fe0311d90cf6d2fa9028258a95cab49ffdacf92ad",

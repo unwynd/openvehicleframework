@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_shared_library.bzl", "cc_shared_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "provider_abi",
+    hdrs = ["include/ovf/per/backend_abi.h"],
+    includes = ["include"],
+)
+
+cc_library(
+    name = "runtime",
+    srcs = ["src/runtime.cpp"],
+    hdrs = ["include/ovf/per/per.hpp"],
+    includes = ["include"],
+    linkopts = select({
+        "@platforms//os:linux": ["-ldl"],
+        "//conditions:default": [],
+    }),
+    deps = [":provider_abi"],
+)
+
+cc_library(
+    name = "memory_provider",
+    srcs = ["backends/memory.cpp"],
+    deps = [":provider_abi"],
+)
+
+cc_library(
+    name = "sqlite_provider",
+    srcs = ["backends/sqlite.cpp"],
+    deps = [
+        ":provider_abi",
+        "@jsoncpp",
+        "@sqlite_source//:sqlite",
+    ],
+)
+
+cc_shared_library(
+    name = "shared",
+    shared_lib_name = select({
+        "@platforms//os:osx": "libovf_per.dylib",
+        "//conditions:default": "libovf_per.so",
+    }),
+    deps = [":runtime"],
+)

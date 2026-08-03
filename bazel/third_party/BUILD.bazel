@@ -2,7 +2,10 @@
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["botan.BUILD.bazel"])
+exports_files([
+    "botan.BUILD.bazel",
+    "sqlite.BUILD.bazel",
+])
 
 exports_files([
     "boost.BUILD.bazel",
