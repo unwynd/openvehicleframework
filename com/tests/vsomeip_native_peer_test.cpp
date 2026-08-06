@@ -165,7 +165,8 @@ void WaitFor(CompletionState& completion, ovf_com_status_v1 expected) {
 
 int main() {
   ovf_com_host_api_v1 host{sizeof(host), nullptr, nullptr, &Dispatch, &Now};
-  ovf_com_transport_config_v1 config{sizeof(config), {"ovf-i4-provider", 15}, {nullptr, 0}, 8, 8};
+  ovf_com_transport_config_v1 config{
+      sizeof(config), {"ovf-i4-provider", 15}, {nullptr, 0}, 8, 8, 0, 0};
   auto const* factory = ovf_com_vsomeip_transport_query_v1();
   ovf_com_transport_v1* provider{};
   assert(factory->create(&host, &config, &provider) == OVF_COM_STATUS_OK);

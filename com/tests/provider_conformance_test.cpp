@@ -9,13 +9,32 @@
 #include <cstdint>
 #include <cstring>
 #include <string_view>
+#include <vector>
 
 namespace {
+struct DeferredTask {
+  ovf_com_task_fn_v1 task{};
+  ovf_com_task_release_fn_v1 release{};
+  void* user{};
+};
+bool defer_dispatch{};
+std::vector<DeferredTask> deferred_tasks;
 ovf_com_status_v1 Dispatch(void*, ovf_com_task_fn_v1 task, ovf_com_task_release_fn_v1 release,
                            void* user) {
+  if (defer_dispatch) {
+    deferred_tasks.push_back({task, release, user});
+    return OVF_COM_STATUS_OK;
+  }
   task(user);
   release(user);
   return OVF_COM_STATUS_OK;
+}
+void RunDeferred() {
+  auto tasks = std::move(deferred_tasks);
+  for (auto const& item : tasks) {
+    item.task(item.user);
+    item.release(item.user);
+  }
 }
 std::uint64_t Now(void*) {
   return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -95,7 +114,8 @@ void NoResponse(void* user, ovf_com_handle_v1, ovf_com_bytes_view_v1, std::uint6
 
 int main() {
   ovf_com_host_api_v1 host{sizeof(host), nullptr, nullptr, &Dispatch, &Now};
-  ovf_com_transport_config_v1 config{sizeof(config), {"conformance", 11}, {nullptr, 0}, 16, 8};
+  ovf_com_transport_config_v1 config{
+      sizeof(config), {"conformance", 11}, {nullptr, 0}, 16, 8, 0, 0};
   auto const* factory = ovf_com_inproc_transport_query_v1();
   assert(factory && factory->abi_version == OVF_COM_TRANSPORT_ABI_VERSION_1);
   ovf_com_transport_v1* transport{};
@@ -106,8 +126,14 @@ int main() {
   capabilities.struct_size = sizeof(capabilities);
   assert(transport->get_capabilities(transport, &capabilities) == OVF_COM_STATUS_OK);
   assert((capabilities.feature_bits & OVF_COM_CAP_LOANS) != 0);
+  assert((capabilities.feature_bits & OVF_COM_CAP_HEALTH) != 0);
+  assert((capabilities.feature_bits & OVF_COM_CAP_DIAGNOSTICS) != 0);
   assert(capabilities.isolation == OVF_COM_ISOLATION_INDEPENDENT);
   assert(transport->start(transport) == OVF_COM_STATUS_OK);
+  ovf_com_health_v1 health{};
+  health.struct_size = sizeof(health);
+  assert(transport->get_health(transport, &health) == OVF_COM_STATUS_OK);
+  assert(health.state == OVF_COM_HEALTH_READY);
 
   State state{};
   state.transport = transport;
@@ -176,17 +202,26 @@ int main() {
   assert(transport->request(transport, client, {first, sizeof(first)}, Now(nullptr) + 1000000,
                             &Completion, &state, &operation) == OVF_COM_STATUS_OK);
 
+  auto samples_before_close = state.samples;
+  defer_dispatch = true;
+  assert(transport->publish(transport, publisher, {first, sizeof(first)}) == OVF_COM_STATUS_OK);
   assert(transport->unsubscribe(transport, subscription) == OVF_COM_STATUS_OK);
+  defer_dispatch = false;
+  RunDeferred();
+  assert(state.samples == samples_before_close);
   assert(transport->endpoint_destroy(transport, subscriber) == OVF_COM_STATUS_OK);
   assert(transport->endpoint_destroy(transport, publisher) == OVF_COM_STATUS_OK);
   assert(state.discoveries == 2 && state.withdrawals == 1);
   assert(transport->watch_stop(transport, watch) == OVF_COM_STATUS_OK);
   assert(transport->stop(transport) == OVF_COM_STATUS_OK);
+  health.struct_size = sizeof(health);
+  assert(transport->get_health(transport, &health) == OVF_COM_STATUS_OK);
+  assert(health.state == OVF_COM_HEALTH_STOPPED);
   assert(state.shutdowns == 1);
   assert(transport->request(transport, client, {first, sizeof(first)}, Now(nullptr) + 1000000,
                             &Completion, &state, &operation) == OVF_COM_STATUS_INVALID_STATE);
-  assert(transport->endpoint_destroy(transport, client) == OVF_COM_STATUS_OK);
-  assert(transport->endpoint_destroy(transport, server) == OVF_COM_STATUS_OK);
+  assert(transport->endpoint_destroy(transport, client) == OVF_COM_STATUS_NOT_FOUND);
+  assert(transport->endpoint_destroy(transport, server) == OVF_COM_STATUS_NOT_FOUND);
   assert(transport->stop(transport) == OVF_COM_STATUS_OK);
   factory->destroy(transport);
 }

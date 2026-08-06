@@ -43,6 +43,7 @@ struct Endpoint final {
   iox2_listener_h listener{};
   ovf_com_request_callback_v1 request_callback{};
   void* request_user{};
+  std::recursive_mutex request_callback_gate;
   std::string announcement;
 
   ~Endpoint() {
@@ -90,6 +91,8 @@ struct Subscription final {
   void* user{};
   std::atomic_bool active{true};
   std::recursive_mutex callback_gate;
+  ovf_com_subscription_state_callback_v1 state_callback{};
+  void* state_user{};
 };
 struct Loan final {
   iox2_sample_mut_h sample{};
@@ -128,6 +131,7 @@ struct Watch final {
   void* user{};
   bool available{};
   std::atomic_bool active{true};
+  std::recursive_mutex callback_gate;
   iox2_service_name_h name{};
   iox2_port_factory_event_h service{};
   iox2_listener_h listener{};
@@ -165,6 +169,12 @@ struct Transport final {
   std::uint64_t sequence{};
   std::uint32_t max_endpoints{128};
   std::uint32_t max_operations{128};
+  ovf_com_health_state_v1 health{OVF_COM_HEALTH_STOPPED};
+  std::uint64_t health_sequence{};
+  ovf_com_health_callback_v1 health_callback{};
+  void* health_user{};
+  ovf_com_diagnostic_callback_v1 diagnostic_callback{};
+  void* diagnostic_user{};
   std::map<ovf_com_handle_v1, std::shared_ptr<Endpoint>> endpoints;
   std::map<ovf_com_handle_v1, std::shared_ptr<Subscription>> subscriptions;
   std::map<ovf_com_handle_v1, Loan> loans;
@@ -180,6 +190,30 @@ struct Transport final {
 constexpr char kName[] = "iceoryx2";
 auto Self(ovf_com_transport_v1* api) -> Transport& {
   return *static_cast<Transport*>(api->implementation);
+}
+void SetHealth(Transport& self, ovf_com_health_state_v1 state, ovf_com_status_v1 status,
+               std::int64_t native_code = 0) {
+  ovf_com_health_callback_v1 callback{};
+  void* user{};
+  ovf_com_health_v1 health{};
+  {
+    std::lock_guard lock(self.mutex);
+    self.health = state;
+    health = {sizeof(health),
+              state,
+              ++self.health_sequence,
+              {sizeof(ovf_com_diagnostic_v1),
+               status,
+               OVF_COM_DIAGNOSTIC_PROVIDER,
+               native_code,
+               0,
+               0,
+               {nullptr, 0}}};
+    callback = self.health_callback;
+    user = self.health_user;
+  }
+  if (callback)
+    callback(user, &health);
 }
 auto View(ovf_com_string_view_v1 value) -> std::string_view {
   return {value.data ? value.data : "", value.data ? value.size : 0};
@@ -321,8 +355,7 @@ void CompleteNative(Transport& self, Pending pending, ovf_com_handle_v1 operatio
   }
 }
 struct RequestTask {
-  ovf_com_request_callback_v1 callback{};
-  void* user{};
+  std::shared_ptr<Endpoint> endpoint;
   ovf_com_handle_v1 request{};
   uint64_t deadline{};
   std::uint8_t const* payload{};
@@ -330,7 +363,10 @@ struct RequestTask {
 };
 void RunRequest(void* data) {
   auto& task = *static_cast<RequestTask*>(data);
-  task.callback(task.user, task.request, {task.payload, task.payload_size}, task.deadline);
+  std::lock_guard callback_lock(task.endpoint->request_callback_gate);
+  if (task.endpoint->request_callback)
+    task.endpoint->request_callback(task.endpoint->request_user, task.request,
+                                    {task.payload, task.payload_size}, task.deadline);
 }
 void DeleteRequest(void* data) { delete static_cast<RequestTask*>(data); }
 struct RequestHeader {
@@ -367,6 +403,7 @@ struct DiscoveryTask {
 };
 void RunDiscovery(void* data) {
   auto& task = *static_cast<DiscoveryTask*>(data);
+  std::lock_guard callback_lock(task.watch->callback_gate);
   if (task.watch->active.load(std::memory_order_acquire))
     task.watch->callback(task.watch->user, &task.entry);
 }
@@ -540,12 +577,8 @@ void ReceiveLoop(Transport* self) {
                                         ActiveRequest{endpoint_handle, native_request});
         }
         auto begin = static_cast<std::uint8_t const*>(bytes) + sizeof(header);
-        auto* task = new (std::nothrow) RequestTask{endpoint->request_callback,
-                                                    endpoint->request_user,
-                                                    request_handle,
-                                                    header.deadline_ns,
-                                                    begin,
-                                                    header.payload_size};
+        auto* task = new (std::nothrow)
+            RequestTask{endpoint, request_handle, header.deadline_ns, begin, header.payload_size};
         if (!task || Dispatch(*self, RunRequest, DeleteRequest, task) != OVF_COM_STATUS_OK)
           (void)Respond(&self->api, request_handle, OVF_COM_STATUS_RESOURCE_EXHAUSTED, {});
       }
@@ -635,11 +668,13 @@ auto Start(ovf_com_transport_v1* api) -> ovf_com_status_v1 {
   bool expected{};
   if (!self.started.compare_exchange_strong(expected, true))
     return OVF_COM_STATUS_INVALID_STATE;
+  SetHealth(self, OVF_COM_HEALTH_INITIALIZING, OVF_COM_STATUS_OK);
   self.running.store(true, std::memory_order_release);
   int descriptors[2]{};
   if (::pipe(descriptors) != 0) {
     self.running = false;
     self.started = false;
+    SetHealth(self, OVF_COM_HEALTH_FAILED, OVF_COM_STATUS_TRANSPORT_ERROR, errno);
     return OVF_COM_STATUS_TRANSPORT_ERROR;
   }
   self.control_read = descriptors[0];
@@ -655,7 +690,9 @@ auto Start(ovf_com_transport_v1* api) -> ovf_com_status_v1 {
     self.control_write = -1;
     self.running = false;
     self.started = false;
-    return IoStatus(result);
+    auto status = IoStatus(result);
+    SetHealth(self, OVF_COM_HEALTH_FAILED, status, result);
+    return status;
   }
   self.receiver = std::thread(
       [](Transport* transport) noexcept {
@@ -663,9 +700,11 @@ auto Start(ovf_com_transport_v1* api) -> ovf_com_status_v1 {
           ReceiveLoop(transport);
         } catch (...) {
           transport->running.store(false, std::memory_order_release);
+          SetHealth(*transport, OVF_COM_HEALTH_FAILED, OVF_COM_STATUS_TRANSPORT_ERROR);
         }
       },
       &self);
+  SetHealth(self, OVF_COM_HEALTH_READY, OVF_COM_STATUS_OK);
   return OVF_COM_STATUS_OK;
 }
 auto Stop(ovf_com_transport_v1* api) -> ovf_com_status_v1 {
@@ -677,6 +716,9 @@ auto Stop(ovf_com_transport_v1* api) -> ovf_com_status_v1 {
   if (self.receiver.joinable())
     self.receiver.join();
   std::vector<std::pair<ovf_com_handle_v1, Pending>> pending;
+  std::vector<std::shared_ptr<Watch>> watches;
+  std::vector<std::shared_ptr<Subscription>> subscriptions;
+  std::vector<std::shared_ptr<Endpoint>> endpoints;
   {
     std::lock_guard lock(self.mutex);
     for (auto& [_, loan] : self.loans)
@@ -709,17 +751,35 @@ auto Stop(ovf_com_transport_v1* api) -> ovf_com_status_v1 {
       }
     }
     for (auto& [_, watch] : self.watches)
-      watch->active.store(false, std::memory_order_release);
+      watches.push_back(watch);
     self.watches.clear();
     self.announcements.clear();
     for (auto& [_, subscription] : self.subscriptions)
-      subscription->active.store(false, std::memory_order_release);
+      subscriptions.push_back(subscription);
     self.subscriptions.clear();
+    for (auto& [_, endpoint] : self.endpoints)
+      endpoints.push_back(endpoint);
     self.endpoints.clear();
     if (self.node) {
       iox2_node_drop(self.node);
       self.node = nullptr;
     }
+  }
+  for (auto const& watch : watches) {
+    std::lock_guard callback_lock(watch->callback_gate);
+    watch->active.store(false, std::memory_order_release);
+  }
+  for (auto const& subscription : subscriptions) {
+    std::lock_guard callback_lock(subscription->callback_gate);
+    if (subscription->active.load(std::memory_order_acquire) && subscription->state_callback)
+      subscription->state_callback(subscription->state_user, OVF_COM_INVALID_HANDLE_V1,
+                                   OVF_COM_SUBSCRIPTION_WITHDRAWN, OVF_COM_STATUS_SHUTTING_DOWN);
+    subscription->active.store(false, std::memory_order_release);
+  }
+  for (auto const& endpoint : endpoints) {
+    std::lock_guard callback_lock(endpoint->request_callback_gate);
+    endpoint->request_callback = nullptr;
+    endpoint->request_user = nullptr;
   }
   if (self.control_read >= 0)
     ::close(self.control_read);
@@ -729,6 +789,59 @@ auto Stop(ovf_com_transport_v1* api) -> ovf_com_status_v1 {
   self.control_write = -1;
   for (auto& [operation, value] : pending)
     Complete(self, value, operation, OVF_COM_STATUS_SHUTTING_DOWN);
+  SetHealth(self, OVF_COM_HEALTH_STOPPED, OVF_COM_STATUS_OK);
+  return OVF_COM_STATUS_OK;
+}
+
+auto GetHealth(ovf_com_transport_v1* api, ovf_com_health_v1* out) -> ovf_com_status_v1 {
+  if (!out || out->struct_size < sizeof(*out))
+    return OVF_COM_STATUS_INVALID_ARGUMENT;
+  auto& self = Self(api);
+  std::lock_guard lock(self.mutex);
+  *out = {
+      sizeof(*out),
+      self.health,
+      self.health_sequence,
+      {sizeof(ovf_com_diagnostic_v1),
+       self.health == OVF_COM_HEALTH_FAILED ? OVF_COM_STATUS_TRANSPORT_ERROR : OVF_COM_STATUS_OK,
+       OVF_COM_DIAGNOSTIC_PROVIDER,
+       0,
+       0,
+       0,
+       {nullptr, 0}}};
+  return OVF_COM_STATUS_OK;
+}
+
+auto SetHealthHandler(ovf_com_transport_v1* api, ovf_com_health_callback_v1 callback, void* user)
+    -> ovf_com_status_v1 {
+  auto& self = Self(api);
+  ovf_com_health_v1 health{};
+  {
+    std::lock_guard lock(self.mutex);
+    self.health_callback = callback;
+    self.health_user = user;
+    health = {sizeof(health),
+              self.health,
+              self.health_sequence,
+              {sizeof(ovf_com_diagnostic_v1),
+               OVF_COM_STATUS_OK,
+               OVF_COM_DIAGNOSTIC_PROVIDER,
+               0,
+               0,
+               0,
+               {nullptr, 0}}};
+  }
+  if (callback)
+    callback(user, &health);
+  return OVF_COM_STATUS_OK;
+}
+
+auto SetDiagnosticHandler(ovf_com_transport_v1* api, ovf_com_diagnostic_callback_v1 callback,
+                          void* user) -> ovf_com_status_v1 {
+  auto& self = Self(api);
+  std::lock_guard lock(self.mutex);
+  self.diagnostic_callback = callback;
+  self.diagnostic_user = user;
   return OVF_COM_STATUS_OK;
 }
 auto Capabilities(ovf_com_transport_v1* api, ovf_com_capabilities_v1* out) -> ovf_com_status_v1 {
@@ -739,7 +852,7 @@ auto Capabilities(ovf_com_transport_v1* api, ovf_com_capabilities_v1* out) -> ov
           OVF_COM_CAP_DISCOVERY | OVF_COM_CAP_EVENTS | OVF_COM_CAP_METHODS | OVF_COM_CAP_LOANS |
               OVF_COM_CAP_RELIABLE | OVF_COM_CAP_ORDERED | OVF_COM_CAP_DEADLINES |
               OVF_COM_CAP_CANCELLATION | OVF_COM_CAP_REQUEST_LOANS | OVF_COM_CAP_RESPONSE_LOANS |
-              OVF_COM_CAP_SUBSCRIPTION_STATE,
+              OVF_COM_CAP_SUBSCRIPTION_STATE | OVF_COM_CAP_HEALTH | OVF_COM_CAP_DIAGNOSTICS,
           OVF_COM_ISOLATION_INDEPENDENT,
           self.max_endpoints,
           self.max_endpoints,
@@ -966,6 +1079,9 @@ auto Unsubscribe(ovf_com_transport_v1* api, ovf_com_handle_v1 handle) -> ovf_com
     self.subscriptions.erase(found);
   }
   std::lock_guard callback_lock(subscription->callback_gate);
+  if (subscription->active.load(std::memory_order_acquire) && subscription->state_callback)
+    subscription->state_callback(subscription->state_user, handle, OVF_COM_SUBSCRIPTION_WITHDRAWN,
+                                 OVF_COM_STATUS_OK);
   subscription->active.store(false, std::memory_order_release);
   return OVF_COM_STATUS_OK;
 }
@@ -975,11 +1091,17 @@ auto SetSubscriptionStateHandler(ovf_com_transport_v1* api, ovf_com_handle_v1 ha
   if (!callback)
     return OVF_COM_STATUS_INVALID_ARGUMENT;
   auto& self = Self(api);
+  std::shared_ptr<Subscription> subscription;
   {
     std::lock_guard lock(self.mutex);
-    if (!self.subscriptions.contains(handle))
+    auto found = self.subscriptions.find(handle);
+    if (found == self.subscriptions.end())
       return OVF_COM_STATUS_NOT_FOUND;
+    subscription = found->second;
   }
+  std::lock_guard callback_lock(subscription->callback_gate);
+  subscription->state_callback = callback;
+  subscription->state_user = user;
   callback(user, handle, OVF_COM_SUBSCRIPTION_ACTIVE, OVF_COM_STATUS_OK);
   return OVF_COM_STATUS_OK;
 }
@@ -1245,16 +1367,21 @@ auto Cancel(ovf_com_transport_v1* api, ovf_com_handle_v1 operation) -> ovf_com_s
 auto SetRequestHandler(ovf_com_transport_v1* api, ovf_com_handle_v1 endpoint_handle,
                        ovf_com_request_callback_v1 callback, void* user) -> ovf_com_status_v1 {
   auto& self = Self(api);
-  std::lock_guard lock(self.mutex);
-  auto found = self.endpoints.find(endpoint_handle);
-  if (found == self.endpoints.end())
-    return OVF_COM_STATUS_NOT_FOUND;
-  if (!found->second->server)
+  std::shared_ptr<Endpoint> endpoint;
+  {
+    std::lock_guard lock(self.mutex);
+    auto found = self.endpoints.find(endpoint_handle);
+    if (found == self.endpoints.end())
+      return OVF_COM_STATUS_NOT_FOUND;
+    if (!found->second->server)
+      return OVF_COM_STATUS_INVALID_STATE;
+    endpoint = found->second;
+  }
+  std::lock_guard callback_lock(endpoint->request_callback_gate);
+  if (callback && endpoint->request_callback)
     return OVF_COM_STATUS_INVALID_STATE;
-  if (callback && found->second->request_callback)
-    return OVF_COM_STATUS_INVALID_STATE;
-  found->second->request_callback = callback;
-  found->second->request_user = callback ? user : nullptr;
+  endpoint->request_callback = callback;
+  endpoint->request_user = callback ? user : nullptr;
   return OVF_COM_STATUS_OK;
 }
 auto ResponseLoanAcquire(ovf_com_transport_v1* api, ovf_com_handle_v1 request_handle,
@@ -1399,12 +1526,17 @@ auto WatchStart(ovf_com_transport_v1* api, ovf_com_discovery_filter_v1 const* fi
 }
 auto WatchStop(ovf_com_transport_v1* api, ovf_com_handle_v1 handle) -> ovf_com_status_v1 {
   auto& self = Self(api);
-  std::lock_guard lock(self.mutex);
-  auto found = self.watches.find(handle);
-  if (found == self.watches.end())
-    return OVF_COM_STATUS_NOT_FOUND;
-  found->second->active.store(false, std::memory_order_release);
-  self.watches.erase(found);
+  std::shared_ptr<Watch> watch;
+  {
+    std::lock_guard lock(self.mutex);
+    auto found = self.watches.find(handle);
+    if (found == self.watches.end())
+      return OVF_COM_STATUS_NOT_FOUND;
+    watch = found->second;
+    self.watches.erase(found);
+  }
+  std::lock_guard callback_lock(watch->callback_gate);
+  watch->active.store(false, std::memory_order_release);
   Wake(self);
   return OVF_COM_STATUS_OK;
 }
@@ -1412,7 +1544,8 @@ auto WatchStop(ovf_com_transport_v1* api, ovf_com_handle_v1 handle) -> ovf_com_s
 auto Create(ovf_com_host_api_v1 const* host, ovf_com_transport_config_v1 const* config,
             ovf_com_transport_v1** out) -> ovf_com_status_v1 {
   if (!host || !config || !out || host->struct_size < sizeof(*host) ||
-      config->struct_size < sizeof(*config) || !host->dispatch || !host->monotonic_time_ns)
+      config->struct_size < OVF_COM_TRANSPORT_CONFIG_V1_BASE_SIZE || !host->dispatch ||
+      !host->monotonic_time_ns)
     return OVF_COM_STATUS_INVALID_ARGUMENT;
   auto self = std::unique_ptr<Transport>(new (std::nothrow) Transport);
   if (!self)
@@ -1447,7 +1580,10 @@ auto Create(ovf_com_host_api_v1 const* host, ovf_com_transport_config_v1 const* 
                RequestLoanSend,
                ResponseLoanAcquire,
                ResponseLoanSend,
-               SetSubscriptionStateHandler};
+               SetSubscriptionStateHandler,
+               GetHealth,
+               SetHealthHandler,
+               SetDiagnosticHandler};
   *out = &self.release()->api;
   return OVF_COM_STATUS_OK;
 }
@@ -1504,6 +1640,11 @@ auto SafeCreate(ovf_com_host_api_v1 const* host, ovf_com_transport_config_v1 con
     api.subscription_set_state_handler =
         &Safe<SetSubscriptionStateHandler, ovf_com_transport_v1*, ovf_com_handle_v1,
               ovf_com_subscription_state_callback_v1, void*>;
+    api.get_health = &Safe<GetHealth, ovf_com_transport_v1*, ovf_com_health_v1*>;
+    api.set_health_handler =
+        &Safe<SetHealthHandler, ovf_com_transport_v1*, ovf_com_health_callback_v1, void*>;
+    api.set_diagnostic_handler =
+        &Safe<SetDiagnosticHandler, ovf_com_transport_v1*, ovf_com_diagnostic_callback_v1, void*>;
   }
   return result;
 }

@@ -18,7 +18,7 @@ cc_library(
     name = "radar_contract",
     hdrs = [":radar_generated"],
     includes = ["generated"],
-    deps = ["//com:generated_support"],
+    deps = ["//com:runtime"],
 )
 
 cc_test(
@@ -35,6 +35,7 @@ cc_test(
     name = "generated_codec_test",
     srcs = ["generated_codec_test.cpp"],
     deps = [
+        ":radar_contract",
         "//com:generated_support",
         "@googletest//:gtest_main",
     ],

@@ -32,13 +32,17 @@ def type_ref(shape_id: str) -> str:
     return BUILTINS.get(shape_id, local(shape_id))
 
 
-def _bounded_collection(shape_id: str, traits: dict, *, persistent: bool) -> dict:
+def _bounded_collection(
+    shape_id: str, traits: dict, *, persistent: bool, allow_unbounded: bool
+) -> dict:
     collection = traits.get(COLLECTION_TRAIT)
     if collection is None:
         raise ValueError(f"{shape_id}: bounded collection trait required")
     storage = collection.get("storage", "").lower()
-    if storage not in {"bounded", "fixed", "dynamic"}:
+    if storage not in {"bounded", "fixed", "unbounded"}:
         raise ValueError(f"{shape_id}: invalid collection storage policy")
+    if storage == "unbounded" and not allow_unbounded:
+        raise ValueError(f"{shape_id}: unbounded collections are not deployable")
     if persistent and storage != "bounded":
         raise ValueError(f"{shape_id}: persistent collections must use bounded storage")
     capacity = collection.get("capacity")
@@ -62,6 +66,7 @@ def compile_types(
     *,
     excluded: set[str] | None = None,
     persistent: bool = False,
+    allow_unbounded: bool = False,
 ) -> list[dict]:
     """Compile namespace-local data shapes into one canonical bounded type IR."""
     excluded = excluded or set()
@@ -92,7 +97,7 @@ def compile_types(
             )
         elif kind == "string":
             types.append({"kind": "string", "name": name, **_bounded_collection(
-                shape_id, traits, persistent=persistent
+                shape_id, traits, persistent=persistent, allow_unbounded=allow_unbounded
             )})
         elif kind == "list":
             types.append(
@@ -100,7 +105,12 @@ def compile_types(
                     "kind": "sequence",
                     "name": name,
                     "element": type_ref(target(shape["member"])),
-                    **_bounded_collection(shape_id, traits, persistent=persistent),
+                    **_bounded_collection(
+                        shape_id,
+                        traits,
+                        persistent=persistent,
+                        allow_unbounded=allow_unbounded,
+                    ),
                 }
             )
         elif kind == "structure":

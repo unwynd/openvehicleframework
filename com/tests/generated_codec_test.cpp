@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ovf/com/generated.hpp"
+#include "radar.hpp"
 
 #include <gtest/gtest.h>
 
@@ -42,4 +43,33 @@ TEST(GeneratedCodec, RejectsImpossibleUnboundedSequenceLength) {
   std::vector<std::uint64_t> decoded;
   EXPECT_FALSE(ovf::com::decode(invalid, decoded));
   EXPECT_TRUE(decoded.empty());
+}
+
+TEST(GeneratedCodec, TaggedStructuresSkipUnknownOptionalFieldsAndRejectDuplicates) {
+  example::radar::RadarObject object{7, 12.5F, -1.25F, 93};
+  auto encoded = ovf::com::encode(object);
+  ASSERT_EQ(encoded.size(), 43U);
+  EXPECT_EQ(encoded[0], std::byte{1});
+  EXPECT_EQ(encoded[4], std::byte{2});
+
+  auto with_unknown = encoded;
+  const std::array unknown{std::byte{99}, std::byte{0}, std::byte{0}, std::byte{0}, std::byte{1},
+                           std::byte{0},  std::byte{0}, std::byte{0}, std::byte{42}};
+  with_unknown.insert(with_unknown.end(), unknown.begin(), unknown.end());
+  example::radar::RadarObject decoded{};
+  EXPECT_TRUE(ovf::com::decode(with_unknown, decoded));
+  EXPECT_EQ(decoded.id, object.id);
+  EXPECT_EQ(decoded.confidence, object.confidence);
+
+  auto duplicate = encoded;
+  duplicate.insert(duplicate.end(), encoded.begin(), encoded.end());
+  EXPECT_FALSE(ovf::com::decode(duplicate, decoded));
+  EXPECT_FALSE(ovf::com::decode(std::span<const std::byte>{}, decoded));
+}
+
+TEST(GeneratedCodec, ReportsCompileTimeMaximumSizeForBoundedTypes) {
+  constexpr auto maximum = ovf::com::maximum_encoded_size<example::radar::RadarObject>();
+  static_assert(maximum.has_value());
+  static_assert(*maximum == 43U);
+  EXPECT_EQ(ovf::com::maximum_encoded_size<std::string>(), std::nullopt);
 }

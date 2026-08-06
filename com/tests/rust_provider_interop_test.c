@@ -22,7 +22,7 @@ int main(void) {
   assert(factory && factory->struct_size == sizeof(*factory));
   assert(factory->abi_version == OVF_COM_TRANSPORT_ABI_VERSION_1);
   ovf_com_host_api_v1 host = {sizeof(host), 0, 0, dispatch, now};
-  ovf_com_transport_config_v1 config = {sizeof(config), {0, 0}, {0, 0}, 1, 1};
+  ovf_com_transport_config_v1 config = {sizeof(config), {0, 0}, {0, 0}, 1, 1, 0, 0};
   ovf_com_transport_v1* transport = 0;
   assert(factory->create(&host, &config, &transport) == OVF_COM_STATUS_OK);
   assert(transport && transport->struct_size >= OVF_COM_TRANSPORT_V1_BASE_SIZE);

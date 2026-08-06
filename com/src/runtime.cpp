@@ -104,6 +104,42 @@ auto ParseUuid(Json::Value const& value) -> std::optional<Uuid> {
   return output == result.bytes.size() ? std::optional<Uuid>{result} : std::nullopt;
 }
 
+auto ToHealthState(ovf_com_health_state_v1 state) -> TransportHealthState {
+  switch (state) {
+  case OVF_COM_HEALTH_INITIALIZING:
+    return TransportHealthState::initializing;
+  case OVF_COM_HEALTH_READY:
+    return TransportHealthState::ready;
+  case OVF_COM_HEALTH_DEGRADED:
+    return TransportHealthState::degraded;
+  case OVF_COM_HEALTH_FAILED:
+    return TransportHealthState::failed;
+  case OVF_COM_HEALTH_STOPPED:
+  default:
+    return TransportHealthState::stopped;
+  }
+}
+
+auto ToDiagnosticOperation(ovf_com_diagnostic_operation_v1 operation) -> DiagnosticOperation {
+  switch (operation) {
+  case OVF_COM_DIAGNOSTIC_DISCOVERY:
+    return DiagnosticOperation::discovery;
+  case OVF_COM_DIAGNOSTIC_ENDPOINT:
+    return DiagnosticOperation::endpoint;
+  case OVF_COM_DIAGNOSTIC_SUBSCRIPTION:
+    return DiagnosticOperation::subscription;
+  case OVF_COM_DIAGNOSTIC_PUBLISH:
+    return DiagnosticOperation::publish;
+  case OVF_COM_DIAGNOSTIC_REQUEST:
+    return DiagnosticOperation::request;
+  case OVF_COM_DIAGNOSTIC_RESPONSE:
+    return DiagnosticOperation::response;
+  case OVF_COM_DIAGNOSTIC_PROVIDER:
+  default:
+    return DiagnosticOperation::provider;
+  }
+}
+
 struct ConfiguredRoute {
   std::string instance;
   RouteBinding binding;
@@ -128,12 +164,16 @@ auto ParseDeployment(std::string const& path, std::vector<TransportRegistration>
   for (auto const& transport : root["transports"]) {
     if (!transport.isObject() || !transport["provider"].isString() ||
         !transport["configuration"].isString() || !transport["maxEndpoints"].isUInt() ||
-        !transport["maxOutstandingOperations"].isUInt())
+        !transport["maxOutstandingOperations"].isUInt() ||
+        !transport["startTimeoutMs"].isUInt64() || !transport["stopTimeoutMs"].isUInt64() ||
+        transport["startTimeoutMs"].asUInt64() == 0U || transport["stopTimeoutMs"].asUInt64() == 0U)
       return RuntimeError::invalid_argument;
     transports.push_back(
         {transport["provider"].asString(),
          {transport["configuration"].asString(), transport["maxEndpoints"].asUInt(),
-          transport["maxOutstandingOperations"].asUInt()}});
+          transport["maxOutstandingOperations"].asUInt(),
+          std::chrono::milliseconds(transport["startTimeoutMs"].asUInt64()),
+          std::chrono::milliseconds(transport["stopTimeoutMs"].asUInt64())}});
   }
   for (auto const& route : root["routes"]) {
     auto service = ParseUuid(route["serviceId"]);
@@ -169,9 +209,19 @@ auto ParseDeployment(std::string const& path, std::vector<TransportRegistration>
 
 class Runtime::Impl {
 public:
+  struct HealthState {
+    Impl* owner{};
+    mutable std::mutex mutex;
+    std::condition_variable changed;
+    TransportHealth value;
+  };
+
   struct Transport {
     const ovf_com_transport_factory_v1* factory;
     ovf_com_transport_v1* instance;
+    TransportConfig config;
+    std::shared_ptr<HealthState> health;
+    bool health_supported{};
 
     ~Transport() {
       if (instance != nullptr) {
@@ -179,12 +229,16 @@ public:
       }
     }
 
-    Transport(const ovf_com_transport_factory_v1* new_factory, ovf_com_transport_v1* new_instance)
-        : factory(new_factory), instance(new_instance) {}
+    Transport(const ovf_com_transport_factory_v1* new_factory, ovf_com_transport_v1* new_instance,
+              TransportConfig new_config, std::shared_ptr<HealthState> new_health,
+              bool new_health_supported)
+        : factory(new_factory), instance(new_instance), config(std::move(new_config)),
+          health(std::move(new_health)), health_supported(new_health_supported) {}
 
     Transport(Transport&& other) noexcept
         : factory(std::exchange(other.factory, nullptr)),
-          instance(std::exchange(other.instance, nullptr)) {}
+          instance(std::exchange(other.instance, nullptr)), config(std::move(other.config)),
+          health(std::move(other.health)), health_supported(other.health_supported) {}
 
     Transport& operator=(Transport&&) = delete;
     Transport(const Transport&) = delete;
@@ -224,6 +278,54 @@ public:
     };
   }
 
+  static void OnProviderHealth(void* user, ovf_com_health_v1 const* update) {
+    if (!user || !update || update->struct_size < sizeof(*update))
+      return;
+    auto& state = *static_cast<HealthState*>(user);
+    std::function<void(TransportHealth const&)> callback;
+    TransportHealth snapshot;
+    {
+      std::lock_guard lock(state.mutex);
+      state.value.state = ToHealthState(update->state);
+      state.value.sequence = update->sequence;
+      state.value.diagnostic = {state.value.provider,
+                                ToRuntimeError(update->diagnostic.status),
+                                ToDiagnosticOperation(update->diagnostic.operation),
+                                update->diagnostic.native_code,
+                                update->diagnostic.endpoint,
+                                update->diagnostic.operation_handle,
+                                std::string(AsStringView(update->diagnostic.message))};
+      snapshot = state.value;
+    }
+    state.changed.notify_all();
+    {
+      std::lock_guard lock(state.owner->health_callback_mutex);
+      callback = state.owner->health_callback;
+    }
+    if (callback)
+      callback(snapshot);
+  }
+
+  static void OnProviderDiagnostic(void* user, ovf_com_diagnostic_v1 const* update) {
+    if (!user || !update || update->struct_size < sizeof(*update))
+      return;
+    auto& state = *static_cast<HealthState*>(user);
+    CommunicationDiagnostic diagnostic{state.value.provider,
+                                       ToRuntimeError(update->status),
+                                       ToDiagnosticOperation(update->operation),
+                                       update->native_code,
+                                       update->endpoint,
+                                       update->operation_handle,
+                                       std::string(AsStringView(update->message))};
+    std::function<void(CommunicationDiagnostic const&)> callback;
+    {
+      std::lock_guard lock(state.owner->diagnostic_callback_mutex);
+      callback = state.owner->diagnostic_callback;
+    }
+    if (callback)
+      callback(diagnostic);
+  }
+
   ~Impl() {
     transports.clear();
 #if defined(__unix__) || defined(__APPLE__)
@@ -238,6 +340,10 @@ public:
   std::vector<Transport> transports;
   std::vector<ConfiguredRoute> routes;
   std::vector<void*> libraries;
+  mutable std::mutex health_callback_mutex;
+  std::function<void(TransportHealth const&)> health_callback;
+  mutable std::mutex diagnostic_callback_mutex;
+  std::function<void(CommunicationDiagnostic const&)> diagnostic_callback;
   bool running{false};
 };
 
@@ -312,7 +418,11 @@ RuntimeError Runtime::AddTransport(const ovf_com_transport_factory_v1& factory,
       {impl_->config.instance_name.data(), impl_->config.instance_name.size()},
       {config.configuration.data(), config.configuration.size()},
       config.max_endpoints,
-      config.max_outstanding_operations};
+      config.max_outstanding_operations,
+      static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(config.start_timeout).count()),
+      static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(config.stop_timeout).count())};
   ovf_com_transport_v1* instance = nullptr;
   const auto result = factory.create(&impl_->host, &abi_config, &instance);
   if (result != OVF_COM_STATUS_OK) {
@@ -345,8 +455,36 @@ RuntimeError Runtime::AddTransport(const ovf_com_transport_factory_v1& factory,
     return capability_result == OVF_COM_STATUS_OK ? RuntimeError::resource_exhausted
                                                   : ToRuntimeError(capability_result);
   }
-
-  impl_->transports.emplace_back(&factory, instance);
+  const auto has_health =
+      (capabilities.feature_bits & OVF_COM_CAP_HEALTH) != 0U &&
+      instance->struct_size >= offsetof(ovf_com_transport_v1, set_diagnostic_handler) +
+                                   sizeof(instance->set_diagnostic_handler) &&
+      instance->get_health && instance->set_health_handler;
+  const auto has_diagnostics =
+      (capabilities.feature_bits & OVF_COM_CAP_DIAGNOSTICS) != 0U &&
+      instance->struct_size >= offsetof(ovf_com_transport_v1, set_diagnostic_handler) +
+                                   sizeof(instance->set_diagnostic_handler) &&
+      instance->set_diagnostic_handler;
+  auto health = std::make_shared<Impl::HealthState>();
+  health->owner = impl_.get();
+  health->value.provider = std::string(name);
+  if (has_health) {
+    auto health_result =
+        instance->set_health_handler(instance, &Impl::OnProviderHealth, health.get());
+    if (health_result != OVF_COM_STATUS_OK) {
+      factory.destroy(instance);
+      return ToRuntimeError(health_result);
+    }
+  }
+  if (has_diagnostics) {
+    auto diagnostic_result =
+        instance->set_diagnostic_handler(instance, &Impl::OnProviderDiagnostic, health.get());
+    if (diagnostic_result != OVF_COM_STATUS_OK) {
+      factory.destroy(instance);
+      return ToRuntimeError(diagnostic_result);
+    }
+  }
+  impl_->transports.emplace_back(&factory, instance, config, std::move(health), has_health);
   return RuntimeError{};
 }
 
@@ -429,6 +567,22 @@ RuntimeError Runtime::Start() {
       }
       return ToRuntimeError(result);
     }
+    if (transport.health_supported) {
+      std::unique_lock lock(transport.health->mutex);
+      const auto ready =
+          transport.health->changed.wait_for(lock, transport.config.start_timeout, [&] {
+            return transport.health->value.state != TransportHealthState::initializing;
+          });
+      if (!ready || transport.health->value.state != TransportHealthState::ready) {
+        lock.unlock();
+        (void)transport.instance->stop(transport.instance);
+        while (started > 0U) {
+          --started;
+          (void)impl_->transports[started].instance->stop(impl_->transports[started].instance);
+        }
+        return ready ? RuntimeError::transport_error : RuntimeError::deadline_exceeded;
+      }
+    }
     ++started;
   }
   impl_->running = true;
@@ -454,6 +608,31 @@ std::vector<std::string> Runtime::TransportNames() const {
     names.emplace_back(AsStringView(transport.factory->name));
   }
   return names;
+}
+
+std::vector<TransportHealth> Runtime::Health() const {
+  std::vector<TransportHealth> result;
+  result.reserve(impl_->transports.size());
+  for (auto const& transport : impl_->transports) {
+    std::lock_guard lock(transport.health->mutex);
+    result.push_back(transport.health->value);
+  }
+  return result;
+}
+
+void Runtime::OnHealth(std::function<void(TransportHealth const&)> callback) {
+  {
+    std::lock_guard lock(impl_->health_callback_mutex);
+    impl_->health_callback = callback;
+  }
+  if (callback)
+    for (auto const& health : Health())
+      callback(health);
+}
+
+void Runtime::OnDiagnostic(std::function<void(CommunicationDiagnostic const&)> callback) {
+  std::lock_guard lock(impl_->diagnostic_callback_mutex);
+  impl_->diagnostic_callback = std::move(callback);
 }
 
 ovf_com_transport_v1* detail::RuntimeAccess::find(Runtime& runtime,

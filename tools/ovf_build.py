@@ -523,6 +523,8 @@ def compile_communication_deployment(args: argparse.Namespace) -> int:
                 if errors: raise ValueError("\n".join(errors))
                 plan = make_plan(deployment, profiles)
                 route, transport = _runtime_route(plan)
+                transport["startTimeoutMs"] = model["execution"]["startup"]["timeoutMs"]
+                transport["stopTimeoutMs"] = model["execution"]["shutdown"]["timeoutMs"]
                 routes.append(route); transports[transport["provider"]] = transport
             if len(routes) != len(model["interfaces"]):
                 raise ValueError(f"application {name} did not resolve every interface")

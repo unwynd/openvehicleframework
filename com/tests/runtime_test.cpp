@@ -23,6 +23,13 @@ TEST(RuntimeTest, OwnsAndOrdersTransportLifecycle) {
   ASSERT_TRUE(runtime.AddTransport(*factory) == ovf::com::RuntimeError::none);
   ASSERT_TRUE(runtime.AddTransport(*factory) == ovf::com::RuntimeError::duplicate_transport);
   ASSERT_TRUE(runtime.TransportNames() == std::vector<std::string>{"inproc"});
+  std::vector<ovf::com::TransportHealthState> health;
+  runtime.OnHealth([&](auto const& update) {
+    EXPECT_EQ(update.provider, "inproc");
+    health.push_back(update.state);
+  });
+  ASSERT_EQ(runtime.Health().size(), 1U);
+  EXPECT_EQ(runtime.Health().front().state, ovf::com::TransportHealthState::stopped);
 
   ASSERT_TRUE(runtime.Start() == ovf::com::RuntimeError::none);
   ASSERT_TRUE(runtime.IsRunning());
@@ -31,6 +38,9 @@ TEST(RuntimeTest, OwnsAndOrdersTransportLifecycle) {
 
   runtime.Stop();
   ASSERT_TRUE(!runtime.IsRunning());
+  ASSERT_GE(health.size(), 3U);
+  EXPECT_EQ(health[health.size() - 2U], ovf::com::TransportHealthState::ready);
+  EXPECT_EQ(health.back(), ovf::com::TransportHealthState::stopped);
   ASSERT_TRUE(messages ==
               std::vector<std::string>({"inproc transport started", "inproc transport stopped"}));
 }

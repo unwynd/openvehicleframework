@@ -26,6 +26,8 @@ def validate(model: dict) -> list[str]:
     errors: list[str] = []
     if model.get("irVersion") != 1:
         errors.append("irVersion must be 1")
+    if model.get("wireFormat") != "ovf-tagged-le-v1":
+        errors.append("wireFormat must be ovf-tagged-le-v1")
     types = model.get("types", [])
     services = model.get("services", [])
     type_names = {item.get("name") for item in types}

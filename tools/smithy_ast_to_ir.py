@@ -30,6 +30,13 @@ def compile_model(ast: dict, service_id: str | None) -> dict:
     referenced_wrappers = set(service_trait.get("events", []) + service_trait.get("fields", []))
 
     types = compile_types(shapes, namespace, excluded=referenced_wrappers)
+    unbounded_builtins = {"string", "bytes"}
+    for shape in types:
+        references = ([shape["element"]] if shape["kind"] == "sequence" else
+                      [member["type"] for member in shape["members"]]
+                      if shape["kind"] == "struct" else [])
+        if any(reference in unbounded_builtins for reference in references):
+            raise ValueError(f"{namespace}#{shape['name']}: unbounded builtin requires a bounded named shape")
 
     events = []
     for event_id in service_trait.get("events", []):
@@ -37,6 +44,8 @@ def compile_model(ast: dict, service_id: str | None) -> dict:
         trait = shape.get("traits", {}).get(EVENT_TRAIT)
         members = shape.get("members", {})
         if trait is None or set(members) != {"value"}: raise ValueError(f"{event_id}: invalid event wrapper")
+        if type_ref(target(members["value"])) in unbounded_builtins:
+            raise ValueError(f"{event_id}: unbounded builtin requires a bounded named shape")
         events.append({"id": trait["id"], "name": local(event_id), "tag": trait["tag"],
             "payload": type_ref(target(members["value"]))})
 
@@ -46,6 +55,8 @@ def compile_model(ast: dict, service_id: str | None) -> dict:
         trait = shape.get("traits", {}).get(FIELD_TRAIT)
         members = shape.get("members", {})
         if trait is None or set(members) != {"value"}: raise ValueError(f"{field_id}: invalid field wrapper")
+        if type_ref(target(members["value"])) in unbounded_builtins:
+            raise ValueError(f"{field_id}: unbounded builtin requires a bounded named shape")
         fields.append({"id": trait["id"], "name": local(field_id), "tag": trait["tag"],
             "value": type_ref(target(members["value"])), "readable": trait.get("readable", False),
             "writable": trait.get("writable", False), "notifiable": trait.get("notifiable", False)})
@@ -56,12 +67,16 @@ def compile_model(ast: dict, service_id: str | None) -> dict:
         shape = shapes[operation_id]
         trait = shape.get("traits", {}).get(METHOD_TRAIT)
         if trait is None: raise ValueError(f"{operation_id}: method trait required")
+        operation_types = [type_ref(target(shape["input"])), type_ref(target(shape["output"]))]
+        operation_types.extend(type_ref(target(item)) for item in shape.get("errors", []))
+        if any(value in unbounded_builtins for value in operation_types):
+            raise ValueError(f"{operation_id}: unbounded builtin requires a bounded named shape")
         methods.append({"id": trait["id"], "name": local(operation_id), "tag": trait["tag"],
             "input": type_ref(target(shape["input"])), "output": type_ref(target(shape["output"])),
             "errors": sorted(type_ref(target(item)) for item in shape.get("errors", [])),
             "idempotent": trait.get("idempotent", False)})
 
-    model = {"irVersion": 1, "namespace": namespace, "services": [{
+    model = {"irVersion": 1, "wireFormat": "ovf-tagged-le-v1", "namespace": namespace, "services": [{
         "id": service_trait["id"], "name": local(service_id), "version": service_shape["version"],
         "events": sorted(events, key=lambda item: item["tag"]),
         "methods": sorted(methods, key=lambda item: item["tag"]),

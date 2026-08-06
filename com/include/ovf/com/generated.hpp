@@ -167,12 +167,21 @@ public:
   }
   auto empty() const noexcept -> bool { return bytes_.empty(); }
   auto remaining() const noexcept -> std::size_t { return bytes_.size(); }
+  auto next_field(std::uint32_t& tag, Decoder& field) -> bool {
+    std::uint32_t size{};
+    std::span<const std::byte> bytes;
+    if (!unsigned_integer(tag) || tag == 0U || !unsigned_integer(size) || !raw(size, bytes))
+      return false;
+    field = Decoder(bytes);
+    return true;
+  }
 
 private:
   std::span<const std::byte> bytes_;
 };
 
 template <class T, class Enable = void> struct Codec;
+template <class T, class Enable = void> struct MaximumEncodedSize;
 
 template <class T>
 struct Codec<T, std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool>>> {
@@ -190,6 +199,10 @@ struct Codec<T, std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, boo
     return true;
   }
 };
+template <class T>
+struct MaximumEncodedSize<T, std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool>>> {
+  static constexpr std::optional<std::size_t> value{sizeof(T)};
+};
 
 template <> struct Codec<bool> {
   static auto encode(Encoder& out, bool value) -> bool {
@@ -202,6 +215,9 @@ template <> struct Codec<bool> {
     value = raw == 1U;
     return true;
   }
+};
+template <> struct MaximumEncodedSize<bool> {
+  static constexpr std::optional<std::size_t> value{1U};
 };
 
 template <> struct Codec<float> {
@@ -216,6 +232,9 @@ template <> struct Codec<float> {
     return true;
   }
 };
+template <> struct MaximumEncodedSize<float> {
+  static constexpr std::optional<std::size_t> value{4U};
+};
 template <> struct Codec<double> {
   static auto encode(Encoder& out, double value) -> bool {
     return Codec<std::uint64_t>::encode(out, std::bit_cast<std::uint64_t>(value));
@@ -228,6 +247,23 @@ template <> struct Codec<double> {
     return true;
   }
 };
+template <> struct MaximumEncodedSize<double> {
+  static constexpr std::optional<std::size_t> value{8U};
+};
+template <class T> auto encode_field(Encoder& out, std::uint32_t tag, T const& value) -> bool {
+  Encoder counter(Encoder::CountOnly{});
+  if (tag == 0U || !Codec<T>::encode(counter, value) || !counter.valid() ||
+      counter.size() > std::numeric_limits<std::uint32_t>::max())
+    return false;
+  Codec<std::uint32_t>::encode(out, tag);
+  Codec<std::uint32_t>::encode(out, static_cast<std::uint32_t>(counter.size()));
+  return Codec<T>::encode(out, value);
+}
+
+template <class T>
+auto encode_optional_field(Encoder& out, std::uint32_t tag, std::optional<T> const& value) -> bool {
+  return !value || encode_field(out, tag, *value);
+}
 template <std::size_t N> struct Codec<BoundedString<N>> {
   static auto encode(Encoder& out, BoundedString<N> const& value) -> bool {
     Codec<std::uint32_t>::encode(out, static_cast<std::uint32_t>(value.size()));
@@ -242,6 +278,9 @@ template <std::size_t N> struct Codec<BoundedString<N>> {
       return false;
     return value.assign({reinterpret_cast<char const*>(bytes.data()), bytes.size()});
   }
+};
+template <std::size_t N> struct MaximumEncodedSize<BoundedString<N>> {
+  static constexpr std::optional<std::size_t> value{4U + N};
 };
 template <class T, std::size_t N> struct Codec<BoundedVector<T, N>> {
   static auto encode(Encoder& out, BoundedVector<T, N> const& value) -> bool {
@@ -263,6 +302,13 @@ template <class T, std::size_t N> struct Codec<BoundedVector<T, N>> {
     return true;
   }
 };
+template <class T, std::size_t N> struct MaximumEncodedSize<BoundedVector<T, N>> {
+  static constexpr std::optional<std::size_t> value = [] {
+    if constexpr (MaximumEncodedSize<T>::value.has_value())
+      return std::optional<std::size_t>{4U + N * *MaximumEncodedSize<T>::value};
+    return std::optional<std::size_t>{};
+  }();
+};
 template <class T, std::size_t N> struct Codec<std::array<T, N>> {
   static auto encode(Encoder& out, std::array<T, N> const& value) -> bool {
     for (auto const& item : value)
@@ -276,6 +322,13 @@ template <class T, std::size_t N> struct Codec<std::array<T, N>> {
         return false;
     return true;
   }
+};
+template <class T, std::size_t N> struct MaximumEncodedSize<std::array<T, N>> {
+  static constexpr std::optional<std::size_t> value = [] {
+    if constexpr (MaximumEncodedSize<T>::value.has_value())
+      return std::optional<std::size_t>{N * *MaximumEncodedSize<T>::value};
+    return std::optional<std::size_t>{};
+  }();
 };
 template <> struct Codec<std::string> {
   static auto encode(Encoder& out, std::string const& value) -> bool {
@@ -293,6 +346,9 @@ template <> struct Codec<std::string> {
     value.assign(reinterpret_cast<char const*>(bytes.data()), bytes.size());
     return true;
   }
+};
+template <> struct MaximumEncodedSize<std::string> {
+  static constexpr std::optional<std::size_t> value{};
 };
 template <class T> struct Codec<std::vector<T>> {
   static auto encode(Encoder& out, std::vector<T> const& value) -> bool {
@@ -319,6 +375,9 @@ template <class T> struct Codec<std::vector<T>> {
     return true;
   }
 };
+template <class T> struct MaximumEncodedSize<std::vector<T>> {
+  static constexpr std::optional<std::size_t> value{};
+};
 template <> struct Codec<std::span<const std::byte>> {
   static auto encode(Encoder& out, std::span<const std::byte> value) -> bool {
     if (value.size() > std::numeric_limits<std::uint32_t>::max())
@@ -331,6 +390,9 @@ template <> struct Codec<std::span<const std::byte>> {
     std::uint32_t size{};
     return Codec<std::uint32_t>::decode(in, size) && size <= in.remaining() && in.raw(size, value);
   }
+};
+template <> struct MaximumEncodedSize<std::span<const std::byte>> {
+  static constexpr std::optional<std::size_t> value{};
 };
 template <class T> struct Codec<std::optional<T>> {
   static auto encode(Encoder& out, std::optional<T> const& value) -> bool {
@@ -352,6 +414,11 @@ template <class T> struct Codec<std::optional<T>> {
     return true;
   }
 };
+template <class T> struct MaximumEncodedSize<std::optional<T>> : MaximumEncodedSize<T> {};
+
+template <class T> constexpr auto maximum_encoded_size() -> std::optional<std::size_t> {
+  return MaximumEncodedSize<T>::value;
+}
 
 template <class T> auto encode(T const& value) -> std::vector<std::byte> {
   Encoder encoder;

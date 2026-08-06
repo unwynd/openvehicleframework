@@ -50,11 +50,40 @@ namespace ovf::com {
 {% for shape in model.ordered_types if shape.kind == "struct" %}
 template<> struct Codec<{{ model.cpp_namespace }}::{{ shape.name }}> {
     static auto encode(Encoder& out, {{ model.cpp_namespace }}::{{ shape.name }} const& value) -> bool {
-        return {% for member in shape.members|sort(attribute="tag") %}Codec<{% if not member.required %}std::optional<{% endif %}{{ member.type|codec_type(model.cpp_namespace) }}{% if not member.required %}>{% endif %}>::encode(out, value.{{ member.name }}){% if not loop.last %} && {% endif %}{% else %}true{% endfor %};
+        return {% for member in shape.members|sort(attribute="tag") %}{% if member.required %}encode_field{% else %}encode_optional_field{% endif %}(out, {{ member.tag }}, value.{{ member.name }}){% if not loop.last %} && {% endif %}{% else %}true{% endfor %};
     }
     static auto decode(Decoder& in, {{ model.cpp_namespace }}::{{ shape.name }}& value) -> bool {
-        return {% for member in shape.members|sort(attribute="tag") %}Codec<{% if not member.required %}std::optional<{% endif %}{{ member.type|codec_type(model.cpp_namespace) }}{% if not member.required %}>{% endif %}>::decode(in, value.{{ member.name }}){% if not loop.last %} && {% endif %}{% else %}true{% endfor %};
+{% for member in shape.members|sort(attribute="tag") %}
+        bool seen_{{ member.tag }}{};
+{% endfor %}
+        while (!in.empty()) {
+            std::uint32_t tag{};
+            Decoder field(std::span<const std::byte>{});
+            if (!in.next_field(tag, field)) return false;
+            switch (tag) {
+{% for member in shape.members|sort(attribute="tag") %}
+            case {{ member.tag }}:
+                if (seen_{{ member.tag }} || !Codec<{{ member.type|codec_type(model.cpp_namespace) }}>::decode(field, {% if member.required %}value.{{ member.name }}{% else %}value.{{ member.name }}.emplace(){% endif %}) || !field.empty()) return false;
+                seen_{{ member.tag }} = true;
+                break;
+{% endfor %}
+            default:
+                break;
+            }
+        }
+        return {% for member in shape.members|sort(attribute="tag") if member.required %}seen_{{ member.tag }}{% if not loop.last %} && {% endif %}{% else %}true{% endfor %};
     }
+};
+template<> struct MaximumEncodedSize<{{ model.cpp_namespace }}::{{ shape.name }}> {
+    static constexpr std::optional<std::size_t> value = [] {
+        std::size_t total{};
+{% for member in shape.members|sort(attribute="tag") %}
+        constexpr auto member_{{ member.tag }} = MaximumEncodedSize<{{ member.type|codec_type(model.cpp_namespace) }}>::value;
+        if (!member_{{ member.tag }}) return std::optional<std::size_t>{};
+        total += 8U + *member_{{ member.tag }};
+{% endfor %}
+        return std::optional<std::size_t>{total};
+    }();
 };
 {% endfor %}
 } // namespace ovf::com

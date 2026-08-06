@@ -148,7 +148,7 @@ auto CrashWithOutstandingLoan() -> int {
   ovf_com_host_api_v1 host{sizeof(host), nullptr, Log, Dispatch, Clock};
   constexpr char instance[] = "crashing-peer";
   ovf_com_transport_config_v1 config{
-      sizeof(config), {instance, sizeof(instance) - 1}, {nullptr, 0}, 8, 8};
+      sizeof(config), {instance, sizeof(instance) - 1}, {nullptr, 0}, 8, 8, 0, 0};
   ovf_com_transport_v1* transport{};
   if (factory->create(&host, &config, &transport) != OVF_COM_STATUS_OK ||
       transport->start(transport) != OVF_COM_STATUS_OK)
@@ -168,7 +168,7 @@ auto PublishPattern() -> int {
   ovf_com_host_api_v1 host{sizeof(host), nullptr, Log, Dispatch, Clock};
   constexpr char instance[] = "publishing-peer";
   ovf_com_transport_config_v1 config{
-      sizeof(config), {instance, sizeof(instance) - 1}, {nullptr, 0}, 8, 8};
+      sizeof(config), {instance, sizeof(instance) - 1}, {nullptr, 0}, 8, 8, 0, 0};
   ovf_com_transport_v1* transport{};
   if (factory->create(&host, &config, &transport) != OVF_COM_STATUS_OK ||
       transport->start(transport) != OVF_COM_STATUS_OK)
@@ -196,7 +196,7 @@ auto ServeMethod(bool crash_after_response) -> int {
   ovf_com_host_api_v1 host{sizeof(host), nullptr, Log, Dispatch, Clock};
   constexpr char instance[] = "method-server";
   ovf_com_transport_config_v1 config{
-      sizeof(config), {instance, sizeof(instance) - 1}, {nullptr, 0}, 8, 8};
+      sizeof(config), {instance, sizeof(instance) - 1}, {nullptr, 0}, 8, 8, 0, 0};
   ovf_com_transport_v1* transport{};
   if (factory->create(&host, &config, &transport) != OVF_COM_STATUS_OK ||
       transport->start(transport) != OVF_COM_STATUS_OK)
@@ -248,7 +248,7 @@ int main(int argc, char** argv) {
   ovf_com_host_api_v1 host{sizeof(host), nullptr, Log, Dispatch, Clock};
   constexpr char instance[] = "native-peer";
   ovf_com_transport_config_v1 config{
-      sizeof(config), {instance, sizeof(instance) - 1}, {nullptr, 0}, 16, 16};
+      sizeof(config), {instance, sizeof(instance) - 1}, {nullptr, 0}, 16, 16, 0, 0};
   ovf_com_transport_v1* transport{};
   assert(factory->create(&host, &config, &transport) == OVF_COM_STATUS_OK);
   assert(transport->start(transport) == OVF_COM_STATUS_OK);

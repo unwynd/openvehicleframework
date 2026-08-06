@@ -323,6 +323,55 @@ def profile_errors(profile: object, expected_name: str) -> list[str]:
     return errors
 
 
+def maximum_encoded_sizes(contract: dict) -> dict[str, int | None]:
+    shapes = {shape["name"]: shape for shape in contract.get("types", [])}
+    cache: dict[str, int | None] = {
+        "bool": 1, "f32": 4, "f64": 8, "string": None, "bytes": None,
+    }
+    visiting: set[str] = set()
+
+    def size(name: str) -> int | None:
+        if name in cache: return cache[name]
+        if name in visiting: return None
+        shape = shapes.get(name)
+        if shape is None: return None
+        visiting.add(name)
+        kind = shape["kind"]
+        result: int | None
+        if kind == "integer": result = shape["bits"] // 8
+        elif kind == "string":
+            result = 4 + shape["capacity"] if shape["storage"] == "bounded" else \
+                shape["capacity"] if shape["storage"] == "fixed" else None
+        elif kind == "sequence":
+            element = size(shape["element"])
+            result = (None if element is None else
+                      element * shape["capacity"] + (4 if shape["storage"] == "bounded" else 0)) \
+                if shape["storage"] != "unbounded" else None
+        elif kind == "struct":
+            members = [size(member["type"]) for member in shape["members"]]
+            result = None if any(value is None for value in members) else \
+                sum(8 + value for value in members if value is not None)
+        else: result = None
+        visiting.remove(name)
+        cache[name] = result
+        return result
+
+    for name in shapes: size(name)
+    return cache
+
+
+def service_maximum_payload(service: dict, sizes: dict[str, int | None]) -> int | None:
+    values: list[int | None] = []
+    values.extend(sizes.get(event["payload"]) for event in service.get("events", []))
+    values.extend(sizes.get(field["value"]) for field in service.get("fields", []))
+    for method in service.get("methods", []):
+        values.extend((sizes.get(method["input"]), sizes.get(method["output"])))
+        values.extend(None if sizes.get(error) is None else 1 + sizes[error]
+                      for error in method.get("errors", []))
+    if any(value is None for value in values): return None
+    return max((value for value in values if value is not None), default=0)
+
+
 def vsomeip_mapping_errors(mapping: object) -> list[str]:
     if not isinstance(mapping, dict): return ["mapping must be an object"]
     required = {"id", "eventGroup", "major", "minor", "kind", "reliable"}
@@ -487,6 +536,7 @@ def validate_deployment(contract: dict, deployment: dict, profiles_dir: Path) ->
         errors.append(f"contractFingerprint mismatch: expected {expected}")
 
     services = {service["id"]: service for service in contract.get("services", [])}
+    encoded_sizes = maximum_encoded_sizes(contract)
     providers: dict[str, tuple[dict, dict]] = {}
     for provider in deployment.get("providers", []):
         provider_id = provider.get("id")
@@ -511,10 +561,18 @@ def validate_deployment(contract: dict, deployment: dict, profiles_dir: Path) ->
         if service is None:
             errors.append(f"{where}: unknown service ID")
             continue
+        service_payload = service_maximum_payload(service, encoded_sizes)
         elements = {element["id"] for kind in ("events", "methods", "fields") for element in service[kind]}
         priorities: set[int] = set()
         for route_index, route in enumerate(instance.get("routes", [])):
             route_where = f"{where}.route[{route_index}]"
+            route_payload = route.get("limits", {}).get("maxPayloadSize")
+            if service_payload is None:
+                errors.append(f"{route_where}: service payload has no static maximum")
+            elif isinstance(route_payload, int) and route_payload < service_payload:
+                errors.append(
+                    f"{route_where}: maxPayloadSize {route_payload} is below contract maximum {service_payload}"
+                )
             provider_entry = providers.get(route.get("provider"))
             if provider_entry is None:
                 errors.append(f"{route_where}: unknown provider {route.get('provider')}")

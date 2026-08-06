@@ -1,5 +1,6 @@
 {
   "irVersion": 1,
+  "wireFormat": "ovf-tagged-le-v1",
   "namespace": "example.radar",
   "services": [{
     "id": "42bd2fc5-8f32-4e57-8a33-94fb0a5cf71d", "name": "RadarService", "version": "1.0.0",

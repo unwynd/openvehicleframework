@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <chrono>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -31,15 +33,8 @@ struct TransportConfig {
   std::string configuration;
   std::uint32_t max_endpoints{256};
   std::uint32_t max_outstanding_operations{256};
-};
-
-struct TransportRegistration {
-  std::string provider;
-  TransportConfig config;
-};
-
-struct DeploymentConfig {
-  std::string path;
+  std::chrono::steady_clock::duration start_timeout{std::chrono::seconds(5)};
+  std::chrono::steady_clock::duration stop_timeout{std::chrono::seconds(5)};
 };
 
 enum class RuntimeError {
@@ -55,6 +50,43 @@ enum class RuntimeError {
   cancelled,
   deadline_exceeded,
   shutting_down
+};
+
+enum class TransportHealthState { initializing, ready, degraded, failed, stopped };
+enum class DiagnosticOperation {
+  provider,
+  discovery,
+  endpoint,
+  subscription,
+  publish,
+  request,
+  response
+};
+
+struct CommunicationDiagnostic {
+  std::string provider;
+  RuntimeError error;
+  DiagnosticOperation operation_kind{DiagnosticOperation::provider};
+  std::int64_t native_code{};
+  std::uint64_t endpoint{};
+  std::uint64_t operation{};
+  std::string message;
+};
+
+struct TransportHealth {
+  std::string provider;
+  TransportHealthState state{TransportHealthState::stopped};
+  std::uint64_t sequence{};
+  CommunicationDiagnostic diagnostic;
+};
+
+struct TransportRegistration {
+  std::string provider;
+  TransportConfig config;
+};
+
+struct DeploymentConfig {
+  std::string path;
 };
 
 class Runtime final {
@@ -79,6 +111,9 @@ public:
 
   [[nodiscard]] bool IsRunning() const noexcept;
   [[nodiscard]] std::vector<std::string> TransportNames() const;
+  [[nodiscard]] std::vector<TransportHealth> Health() const;
+  void OnHealth(std::function<void(TransportHealth const&)> callback);
+  void OnDiagnostic(std::function<void(CommunicationDiagnostic const&)> callback);
 
 private:
   friend class detail::RuntimeAccess;
