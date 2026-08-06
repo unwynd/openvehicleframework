@@ -133,6 +133,7 @@ auto Descriptor(ovf_com_endpoint_kind_v1 kind) -> ovf_com_endpoint_descriptor_v1
   descriptor.history_depth = 1;
   descriptor.required_features = OVF_COM_CAP_EVENTS | OVF_COM_CAP_LOANS;
   descriptor.native_mapping = {kMapping, sizeof(kMapping) - 1};
+  descriptor.operation = OVF_COM_OPERATION_EVENT;
   return descriptor;
 }
 auto MethodDescriptor(ovf_com_endpoint_kind_v1 kind) -> ovf_com_endpoint_descriptor_v1 {
@@ -141,6 +142,7 @@ auto MethodDescriptor(ovf_com_endpoint_kind_v1 kind) -> ovf_com_endpoint_descrip
   descriptor.required_features =
       OVF_COM_CAP_METHODS | OVF_COM_CAP_DEADLINES | OVF_COM_CAP_CANCELLATION;
   descriptor.native_mapping = {kMethodMapping, sizeof(kMethodMapping) - 1};
+  descriptor.operation = OVF_COM_OPERATION_METHOD;
   return descriptor;
 }
 auto CrashWithOutstandingLoan() -> int {

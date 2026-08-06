@@ -52,6 +52,15 @@ typedef enum ovf_com_endpoint_kind_v1 {
   OVF_COM_ENDPOINT_METHOD_SERVER = 3
 } ovf_com_endpoint_kind_v1;
 
+typedef enum ovf_com_element_operation_v1 {
+  OVF_COM_OPERATION_UNSPECIFIED = 0,
+  OVF_COM_OPERATION_EVENT = 1,
+  OVF_COM_OPERATION_METHOD = 2,
+  OVF_COM_OPERATION_FIELD_GET = 3,
+  OVF_COM_OPERATION_FIELD_SET = 4,
+  OVF_COM_OPERATION_FIELD_NOTIFY = 5
+} ovf_com_element_operation_v1;
+
 enum {
   OVF_COM_CAP_DISCOVERY = UINT64_C(1) << 0,
   OVF_COM_CAP_EVENTS = UINT64_C(1) << 1,
@@ -188,6 +197,7 @@ typedef struct ovf_com_endpoint_descriptor_v1 {
   uint32_t history_depth;
   uint64_t required_features;
   ovf_com_string_view_v1 native_mapping;
+  ovf_com_element_operation_v1 operation;
 } ovf_com_endpoint_descriptor_v1;
 
 typedef struct ovf_com_loan_v1 {

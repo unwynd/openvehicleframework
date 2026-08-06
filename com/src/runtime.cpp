@@ -195,10 +195,13 @@ auto ParseDeployment(std::string const& path, std::vector<TransportRegistration>
     for (auto const& element : route["elements"]) {
       auto id = ParseUuid(element["id"]);
       if (!element.isObject() || !id || !element["event"].isString() ||
-          !element["method"].isString())
+          !element["method"].isString() ||
+          (!element["get"].isNull() && !element["get"].isString()) ||
+          (!element["set"].isNull() && !element["set"].isString()))
         return RuntimeError::invalid_argument;
-      binding.native_elements.push_back(
-          {*id, element["event"].asString(), element["method"].asString()});
+      binding.native_elements.push_back({*id, element["event"].asString(),
+                                         element["method"].asString(), element["get"].asString(),
+                                         element["set"].asString()});
     }
     routes.push_back({route["instance"].asString(), std::move(binding)});
   }

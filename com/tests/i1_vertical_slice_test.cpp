@@ -31,6 +31,17 @@ public:
     return state;
   }
 
+  auto setVehicleStateField(VehicleState const& value)
+      -> std::optional<ovf::com::CommunicationError> override {
+    state = value;
+    return std::nullopt;
+  }
+
+  auto Delay(DelayInput const& request)
+      -> ovf::com::MethodResult<DelayOutput, std::monostate> override {
+    return DelayOutput{request.milliseconds};
+  }
+
   VehicleState state{13.5F};
   int calibrations{};
 };
@@ -126,6 +137,18 @@ int main() {
   auto field_value = field_operation.get(deadline);
   assert(std::holds_alternative<VehicleState>(field_value));
   assert(std::fabs(std::get<VehicleState>(field_value).speedMetersPerSecond - 13.5F) < 0.001F);
+
+  auto set_operation = proxy.setVehicleStateField({18.25F}, deadline);
+  assert(!set_operation.get(deadline));
+  auto updated_operation = proxy.getVehicleStateField(deadline);
+  auto updated_value = updated_operation.get(deadline);
+  assert(std::holds_alternative<VehicleState>(updated_value));
+  assert(std::fabs(std::get<VehicleState>(updated_value).speedMetersPerSecond - 18.25F) < 0.001F);
+
+  auto delay_operation = proxy.Delay({25}, deadline);
+  auto delay_result = delay_operation.get(deadline);
+  assert(std::holds_alternative<DelayOutput>(delay_result));
+  assert(std::get<DelayOutput>(delay_result).completedAt == 25);
 
   int field_updates{};
   VehicleState notified{};

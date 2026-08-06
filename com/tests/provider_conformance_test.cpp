@@ -50,8 +50,19 @@ ovf_com_uuid_v1 Id(std::uint8_t value) {
   return id;
 }
 ovf_com_endpoint_descriptor_v1 Endpoint(ovf_com_endpoint_kind_v1 kind) {
-  return {sizeof(ovf_com_endpoint_descriptor_v1),     kind,        Id(1), Id(2), Id(3), 7, 64, 4,
-          OVF_COM_CAP_RELIABLE | OVF_COM_CAP_ORDERED, {nullptr, 0}};
+  return {sizeof(ovf_com_endpoint_descriptor_v1),
+          kind,
+          Id(1),
+          Id(2),
+          Id(3),
+          7,
+          64,
+          4,
+          OVF_COM_CAP_RELIABLE | OVF_COM_CAP_ORDERED,
+          {nullptr, 0},
+          kind == OVF_COM_ENDPOINT_EVENT_PUBLISHER || kind == OVF_COM_ENDPOINT_EVENT_SUBSCRIBER
+              ? OVF_COM_OPERATION_EVENT
+              : OVF_COM_OPERATION_METHOD};
 }
 struct State {
   int discoveries{};

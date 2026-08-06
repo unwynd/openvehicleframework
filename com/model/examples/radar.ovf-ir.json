@@ -5,8 +5,8 @@
   "services": [{
     "id": "42bd2fc5-8f32-4e57-8a33-94fb0a5cf71d", "name": "RadarService", "version": "1.0.0",
     "events": [{ "id": "851b0fc7-d41f-4e4f-9673-4be1aeed6f62", "name": "RadarObjectsChanged", "tag": 1, "payload": "RadarFrame" }],
-    "methods": [{ "id": "89dfe84f-1ab7-416d-891c-f603bc1f4557", "name": "Calibrate", "tag": 2, "input": "CalibrateInput", "output": "CalibrateOutput", "errors": ["InvalidTarget"], "idempotent": false }],
-    "fields": [{ "id": "aac81bc6-8197-4b52-887c-c918630cbd2d", "name": "VehicleStateField", "tag": 3, "value": "VehicleState", "readable": true, "writable": false, "notifiable": true }]
+    "methods": [{ "id": "89dfe84f-1ab7-416d-891c-f603bc1f4557", "name": "Calibrate", "tag": 2, "input": "CalibrateInput", "output": "CalibrateOutput", "errors": ["InvalidTarget"], "idempotent": false }, { "id": "e73194bc-e8bd-4e57-a44d-55671b51a12a", "name": "Delay", "tag": 4, "input": "DelayInput", "output": "DelayOutput", "errors": [], "idempotent": false }],
+    "fields": [{ "id": "aac81bc6-8197-4b52-887c-c918630cbd2d", "name": "VehicleStateField", "tag": 3, "value": "VehicleState", "readable": true, "writable": true, "notifiable": true }]
   }],
   "types": [
     { "kind": "integer", "name": "TimestampNs", "signed": false, "bits": 64 },
@@ -27,6 +27,8 @@
     { "kind": "struct", "name": "VehicleState", "members": [{ "name": "speedMetersPerSecond", "tag": 1, "type": "f32", "required": true }] },
     { "kind": "struct", "name": "CalibrateInput", "members": [{ "name": "targetDistanceMeters", "tag": 1, "type": "f32", "required": true }] },
     { "kind": "struct", "name": "CalibrateOutput", "members": [{ "name": "acceptedAt", "tag": 1, "type": "TimestampNs", "required": true }] },
+    { "kind": "struct", "name": "DelayInput", "members": [{ "name": "milliseconds", "tag": 1, "type": "ObjectId", "required": true }] },
+    { "kind": "struct", "name": "DelayOutput", "members": [{ "name": "completedAt", "tag": 1, "type": "TimestampNs", "required": true }] },
     { "kind": "struct", "name": "InvalidTarget", "members": [{ "name": "reason", "tag": 1, "type": "DiagnosticText", "required": true }] }
   ]
 }

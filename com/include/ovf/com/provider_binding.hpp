@@ -22,6 +22,8 @@ struct RouteBinding {
     Uuid element_id;
     std::string event;
     std::string method;
+    std::string field_get;
+    std::string field_set;
   };
   Uuid service_id;
   Uuid instance_id;

@@ -329,18 +329,22 @@ fn generate_cpp_deployment(
         .as_object()
         .ok_or("element mappings are missing")?
     {
-        let (event, method) = if provider_profile == "iceoryx2" {
+        let (event, method, field_get, field_set) = if provider_profile == "iceoryx2" {
             if value.get("unsupported").is_some() {
-                (String::new(), String::new())
+                (String::new(), String::new(), String::new(), String::new())
             } else if value.get("notify").is_some() || value.get("get").is_some() {
                 (
                     value
                         .get("notify")
                         .map(|entry| iceoryx2_event_mapping(&iceoryx2_base, entry))
                         .unwrap_or_default(),
+                    String::new(),
                     value
                         .get("get")
-                        .or_else(|| value.get("set"))
+                        .map(|entry| iceoryx2_method_mapping(&iceoryx2_base, entry))
+                        .unwrap_or_default(),
+                    value
+                        .get("set")
                         .map(|entry| iceoryx2_method_mapping(&iceoryx2_base, entry))
                         .unwrap_or_default(),
                 )
@@ -348,21 +352,37 @@ fn generate_cpp_deployment(
                 (
                     String::new(),
                     iceoryx2_method_mapping(&iceoryx2_base, value),
+                    String::new(),
+                    String::new(),
                 )
             } else {
-                (iceoryx2_event_mapping(&iceoryx2_base, value), String::new())
+                (
+                    iceoryx2_event_mapping(&iceoryx2_base, value),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                )
             }
         } else if let Some(name) = value.as_str() {
-            (name.to_owned(), name.to_owned())
+            (
+                name.to_owned(),
+                name.to_owned(),
+                String::new(),
+                String::new(),
+            )
         } else if value.get("id").is_some() {
             match value["kind"].as_str().unwrap_or_default() {
                 "event" | "fieldNotify" => (
                     native_mapping(service, instance_number, value),
                     String::new(),
+                    String::new(),
+                    String::new(),
                 ),
                 _ => (
                     String::new(),
                     native_mapping(service, instance_number, value),
+                    String::new(),
+                    String::new(),
                 ),
             }
         } else {
@@ -371,9 +391,13 @@ fn generate_cpp_deployment(
                     .get("notify")
                     .map(|entry| native_mapping(service, instance_number, entry))
                     .unwrap_or_default(),
+                String::new(),
                 value
                     .get("get")
-                    .or_else(|| value.get("set"))
+                    .map(|entry| native_mapping(service, instance_number, entry))
+                    .unwrap_or_default(),
+                value
+                    .get("set")
                     .map(|entry| native_mapping(service, instance_number, entry))
                     .unwrap_or_default(),
             )
@@ -382,6 +406,8 @@ fn generate_cpp_deployment(
             "id": uuid_bytes(id),
             "event_mapping": event,
             "method_mapping": method,
+            "field_get_mapping": field_get,
+            "field_set_mapping": field_set,
         }));
     }
     elements.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));

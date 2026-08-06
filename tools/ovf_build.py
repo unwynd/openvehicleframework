@@ -443,12 +443,12 @@ def _runtime_route(plan: dict) -> tuple[dict, dict]:
     base = f"{mapping['service']}/{mapping['instance']}"
     elements = []
     for element_id, value in mapping["elements"].items():
-        event = method = ""
+        event = method = field_get = field_set = ""
         if profile == "iceoryx2":
             if "notify" in value or "get" in value or "set" in value:
                 event = _iceoryx_event(base, value["notify"]) if "notify" in value else ""
-                operation = value.get("get", value.get("set"))
-                method = _iceoryx_method(base, operation) if operation else ""
+                field_get = _iceoryx_method(base, value["get"]) if "get" in value else ""
+                field_set = _iceoryx_method(base, value["set"]) if "set" in value else ""
             elif "requestType" in value:
                 method = _iceoryx_method(base, value)
             else:
@@ -461,9 +461,10 @@ def _runtime_route(plan: dict) -> tuple[dict, dict]:
             else: method = native
         else:
             if "notify" in value: event = _native_mapping(mapping["service"], mapping["instance"], value["notify"])
-            operation = value.get("get", value.get("set"))
-            if operation: method = _native_mapping(mapping["service"], mapping["instance"], operation)
-        elements.append({"id": element_id, "event": event, "method": method})
+            if "get" in value: field_get = _native_mapping(mapping["service"], mapping["instance"], value["get"])
+            if "set" in value: field_set = _native_mapping(mapping["service"], mapping["instance"], value["set"])
+        elements.append({"id": element_id, "event": event, "method": method,
+                         "get": field_get, "set": field_set})
     service_mapping = (_native_mapping(mapping["service"], mapping["instance"],
                                        {"kind": "method", "reliable": True, "major": 1})
                        if numeric else base)
@@ -523,8 +524,8 @@ def compile_communication_deployment(args: argparse.Namespace) -> int:
                 if errors: raise ValueError("\n".join(errors))
                 plan = make_plan(deployment, profiles)
                 route, transport = _runtime_route(plan)
-                transport["startTimeoutMs"] = model["execution"]["startup"]["timeoutMs"]
-                transport["stopTimeoutMs"] = model["execution"]["shutdown"]["timeoutMs"]
+                transport["startTimeoutMs"] = application["execution"]["startup"]["timeoutMs"]
+                transport["stopTimeoutMs"] = application["execution"]["shutdown"]["timeoutMs"]
                 routes.append(route); transports[transport["provider"]] = transport
             if len(routes) != len(model["interfaces"]):
                 raise ValueError(f"application {name} did not resolve every interface")

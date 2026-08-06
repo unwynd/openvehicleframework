@@ -67,7 +67,7 @@ structure VehicleState {
     id: "aac81bc6-8197-4b52-887c-c918630cbd2d"
     tag: 3
     readable: true
-    writable: false
+    writable: true
     notifiable: true
 )
 structure VehicleStateField {
@@ -103,6 +103,27 @@ operation Calibrate {
     errors: [InvalidTarget]
 }
 
+structure DelayInput {
+    @required @ovfTag(value: 1)
+    milliseconds: ObjectId
+}
+
+structure DelayOutput {
+    @required @ovfTag(value: 1)
+    completedAt: TimestampNs
+}
+
+@ovfMethod(
+    id: "e73194bc-e8bd-4e57-a44d-55671b51a12a"
+    tag: 4
+    idempotent: false
+    fireAndForget: false
+)
+operation Delay {
+    input: DelayInput
+    output: DelayOutput
+}
+
 @ovfService(
     id: "42bd2fc5-8f32-4e57-8a33-94fb0a5cf71d"
     events: [RadarObjectsChanged]
@@ -110,5 +131,5 @@ operation Calibrate {
 )
 service RadarService {
     version: "1.0.0"
-    operations: [Calibrate]
+    operations: [Calibrate, Delay]
 }

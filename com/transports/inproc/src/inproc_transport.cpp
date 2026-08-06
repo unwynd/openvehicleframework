@@ -79,7 +79,8 @@ bool Equal(ovf_com_uuid_v1 const& lhs, ovf_com_uuid_v1 const& rhs) {
 bool SameElement(Endpoint const& lhs, Endpoint const& rhs) {
   return Equal(lhs.descriptor.service_id, rhs.descriptor.service_id) &&
          Equal(lhs.descriptor.instance_id, rhs.descriptor.instance_id) &&
-         Equal(lhs.descriptor.element_id, rhs.descriptor.element_id);
+         Equal(lhs.descriptor.element_id, rhs.descriptor.element_id) &&
+         lhs.descriptor.operation == rhs.descriptor.operation;
 }
 
 template <class Task> ovf_com_status_v1 Dispatch(InprocTransport& self, Task task) {

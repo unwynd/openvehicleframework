@@ -87,9 +87,11 @@ template <class Value, class ApplicationError>
 using MethodResult = std::variant<Value, ApplicationError, CommunicationError>;
 
 struct ElementDescriptor {
+  enum class Operation : std::uint8_t { event, method, field_get, field_set, field_notify };
   Uuid id;
   std::uint32_t tag;
   std::string_view name;
+  Operation operation{Operation::method};
 };
 struct CallOptions {
   std::chrono::steady_clock::time_point deadline;
@@ -481,6 +483,13 @@ struct RawServerResult {
   std::size_t encoded_payload_size{};
   std::function<bool(std::span<std::byte>)> encode_payload;
 };
+
+inline auto make_raw_error(CommunicationError error) -> RawServerResult {
+  RawServerResult result{};
+  result.error = error;
+  result.has_error = true;
+  return result;
+}
 
 template <class T> auto make_raw_result(T value) -> RawServerResult {
   auto stored = std::make_shared<T>(std::move(value));

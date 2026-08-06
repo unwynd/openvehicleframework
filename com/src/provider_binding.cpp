@@ -297,10 +297,37 @@ auto Descriptor(RouteBinding const& route, ElementDescriptor const& element,
   auto mapping = std::find_if(route.native_elements.begin(), route.native_elements.end(), same_id);
   std::string_view native;
   if (mapping != route.native_elements.end()) {
-    native = kind == OVF_COM_ENDPOINT_EVENT_PUBLISHER || kind == OVF_COM_ENDPOINT_EVENT_SUBSCRIBER
-                 ? std::string_view(mapping->event)
-                 : std::string_view(mapping->method);
+    switch (element.operation) {
+    case ElementDescriptor::Operation::event:
+    case ElementDescriptor::Operation::field_notify:
+      native = mapping->event;
+      break;
+    case ElementDescriptor::Operation::field_get:
+      native = mapping->field_get;
+      break;
+    case ElementDescriptor::Operation::field_set:
+      native = mapping->field_set;
+      break;
+    case ElementDescriptor::Operation::method:
+      native = mapping->method;
+      break;
+    }
   }
+  auto operation = [value = element.operation] {
+    switch (value) {
+    case ElementDescriptor::Operation::event:
+      return OVF_COM_OPERATION_EVENT;
+    case ElementDescriptor::Operation::method:
+      return OVF_COM_OPERATION_METHOD;
+    case ElementDescriptor::Operation::field_get:
+      return OVF_COM_OPERATION_FIELD_GET;
+    case ElementDescriptor::Operation::field_set:
+      return OVF_COM_OPERATION_FIELD_SET;
+    case ElementDescriptor::Operation::field_notify:
+      return OVF_COM_OPERATION_FIELD_NOTIFY;
+    }
+    return OVF_COM_OPERATION_UNSPECIFIED;
+  }();
   return {sizeof(ovf_com_endpoint_descriptor_v1),
           kind,
           AbiUuid(route.service_id),
@@ -315,7 +342,8 @@ auto Descriptor(RouteBinding const& route, ElementDescriptor const& element,
               : kind == OVF_COM_ENDPOINT_METHOD_CLIENT
                   ? OVF_COM_CAP_METHODS | OVF_COM_CAP_DEADLINES | OVF_COM_CAP_CANCELLATION
                   : OVF_COM_CAP_METHODS),
-          {native.data(), native.size()}};
+          {native.data(), native.size()},
+          operation};
 }
 } // namespace
 

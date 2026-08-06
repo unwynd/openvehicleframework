@@ -54,7 +54,9 @@ auto Descriptor(ovf_com_endpoint_kind_v1 kind, ovf_com_uuid_v1 element, std::str
           static_cast<std::uint64_t>(kind == OVF_COM_ENDPOINT_EVENT_PUBLISHER
                                          ? OVF_COM_CAP_EVENTS | OVF_COM_CAP_RELIABLE
                                          : OVF_COM_CAP_METHODS | OVF_COM_CAP_RELIABLE),
-          {mapping.data(), mapping.size()}};
+          {mapping.data(), mapping.size()},
+          kind == OVF_COM_ENDPOINT_EVENT_PUBLISHER ? OVF_COM_OPERATION_EVENT
+                                                   : OVF_COM_OPERATION_METHOD};
 }
 struct Server {
   ovf_com_transport_v1* provider{};

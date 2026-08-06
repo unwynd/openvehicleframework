@@ -1,3 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 exports_files(["__init__.py"])
+
+test_suite(
+    name = "generated_contract_matrix",
+    tests = [
+        "//tests/integration/iceoryx2:radar_two_process_test",
+        "//tests/integration/vsomeip:radar_two_process_test",
+    ],
+)

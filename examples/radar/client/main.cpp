@@ -107,19 +107,56 @@ int main() {
   }
   std::cout << "FIELD_READ_OK" << std::endl;
 
+  options.deadline = std::chrono::steady_clock::now() + 5s;
+  auto field_write = proxy->setVehicleStateField({31.25F}, options).get(options);
+  if (field_write) {
+    std::cerr << "VehicleStateField write failed\n";
+    return 10;
+  }
+  options.deadline = std::chrono::steady_clock::now() + 5s;
+  auto updated_field = proxy->getVehicleStateField(options).get(options);
+  if (!std::holds_alternative<VehicleState>(updated_field) ||
+      std::get<VehicleState>(updated_field).speedMetersPerSecond != 31.25F) {
+    std::cerr << "VehicleStateField did not retain the written value\n";
+    return 11;
+  }
+  std::cout << "FIELD_WRITE_OK" << std::endl;
+
+  options.deadline = std::chrono::steady_clock::now() + 50ms;
+  auto delayed = proxy->Delay({300}, options).get(options);
+  if (!std::holds_alternative<ovf::com::CommunicationError>(delayed) ||
+      std::get<ovf::com::CommunicationError>(delayed) !=
+          ovf::com::CommunicationError::deadline_exceeded) {
+    std::cerr << "Delay did not expire at its deadline\n";
+    return 12;
+  }
+  std::cout << "DEADLINE_OK" << std::endl;
+
+  options.deadline = std::chrono::steady_clock::now() + 5s;
+  auto cancelled = proxy->Delay({300}, options);
+  cancelled.cancel();
+  auto cancelled_result = cancelled.get(options);
+  if (!std::holds_alternative<ovf::com::CommunicationError>(cancelled_result) ||
+      std::get<ovf::com::CommunicationError>(cancelled_result) !=
+          ovf::com::CommunicationError::cancelled) {
+    std::cerr << "Delay did not complete as cancelled\n";
+    return 13;
+  }
+  std::cout << "CANCELLATION_OK" << std::endl;
+
   {
     std::unique_lock lock(mutex);
     if (!condition.wait_for(lock, 10s, [&] { return radar_received && field_received; })) {
       std::cerr << "timed out waiting for event subscriptions\n";
       static_cast<void>(logger.Warning("timed out waiting for radar subscriptions"));
-      return 10;
+      return 14;
     }
   }
   if (radar.objects.size() != 1 || radar.objects.values()[0].id != 7 ||
       state.speedMetersPerSecond <= 13.5F) {
     std::cerr << "received invalid event data\n";
     static_cast<void>(logger.Error("received invalid radar event data"));
-    return 11;
+    return 15;
   }
   std::cout << "EVENT_OK\nFIELD_NOTIFICATION_OK" << std::endl;
 
@@ -129,7 +166,7 @@ int main() {
     field_subscription.close();
     radar_subscription.close();
     static_cast<void>(logger.Error("failed while waiting for termination"));
-    return 12;
+    return 16;
   }
   field_subscription.close();
   radar_subscription.close();

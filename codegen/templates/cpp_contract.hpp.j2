@@ -95,13 +95,21 @@ struct {{ service.name }}Contract final {
     static constexpr ovf::com::Uuid id{{ '{' }}{{ service.id|uuid_bytes }}{{ '}' }};
     static constexpr std::string_view version = "{{ service.version }}";
 {% for element in service.events|sort(attribute="tag") %}
-    static constexpr ovf::com::ElementDescriptor {{ element.name }}Descriptor{{ '{' }}{{ '{' }}{{ element.id|uuid_bytes }}{{ '}' }}, {{ element.tag }}, "{{ element.name }}"};
+    static constexpr ovf::com::ElementDescriptor {{ element.name }}Descriptor{{ '{' }}{{ '{' }}{{ element.id|uuid_bytes }}{{ '}' }}, {{ element.tag }}, "{{ element.name }}", ovf::com::ElementDescriptor::Operation::event};
 {% endfor %}
 {% for element in service.methods|sort(attribute="tag") %}
-    static constexpr ovf::com::ElementDescriptor {{ element.name }}Descriptor{{ '{' }}{{ '{' }}{{ element.id|uuid_bytes }}{{ '}' }}, {{ element.tag }}, "{{ element.name }}"};
+    static constexpr ovf::com::ElementDescriptor {{ element.name }}Descriptor{{ '{' }}{{ '{' }}{{ element.id|uuid_bytes }}{{ '}' }}, {{ element.tag }}, "{{ element.name }}", ovf::com::ElementDescriptor::Operation::method};
 {% endfor %}
 {% for element in service.fields|sort(attribute="tag") %}
-    static constexpr ovf::com::ElementDescriptor {{ element.name }}Descriptor{{ '{' }}{{ '{' }}{{ element.id|uuid_bytes }}{{ '}' }}, {{ element.tag }}, "{{ element.name }}"};
+{% if element.readable %}
+    static constexpr ovf::com::ElementDescriptor {{ element.name }}GetDescriptor{{ '{' }}{{ '{' }}{{ element.id|uuid_bytes }}{{ '}' }}, {{ element.tag }}, "{{ element.name }}.get", ovf::com::ElementDescriptor::Operation::field_get};
+{% endif %}
+{% if element.writable %}
+    static constexpr ovf::com::ElementDescriptor {{ element.name }}SetDescriptor{{ '{' }}{{ '{' }}{{ element.id|uuid_bytes }}{{ '}' }}, {{ element.tag }}, "{{ element.name }}.set", ovf::com::ElementDescriptor::Operation::field_set};
+{% endif %}
+{% if element.notifiable %}
+    static constexpr ovf::com::ElementDescriptor {{ element.name }}NotifyDescriptor{{ '{' }}{{ '{' }}{{ element.id|uuid_bytes }}{{ '}' }}, {{ element.tag }}, "{{ element.name }}.notify", ovf::com::ElementDescriptor::Operation::field_notify};
+{% endif %}
 {% endfor %}
 };
 
@@ -161,7 +169,7 @@ public:
 {% if field.readable %}
     auto get{{ field.name }}(ovf::com::CallOptions options)
         -> ovf::com::Operation<ovf::com::MethodResult<{{ field.value|cpp_type }}, std::monostate>> {
-        auto state = binding_->invoke({{ service.name }}Contract::{{ field.name }}Descriptor, {}, options);
+        auto state = binding_->invoke({{ service.name }}Contract::{{ field.name }}GetDescriptor, {}, options);
         return {std::move(state), +[](ovf::com::RawResult const& raw)
             -> ovf::com::MethodResult<{{ field.value|cpp_type }}, std::monostate> {
             if (raw.has_error) return raw.error;
@@ -172,9 +180,27 @@ public:
         }};
     }
 {% endif %}
+{% if field.writable %}
+    auto set{{ field.name }}({{ field.value|cpp_type }} value, ovf::com::CallOptions options)
+        -> ovf::com::Operation<std::optional<ovf::com::CommunicationError>> {
+        auto size = ovf::com::encoded_size(value);
+        auto state = binding_->invoke_loaned(
+            {{ service.name }}Contract::{{ field.name }}SetDescriptor, size,
+            [value = std::move(value)](std::span<std::byte> output) {
+                return ovf::com::encode_into(value, output);
+            }, options);
+        return {std::move(state), +[](ovf::com::RawResult const& raw)
+            -> std::optional<ovf::com::CommunicationError> {
+            if (raw.has_error) return raw.error;
+            if (raw.application_error || !raw.payload.empty())
+                return ovf::com::CommunicationError::provider_failure;
+            return std::nullopt;
+        }};
+    }
+{% endif %}
 {% if field.notifiable %}
     auto subscribe{{ field.name }}() -> ovf::com::EventSubscription<{{ field.value|cpp_type }}> {
-        return {binding_->subscribe({{ service.name }}Contract::{{ field.name }}Descriptor),
+        return {binding_->subscribe({{ service.name }}Contract::{{ field.name }}NotifyDescriptor),
             +[](std::span<const std::byte> bytes, {{ field.value|cpp_type }}& value) {
                 return ovf::com::decode(bytes, value);
             }};
@@ -200,6 +226,10 @@ public:
     virtual auto get{{ field.name }}()
         -> ovf::com::MethodResult<{{ field.value|cpp_type }}, std::monostate> = 0;
 {% endfor %}
+{% for field in service.fields|sort(attribute="tag") if field.writable %}
+    virtual auto set{{ field.name }}({{ field.value|cpp_type }} const& value)
+        -> std::optional<ovf::com::CommunicationError> = 0;
+{% endfor %}
 };
 
 class {{ service.name }}Offer final {
@@ -215,7 +245,7 @@ public:
         valid_ = valid_ && binding_->add_event({{ service.name }}Contract::{{ event.name }}Descriptor);
 {% endfor %}
 {% for field in service.fields|sort(attribute="tag") if field.notifiable %}
-        valid_ = valid_ && binding_->add_event({{ service.name }}Contract::{{ field.name }}Descriptor);
+        valid_ = valid_ && binding_->add_event({{ service.name }}Contract::{{ field.name }}NotifyDescriptor);
 {% endfor %}
 {% for method in service.methods|sort(attribute="tag") %}
         valid_ = valid_ && binding_->add_method({{ service.name }}Contract::{{ method.name }}Descriptor,
@@ -237,20 +267,31 @@ public:
                     return ovf::com::RawServerResult{};
                 }
 {% endif %}
-                return ovf::com::RawServerResult{std::get<ovf::com::CommunicationError>(result),
-                                                true, false, {}};
+                return ovf::com::make_raw_error(std::get<ovf::com::CommunicationError>(result));
             });
 {% endfor %}
 {% for field in service.fields|sort(attribute="tag") if field.readable %}
-        valid_ = valid_ && binding_->add_method({{ service.name }}Contract::{{ field.name }}Descriptor,
+        valid_ = valid_ && binding_->add_method({{ service.name }}Contract::{{ field.name }}GetDescriptor,
             [this](std::span<const std::byte> bytes, std::chrono::steady_clock::time_point) {
                 if (!bytes.empty()) return ovf::com::RawServerResult{};
                 auto result = implementation_->get{{ field.name }}();
                 if (result.index() == 0)
                     return ovf::com::make_raw_result(std::move(std::get<0>(result)));
                 if (result.index() == 1) return ovf::com::RawServerResult{};
-                return ovf::com::RawServerResult{std::get<ovf::com::CommunicationError>(result),
-                                                true, false, {}};
+                return ovf::com::make_raw_error(std::get<ovf::com::CommunicationError>(result));
+            });
+{% endfor %}
+{% for field in service.fields|sort(attribute="tag") if field.writable %}
+        valid_ = valid_ && binding_->add_method({{ service.name }}Contract::{{ field.name }}SetDescriptor,
+            [this](std::span<const std::byte> bytes, std::chrono::steady_clock::time_point) {
+                {{ field.value|cpp_type }} value{};
+                if (!ovf::com::decode(bytes, value)) return ovf::com::RawServerResult{};
+                auto error = implementation_->set{{ field.name }}(value);
+                if (error)
+                    return ovf::com::make_raw_error(*error);
+                ovf::com::RawServerResult result{};
+                result.has_error = false;
+                return result;
             });
 {% endfor %}
         if (!valid_ && binding_) binding_->close();
@@ -268,7 +309,7 @@ public:
 {% for field in service.fields|sort(attribute="tag") if field.notifiable %}
     auto publish{{ field.name }}({{ field.value|cpp_type }} const& value)
         -> std::optional<ovf::com::CommunicationError> {
-        return publish({{ service.name }}Contract::{{ field.name }}Descriptor, value);
+        return publish({{ service.name }}Contract::{{ field.name }}NotifyDescriptor, value);
     }
 {% endfor %}
     void close() noexcept {

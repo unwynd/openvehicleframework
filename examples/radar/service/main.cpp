@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <iostream>
+#include <mutex>
 #include <thread>
 
 namespace {
@@ -28,15 +29,39 @@ public:
   }
 
   auto getVehicleStateField() -> ovf::com::MethodResult<VehicleState, std::monostate> override {
+    std::lock_guard lock(mutex_);
     return state_;
   }
 
-  auto set_speed(float speed) -> void { state_.speedMetersPerSecond = speed; }
+  auto setVehicleStateField(VehicleState const& value)
+      -> std::optional<ovf::com::CommunicationError> override {
+    std::lock_guard lock(mutex_);
+    state_ = value;
+    externally_set_ = true;
+    return std::nullopt;
+  }
 
-  [[nodiscard]] auto state() const -> VehicleState const& { return state_; }
+  auto Delay(DelayInput const& request)
+      -> ovf::com::MethodResult<DelayOutput, std::monostate> override {
+    std::this_thread::sleep_for(std::chrono::milliseconds(request.milliseconds));
+    return DelayOutput{request.milliseconds};
+  }
+
+  auto set_speed(float speed) -> void {
+    std::lock_guard lock(mutex_);
+    if (!externally_set_)
+      state_.speedMetersPerSecond = speed;
+  }
+
+  [[nodiscard]] auto state() const -> VehicleState {
+    std::lock_guard lock(mutex_);
+    return state_;
+  }
 
 private:
+  mutable std::mutex mutex_;
   VehicleState state_{13.5F};
+  bool externally_set_{};
 };
 } // namespace
 

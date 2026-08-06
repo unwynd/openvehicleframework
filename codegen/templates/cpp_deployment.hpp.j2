@@ -31,7 +31,7 @@ inline auto Route() -> ovf::com::RouteBinding {
         {{ deployment.history_depth }},
         {
 {% for element in deployment.elements %}
-            {ovf::com::Uuid{{ "{" }}{{ "{" }}{{ element.id }}{{ "}" }}{{ "}" }}, "{{ element.event_mapping }}", "{{ element.method_mapping }}"},
+            {ovf::com::Uuid{{ "{" }}{{ "{" }}{{ element.id }}{{ "}" }}{{ "}" }}, "{{ element.event_mapping }}", "{{ element.method_mapping }}", "{{ element.field_get_mapping }}", "{{ element.field_set_mapping }}"},
 {% endfor %}
         },
         "{{ deployment.provider }}",

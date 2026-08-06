@@ -127,7 +127,7 @@ test_suite(
         ":rust_provider_interop_test",
         ":vsomeip_mapping_test",
         "//bazel/tests:all_tests",
-        "//tests/integration/iceoryx2:radar_two_process_test",
+        "//tests/integration:generated_contract_matrix",
         "//tests/integration/pipeline:execution_pipeline_test",
         "//tests/integration/pipeline:pipeline_test",
     ],
