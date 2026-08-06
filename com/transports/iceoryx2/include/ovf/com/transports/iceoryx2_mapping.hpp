@@ -21,6 +21,8 @@ struct Mapping final {
   std::size_t subscriber_buffer{};
   std::size_t max_publishers{};
   std::size_t max_subscribers{};
+  std::size_t max_loaned_samples{};
+  std::size_t max_borrowed_samples{};
   bool safe_overflow{};
   std::string request_type;
   std::string response_type;
@@ -30,6 +32,9 @@ struct Mapping final {
   std::size_t response_buffer{};
   std::size_t max_clients{};
   std::size_t max_servers{};
+  std::size_t max_loaned_requests{};
+  std::size_t max_borrowed_responses{};
+  std::size_t max_loaned_responses{};
 };
 
 // Canonical deployment form:

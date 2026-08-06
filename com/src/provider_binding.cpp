@@ -598,6 +598,42 @@ auto ProviderServerBinding::publish(ElementDescriptor const& element,
                                      : std::optional<CommunicationError>{MapStatus(status)};
 }
 
+auto ProviderServerBinding::publish_loaned(
+    ElementDescriptor const& element, std::size_t size,
+    std::function<bool(std::span<std::byte>)> encode) -> std::optional<CommunicationError> {
+  if (!impl_)
+    return CommunicationError::shutting_down;
+  ovf_com_handle_v1 endpoint{};
+  {
+    std::lock_guard lock(impl_->mutex);
+    auto found = impl_->events.find(element.id.bytes);
+    if (impl_->closed || found == impl_->events.end())
+      return CommunicationError::unavailable;
+    endpoint = found->second;
+  }
+  ovf_com_loan_v1 loan{sizeof(loan), OVF_COM_INVALID_HANDLE_V1, {nullptr, 0}};
+  auto status = impl_->provider->loan_acquire(impl_->provider, endpoint, size, &loan);
+  if (status == OVF_COM_STATUS_UNSUPPORTED) {
+    std::vector<std::byte> payload(size);
+    if (!encode(payload))
+      return CommunicationError::provider_failure;
+    return publish(element, payload);
+  }
+  if (status != OVF_COM_STATUS_OK)
+    return MapStatus(status);
+  auto destination = std::span(reinterpret_cast<std::byte*>(loan.bytes.data), loan.bytes.size);
+  if (!encode(destination)) {
+    (void)impl_->provider->loan_release(impl_->provider, loan.handle);
+    return CommunicationError::provider_failure;
+  }
+  status = impl_->provider->loan_publish(impl_->provider, endpoint, loan.handle, size);
+  if (status != OVF_COM_STATUS_OK) {
+    (void)impl_->provider->loan_release(impl_->provider, loan.handle);
+    return MapStatus(status);
+  }
+  return {};
+}
+
 auto ProviderServerBinding::close() noexcept -> void {
   if (impl_)
     impl_->close();

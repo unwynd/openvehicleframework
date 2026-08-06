@@ -5,9 +5,14 @@
 
 #include <iox2/iceoryx2.h>
 
+#include <fcntl.h>
+#include <poll.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cerrno>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -32,11 +37,24 @@ struct Endpoint final {
   iox2_port_factory_request_response_h request_response{};
   iox2_client_h client{};
   iox2_server_h server{};
+  iox2_service_name_h signal_name{};
+  iox2_port_factory_event_h signal_service{};
+  iox2_notifier_h notifier{};
+  iox2_listener_h listener{};
   ovf_com_request_callback_v1 request_callback{};
   void* request_user{};
   std::string announcement;
+  std::atomic_bool degraded{};
 
   ~Endpoint() {
+    if (listener)
+      iox2_listener_drop(listener);
+    if (notifier)
+      iox2_notifier_drop(notifier);
+    if (signal_service)
+      iox2_port_factory_event_drop(signal_service);
+    if (signal_name)
+      iox2_service_name_drop(signal_name);
     if (server)
       iox2_server_drop(server);
     if (client)
@@ -55,14 +73,14 @@ struct Endpoint final {
 };
 struct Announcement final {
   iox2_service_name_h name{};
-  iox2_port_factory_pub_sub_h service{};
-  iox2_publisher_h publisher{};
+  iox2_port_factory_event_h service{};
+  iox2_notifier_h notifier{};
   std::size_t references{};
   ~Announcement() {
-    if (publisher)
-      iox2_publisher_drop(publisher);
+    if (notifier)
+      iox2_notifier_drop(notifier);
     if (service)
-      iox2_port_factory_pub_sub_drop(service);
+      iox2_port_factory_event_drop(service);
     if (name)
       iox2_service_name_drop(name);
   }
@@ -96,6 +114,17 @@ struct Watch final {
   void* user{};
   bool available{};
   std::atomic_bool active{true};
+  iox2_service_name_h name{};
+  iox2_port_factory_event_h service{};
+  iox2_listener_h listener{};
+  ~Watch() {
+    if (listener)
+      iox2_listener_drop(listener);
+    if (service)
+      iox2_port_factory_event_drop(service);
+    if (name)
+      iox2_service_name_drop(name);
+  }
 };
 struct Pending final {
   ovf_com_handle_v1 endpoint{};
@@ -115,6 +144,8 @@ struct Transport final {
   std::atomic_bool started{};
   std::atomic_bool running{};
   std::thread receiver;
+  int control_read{-1};
+  int control_write{-1};
   std::mutex mutex;
   ovf_com_handle_v1 next_handle{1};
   std::uint64_t sequence{};
@@ -143,6 +174,68 @@ auto Parse(ovf_com_string_view_v1 text, native::Mapping& mapping) -> bool {
 }
 auto IoStatus(int value) -> ovf_com_status_v1 {
   return value == IOX2_OK ? OVF_COM_STATUS_OK : OVF_COM_STATUS_TRANSPORT_ERROR;
+}
+auto OnDegradation(iox2_degradation_cause_e, iox2_degradation_info_h_ref,
+                   iox2_callback_context context) -> iox2_degradation_action_e {
+  auto* endpoint = static_cast<Endpoint*>(context);
+  if (endpoint)
+    endpoint->degraded.store(true, std::memory_order_release);
+  return iox2_degradation_action_e_DEGRADE_AND_FAIL;
+}
+void Wake(Transport& self) noexcept {
+  if (self.control_write < 0)
+    return;
+  constexpr std::uint8_t value{1};
+  (void)::write(self.control_write, &value, sizeof(value));
+}
+void DrainControl(Transport& self) noexcept {
+  std::uint8_t bytes[64];
+  while (::read(self.control_read, bytes, sizeof(bytes)) > 0) {
+  }
+}
+void IgnoreEvent(iox2_event_id_t const*, std::uint64_t, iox2_callback_context) {}
+void DrainSignal(iox2_listener_h listener) noexcept {
+  if (!listener)
+    return;
+  std::uint64_t notifications{};
+  (void)iox2_listener_try_wait(&listener, &notifications, IgnoreEvent, nullptr);
+}
+auto CreateSignal(Transport& self, Endpoint& endpoint, bool notify, bool listen)
+    -> ovf_com_status_v1 {
+  auto name = endpoint.mapping.service + "/__ovf_signal_v1";
+  auto result = iox2_service_name_new(nullptr, name.data(), name.size(), &endpoint.signal_name);
+  if (result != IOX2_OK)
+    return IoStatus(result);
+  auto builder = iox2_node_service_builder(
+      &self.node, nullptr, iox2_cast_service_name_ptr(endpoint.signal_name));
+  auto event = iox2_service_builder_event(builder);
+  iox2_service_builder_event_set_max_notifiers(&event, 128);
+  iox2_service_builder_event_set_max_listeners(&event, 128);
+  iox2_service_builder_event_set_event_id_max_value(&event, 2);
+  result = iox2_service_builder_event_open_or_create(event, nullptr, &endpoint.signal_service);
+  if (result != IOX2_OK)
+    return IoStatus(result);
+  if (listen) {
+    auto listener_builder =
+        iox2_port_factory_event_listener_builder(&endpoint.signal_service, nullptr);
+    result = iox2_port_factory_listener_builder_create(listener_builder, nullptr,
+                                                        &endpoint.listener);
+    if (result != IOX2_OK)
+      return IoStatus(result);
+  }
+  if (notify) {
+    auto notifier_builder =
+        iox2_port_factory_event_notifier_builder(&endpoint.signal_service, nullptr);
+    result = iox2_port_factory_notifier_builder_create(notifier_builder, nullptr,
+                                                        &endpoint.notifier);
+  }
+  return IoStatus(result);
+}
+void Notify(Endpoint const& endpoint, std::size_t event_id) noexcept {
+  if (!endpoint.notifier)
+    return;
+  iox2_event_id_t id{event_id};
+  (void)iox2_notifier_notify_with_custom_event_id(&endpoint.notifier, &id, nullptr);
 }
 auto Dispatch(Transport& self, ovf_com_task_fn_v1 task, ovf_com_task_release_fn_v1 release,
               void* data) -> ovf_com_status_v1 {
@@ -222,17 +315,13 @@ constexpr std::uint32_t kResponseMagic{0x3153464fU};
 constexpr std::uint16_t kEnvelopeVersion{1};
 static_assert(sizeof(RequestHeader) == 24);
 static_assert(sizeof(ResponseHeader) == 16);
-auto ServiceAvailable(std::string_view prefix) -> bool {
-  auto name_value = std::string(prefix) + "/__ovf_provider";
-  iox2_service_name_h name{};
-  if (iox2_service_name_new(nullptr, name_value.data(), name_value.size(), &name) != IOX2_OK)
-    return false;
-  bool exists{};
-  auto result = iox2_service_does_exist(iox2_service_type_e_IPC, iox2_cast_service_name_ptr(name),
-                                        iox2_config_global_config(),
-                                        iox2_messaging_pattern_e_PUBLISH_SUBSCRIBE, &exists);
-  iox2_service_name_drop(name);
-  return result == IOX2_OK && exists;
+void ConfigureAnnouncement(iox2_service_builder_event_h& event) {
+  iox2_service_builder_event_set_max_notifiers(&event, 128);
+  iox2_service_builder_event_set_max_listeners(&event, 128);
+  iox2_service_builder_event_set_event_id_max_value(&event, 3);
+  iox2_service_builder_event_set_notifier_created_event(&event, 1);
+  iox2_service_builder_event_set_notifier_dropped_event(&event, 2);
+  iox2_service_builder_event_set_notifier_dead_event(&event, 3);
 }
 struct DiscoveryTask {
   std::shared_ptr<Watch> watch;
@@ -262,19 +351,13 @@ auto AcquireAnnouncement(Transport& self, std::string const& base) -> ovf_com_st
     return IoStatus(result);
   auto builder = iox2_node_service_builder(&self.node, nullptr,
                                            iox2_cast_service_name_ptr(announcement->name));
-  auto pubsub = iox2_service_builder_pub_sub(builder);
-  constexpr char type[] = "ovf.discovery.v1";
-  result = iox2_service_builder_pub_sub_set_payload_type_details(
-      &pubsub, iox2_type_variant_e_FIXED_SIZE, type, sizeof(type) - 1, 1, 1);
+  auto event = iox2_service_builder_event(builder);
+  ConfigureAnnouncement(event);
+  result = iox2_service_builder_event_open_or_create(event, nullptr, &announcement->service);
   if (result != IOX2_OK)
     return IoStatus(result);
-  iox2_service_builder_pub_sub_set_max_publishers(&pubsub, 128);
-  iox2_service_builder_pub_sub_set_max_subscribers(&pubsub, 1);
-  result = iox2_service_builder_pub_sub_open_or_create(pubsub, nullptr, &announcement->service);
-  if (result != IOX2_OK)
-    return IoStatus(result);
-  auto publisher = iox2_port_factory_pub_sub_publisher_builder(&announcement->service, nullptr);
-  result = iox2_port_factory_publisher_builder_create(publisher, nullptr, &announcement->publisher);
+  auto notifier = iox2_port_factory_event_notifier_builder(&announcement->service, nullptr);
+  result = iox2_port_factory_notifier_builder_create(notifier, nullptr, &announcement->notifier);
   if (result != IOX2_OK)
     return IoStatus(result);
   announcement->references = 1;
@@ -294,6 +377,8 @@ void ReceiveLoop(Transport* self) {
     std::vector<std::pair<ovf_com_handle_v1, std::shared_ptr<Endpoint>>> servers;
     std::vector<ovf_com_handle_v1> operations;
     std::vector<std::pair<ovf_com_handle_v1, std::shared_ptr<Watch>>> watches;
+    std::vector<std::shared_ptr<Endpoint>> signalled_endpoints;
+    std::vector<std::shared_ptr<Watch>> signalled_watches;
     {
       std::lock_guard lock(self->mutex);
       active.reserve(self->subscriptions.size());
@@ -305,11 +390,45 @@ void ReceiveLoop(Transport* self) {
       for (auto const& entry : self->endpoints)
         if (entry.second->server)
           servers.push_back(entry);
+      for (auto const& entry : self->endpoints)
+        if (entry.second->listener)
+          signalled_endpoints.push_back(entry.second);
       operations.reserve(self->pending.size());
       for (auto const& [operation, _] : self->pending)
         operations.push_back(operation);
       watches.assign(self->watches.begin(), self->watches.end());
+      for (auto const& [_, watch] : self->watches)
+        if (watch->listener)
+          signalled_watches.push_back(watch);
     }
+    std::vector<pollfd> descriptors;
+    descriptors.reserve(signalled_endpoints.size() + signalled_watches.size() + 1);
+    descriptors.push_back({self->control_read, POLLIN, 0});
+    for (auto const& endpoint : signalled_endpoints) {
+      auto descriptor = iox2_listener_get_file_descriptor(&endpoint->listener);
+      descriptors.push_back({iox2_file_descriptor_native_handle(descriptor), POLLIN, 0});
+    }
+    for (auto const& watch : signalled_watches) {
+      auto descriptor = iox2_listener_get_file_descriptor(&watch->listener);
+      descriptors.push_back({iox2_file_descriptor_native_handle(descriptor), POLLIN, 0});
+    }
+    auto poll_result = ::poll(descriptors.data(), descriptors.size(), 100);
+    if (poll_result < 0) {
+      if (errno == EINTR)
+        continue;
+      self->running.store(false, std::memory_order_release);
+      break;
+    }
+    if ((descriptors.front().revents & POLLIN) != 0)
+      DrainControl(*self);
+    for (std::size_t index = 0; index < signalled_endpoints.size(); ++index)
+      if ((descriptors[index + 1].revents & POLLIN) != 0)
+        DrainSignal(signalled_endpoints[index]->listener);
+    for (std::size_t index = 0; index < signalled_watches.size(); ++index)
+      if ((descriptors[signalled_endpoints.size() + index + 1].revents & POLLIN) != 0)
+        DrainSignal(signalled_watches[index]->listener);
+    if (!self->running.load(std::memory_order_acquire))
+      break;
     bool received_any{};
     for (auto const& [subscription, endpoint] : active) {
       iox2_sample_h native_sample{};
@@ -442,7 +561,9 @@ void ReceiveLoop(Transport* self) {
       }
     }
     for (auto const& [handle, watch] : watches) {
-      auto available = ServiceAvailable(watch->mapping);
+      auto available = watch->service &&
+                       iox2_port_factory_event_dynamic_config_number_of_notifiers(
+                           &watch->service) > 0;
       if (available == watch->available)
         continue;
       {
@@ -462,8 +583,7 @@ void ReceiveLoop(Transport* self) {
       if (task)
         (void)Dispatch(*self, RunDiscovery, DeleteDiscovery, task);
     }
-    if (!received_any)
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    (void)received_any;
   }
 }
 
@@ -473,9 +593,23 @@ auto Start(ovf_com_transport_v1* api) -> ovf_com_status_v1 {
   if (!self.started.compare_exchange_strong(expected, true))
     return OVF_COM_STATUS_INVALID_STATE;
   self.running.store(true, std::memory_order_release);
+  int descriptors[2]{};
+  if (::pipe(descriptors) != 0) {
+    self.running = false;
+    self.started = false;
+    return OVF_COM_STATUS_TRANSPORT_ERROR;
+  }
+  self.control_read = descriptors[0];
+  self.control_write = descriptors[1];
+  (void)::fcntl(self.control_read, F_SETFL, ::fcntl(self.control_read, F_GETFL) | O_NONBLOCK);
+  (void)::fcntl(self.control_write, F_SETFL, ::fcntl(self.control_write, F_GETFL) | O_NONBLOCK);
   auto builder = iox2_node_builder_new(nullptr);
   auto result = iox2_node_builder_create(builder, nullptr, iox2_service_type_e_IPC, &self.node);
   if (result != IOX2_OK) {
+    ::close(self.control_read);
+    ::close(self.control_write);
+    self.control_read = -1;
+    self.control_write = -1;
     self.running = false;
     self.started = false;
     return IoStatus(result);
@@ -496,6 +630,7 @@ auto Stop(ovf_com_transport_v1* api) -> ovf_com_status_v1 {
   if (!self.started.exchange(false))
     return OVF_COM_STATUS_OK;
   self.running.store(false, std::memory_order_release);
+  Wake(self);
   if (self.receiver.joinable())
     self.receiver.join();
   std::vector<std::pair<ovf_com_handle_v1, Pending>> pending;
@@ -526,6 +661,12 @@ auto Stop(ovf_com_transport_v1* api) -> ovf_com_status_v1 {
       self.node = nullptr;
     }
   }
+  if (self.control_read >= 0)
+    ::close(self.control_read);
+  if (self.control_write >= 0)
+    ::close(self.control_write);
+  self.control_read = -1;
+  self.control_write = -1;
   for (auto& [operation, value] : pending)
     Complete(self, value, operation, OVF_COM_STATUS_SHUTTING_DOWN);
   return OVF_COM_STATUS_OK;
@@ -590,6 +731,8 @@ auto EndpointCreate(ovf_com_transport_v1* api, ovf_com_endpoint_descriptor_v1 co
     iox2_service_builder_pub_sub_set_max_subscribers(&pubsub, mapping.max_subscribers);
     iox2_service_builder_pub_sub_set_history_size(&pubsub, mapping.history_depth);
     iox2_service_builder_pub_sub_set_subscriber_max_buffer_size(&pubsub, mapping.subscriber_buffer);
+    iox2_service_builder_pub_sub_set_subscriber_max_borrowed_samples(
+        &pubsub, mapping.max_borrowed_samples);
     iox2_service_builder_pub_sub_set_enable_safe_overflow(&pubsub, mapping.safe_overflow);
     result = iox2_service_builder_pub_sub_open_or_create(pubsub, nullptr, &endpoint->service);
     if (result != IOX2_OK)
@@ -597,9 +740,17 @@ auto EndpointCreate(ovf_com_transport_v1* api, ovf_com_endpoint_descriptor_v1 co
     if (descriptor->kind == OVF_COM_ENDPOINT_EVENT_PUBLISHER) {
       auto builder = iox2_port_factory_pub_sub_publisher_builder(&endpoint->service, nullptr);
       iox2_port_factory_publisher_builder_set_initial_max_slice_len(&builder, mapping.payload_size);
+      iox2_port_factory_publisher_builder_set_max_loaned_samples(&builder,
+                                                                 mapping.max_loaned_samples);
+      iox2_port_factory_publisher_builder_set_allocation_strategy(
+          &builder, iox2_allocation_strategy_e_STATIC);
+      iox2_port_factory_publisher_builder_set_degradation_handler(&builder, OnDegradation,
+                                                                   endpoint.get());
       result = iox2_port_factory_publisher_builder_create(builder, nullptr, &endpoint->publisher);
     } else {
       auto builder = iox2_port_factory_pub_sub_subscriber_builder(&endpoint->service, nullptr);
+      iox2_port_factory_subscriber_builder_set_degradation_handler(&builder, OnDegradation,
+                                                                    endpoint.get());
       result = iox2_port_factory_subscriber_builder_create(builder, nullptr, &endpoint->subscriber);
     }
   } else {
@@ -620,6 +771,10 @@ auto EndpointCreate(ovf_com_transport_v1* api, ovf_com_endpoint_descriptor_v1 co
                                                                    mapping.response_buffer);
     iox2_service_builder_request_response_max_clients(&request_response, mapping.max_clients);
     iox2_service_builder_request_response_max_servers(&request_response, mapping.max_servers);
+    iox2_service_builder_request_response_max_loaned_requests(
+        &request_response, mapping.max_loaned_requests);
+    iox2_service_builder_request_response_max_borrowed_responses_per_pending_response(
+        &request_response, mapping.max_borrowed_responses);
     iox2_service_builder_request_response_enable_safe_overflow_for_requests(&request_response,
                                                                             mapping.safe_overflow);
     iox2_service_builder_request_response_enable_safe_overflow_for_responses(&request_response,
@@ -633,17 +788,41 @@ auto EndpointCreate(ovf_com_transport_v1* api, ovf_com_endpoint_descriptor_v1 co
           iox2_port_factory_request_response_client_builder(&endpoint->request_response, nullptr);
       iox2_port_factory_client_builder_set_initial_max_slice_len(
           &builder, mapping.request_payload_size + sizeof(RequestHeader));
+      iox2_port_factory_client_builder_set_allocation_strategy(
+          &builder, iox2_allocation_strategy_e_STATIC);
+      iox2_port_factory_client_builder_set_request_degradation_handler(&builder, OnDegradation,
+                                                                        endpoint.get());
+      iox2_port_factory_client_builder_set_response_degradation_handler(&builder, OnDegradation,
+                                                                         endpoint.get());
       result = iox2_port_factory_client_builder_create(builder, nullptr, &endpoint->client);
     } else {
       auto builder =
           iox2_port_factory_request_response_server_builder(&endpoint->request_response, nullptr);
       iox2_port_factory_server_builder_set_initial_max_slice_len(
           &builder, mapping.response_payload_size + sizeof(ResponseHeader));
+      iox2_port_factory_server_builder_set_max_loaned_responses_per_request(
+          &builder, mapping.max_loaned_responses);
+      iox2_port_factory_server_builder_set_allocation_strategy(
+          &builder, iox2_allocation_strategy_e_STATIC);
+      iox2_port_factory_server_builder_set_request_degradation_handler(&builder, OnDegradation,
+                                                                        endpoint.get());
+      iox2_port_factory_server_builder_set_response_degradation_handler(&builder, OnDegradation,
+                                                                         endpoint.get());
       result = iox2_port_factory_server_builder_create(builder, nullptr, &endpoint->server);
     }
   }
   if (result != IOX2_OK)
     return IoStatus(result);
+  auto signal_status = CreateSignal(
+      self, *endpoint,
+      descriptor->kind == OVF_COM_ENDPOINT_EVENT_PUBLISHER ||
+          descriptor->kind == OVF_COM_ENDPOINT_METHOD_CLIENT ||
+          descriptor->kind == OVF_COM_ENDPOINT_METHOD_SERVER,
+      descriptor->kind == OVF_COM_ENDPOINT_EVENT_SUBSCRIBER ||
+          descriptor->kind == OVF_COM_ENDPOINT_METHOD_CLIENT ||
+          descriptor->kind == OVF_COM_ENDPOINT_METHOD_SERVER);
+  if (signal_status != OVF_COM_STATUS_OK)
+    return signal_status;
   if (descriptor->kind == OVF_COM_ENDPOINT_EVENT_PUBLISHER ||
       descriptor->kind == OVF_COM_ENDPOINT_METHOD_SERVER) {
     endpoint->announcement = AnnouncementBase(mapping.service);
@@ -660,6 +839,7 @@ auto EndpointCreate(ovf_com_transport_v1* api, ovf_com_endpoint_descriptor_v1 co
   auto handle = self.next_handle++;
   self.endpoints.emplace(handle, std::move(endpoint));
   *out = handle;
+  Wake(self);
   return OVF_COM_STATUS_OK;
 }
 auto EndpointDestroy(ovf_com_transport_v1* api, ovf_com_handle_v1 handle) -> ovf_com_status_v1 {
@@ -684,6 +864,7 @@ auto EndpointDestroy(ovf_com_transport_v1* api, ovf_com_handle_v1 handle) -> ovf
   self.endpoints.erase(found);
   if (!announcement.empty())
     ReleaseAnnouncement(self, announcement);
+  Wake(self);
   return OVF_COM_STATUS_OK;
 }
 auto Subscribe(ovf_com_transport_v1* api, ovf_com_handle_v1 endpoint_handle,
@@ -754,6 +935,7 @@ auto LoanPublish(ovf_com_transport_v1* api, ovf_com_handle_v1 endpoint_handle,
                  ovf_com_handle_v1 loan_handle, std::size_t used) -> ovf_com_status_v1 {
   auto& self = Self(api);
   iox2_sample_mut_h sample{};
+  std::shared_ptr<Endpoint> endpoint;
   {
     std::lock_guard lock(self.mutex);
     auto found = self.loans.find(loan_handle);
@@ -761,13 +943,17 @@ auto LoanPublish(ovf_com_transport_v1* api, ovf_com_handle_v1 endpoint_handle,
       return OVF_COM_STATUS_NOT_FOUND;
     if (found->second.endpoint != endpoint_handle)
       return OVF_COM_STATUS_INVALID_ARGUMENT;
-    auto endpoint = self.endpoints.find(endpoint_handle);
-    if (endpoint == self.endpoints.end() || used != found->second.size)
+    auto endpoint_found = self.endpoints.find(endpoint_handle);
+    if (endpoint_found == self.endpoints.end() || used != found->second.size)
       return OVF_COM_STATUS_INVALID_ARGUMENT;
+    endpoint = endpoint_found->second;
     sample = found->second.sample;
     self.loans.erase(found);
   }
-  return IoStatus(iox2_sample_mut_send(sample, nullptr));
+  auto status = IoStatus(iox2_sample_mut_send(sample, nullptr));
+  if (status == OVF_COM_STATUS_OK)
+    Notify(*endpoint, 1);
+  return status;
 }
 auto LoanRelease(ovf_com_transport_v1* api, ovf_com_handle_v1 handle) -> ovf_com_status_v1 {
   auto& self = Self(api);
@@ -843,21 +1029,28 @@ auto Request(ovf_com_transport_v1* api, ovf_com_handle_v1 endpoint_handle,
     return OVF_COM_STATUS_INVALID_ARGUMENT;
   if (deadline && self.host->monotonic_time_ns(self.host->user_data) >= deadline)
     return OVF_COM_STATUS_DEADLINE_EXCEEDED;
-  std::vector<std::uint8_t> wire(sizeof(RequestHeader) + payload.size);
+  auto wire_size = sizeof(RequestHeader) + payload.size;
   RequestHeader header{
       kRequestMagic, kEnvelopeVersion, 0, deadline, static_cast<std::uint32_t>(payload.size), 0};
-  std::memcpy(wire.data(), &header, sizeof(header));
-  std::memcpy(wire.data() + sizeof(header), payload.data, payload.size);
   std::lock_guard lock(self.mutex);
   if (!self.running)
     return OVF_COM_STATUS_SHUTTING_DOWN;
   if (self.pending.size() >= self.max_operations)
     return OVF_COM_STATUS_RESOURCE_EXHAUSTED;
-  iox2_pending_response_h native_response{};
-  auto result = iox2_client_send_copy(&endpoint->client, wire.data(), 1, wire.size(), nullptr,
-                                      &native_response);
+  iox2_request_mut_h native_request{};
+  auto result = iox2_client_loan_slice_uninit(&endpoint->client, nullptr, &native_request, wire_size);
   if (result != IOX2_OK)
+    return OVF_COM_STATUS_RESOURCE_EXHAUSTED;
+  void* wire{};
+  iox2_request_mut_payload_mut(&native_request, &wire, nullptr);
+  std::memcpy(wire, &header, sizeof(header));
+  std::memcpy(static_cast<std::uint8_t*>(wire) + sizeof(header), payload.data, payload.size);
+  iox2_pending_response_h native_response{};
+  result = iox2_request_mut_send(native_request, nullptr, &native_response);
+  if (result != IOX2_OK) {
     return IoStatus(result);
+  }
+  Notify(*endpoint, 1);
   auto operation = self.next_handle++;
   self.pending.emplace(operation,
                        Pending{endpoint_handle, native_response, deadline, callback, user});
@@ -914,13 +1107,24 @@ auto Respond(ovf_com_transport_v1* api, ovf_com_handle_v1 request_handle, ovf_co
       return OVF_COM_STATUS_INVALID_ARGUMENT;
     self.active_requests.erase(found);
   }
-  std::vector<std::uint8_t> wire(sizeof(ResponseHeader) + payload.size);
+  auto wire_size = sizeof(ResponseHeader) + payload.size;
   ResponseHeader header{kResponseMagic, kEnvelopeVersion, static_cast<std::uint16_t>(status),
                         static_cast<std::uint32_t>(payload.size), 0};
-  std::memcpy(wire.data(), &header, sizeof(header));
-  std::memcpy(wire.data() + sizeof(header), payload.data, payload.size);
-  auto result = iox2_active_request_send_copy(&active.request, wire.data(), 1, wire.size());
+  iox2_response_mut_h response{};
+  auto result =
+      iox2_active_request_loan_slice_uninit(&active.request, nullptr, &response, wire_size);
+  if (result != IOX2_OK) {
+    iox2_active_request_drop(active.request);
+    return OVF_COM_STATUS_RESOURCE_EXHAUSTED;
+  }
+  void* wire{};
+  iox2_response_mut_payload_mut(&response, &wire, nullptr);
+  std::memcpy(wire, &header, sizeof(header));
+  std::memcpy(static_cast<std::uint8_t*>(wire) + sizeof(header), payload.data, payload.size);
+  result = iox2_response_mut_send(response);
   iox2_active_request_drop(active.request);
+  if (result == IOX2_OK)
+    Notify(*endpoint, 2);
   return IoStatus(result);
 }
 auto WatchStart(ovf_com_transport_v1* api, ovf_com_discovery_filter_v1 const* filter,
@@ -944,8 +1148,25 @@ auto WatchStart(ovf_com_transport_v1* api, ovf_com_discovery_filter_v1 const* fi
   watch->mapping = std::move(mapping);
   watch->callback = callback;
   watch->user = user;
+  auto native_name = watch->mapping + "/__ovf_provider";
+  auto result =
+      iox2_service_name_new(nullptr, native_name.data(), native_name.size(), &watch->name);
+  if (result != IOX2_OK)
+    return IoStatus(result);
+  auto builder =
+      iox2_node_service_builder(&self.node, nullptr, iox2_cast_service_name_ptr(watch->name));
+  auto event = iox2_service_builder_event(builder);
+  ConfigureAnnouncement(event);
+  result = iox2_service_builder_event_open_or_create(event, nullptr, &watch->service);
+  if (result != IOX2_OK)
+    return IoStatus(result);
+  auto listener = iox2_port_factory_event_listener_builder(&watch->service, nullptr);
+  result = iox2_port_factory_listener_builder_create(listener, nullptr, &watch->listener);
+  if (result != IOX2_OK)
+    return IoStatus(result);
   self.watches.emplace(handle, std::move(watch));
   *out = handle;
+  Wake(self);
   return OVF_COM_STATUS_OK;
 }
 auto WatchStop(ovf_com_transport_v1* api, ovf_com_handle_v1 handle) -> ovf_com_status_v1 {
@@ -956,6 +1177,7 @@ auto WatchStop(ovf_com_transport_v1* api, ovf_com_handle_v1 handle) -> ovf_com_s
     return OVF_COM_STATUS_NOT_FOUND;
   found->second->active.store(false, std::memory_order_release);
   self.watches.erase(found);
+  Wake(self);
   return OVF_COM_STATUS_OK;
 }
 

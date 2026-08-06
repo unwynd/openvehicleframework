@@ -254,7 +254,7 @@ fn native_mapping(service: u64, instance: u64, entry: &JsonValue) -> String {
 
 fn iceoryx2_event_mapping(base: &str, entry: &JsonValue) -> String {
     format!(
-        "pattern=pubsub;service={base}/{};type={};payloadSize={};alignment={};history={};subscriberBuffer={};maxPublishers={};maxSubscribers={};safeOverflow={}",
+        "pattern=pubsub;service={base}/{};type={};payloadSize={};alignment={};history={};subscriberBuffer={};maxPublishers={};maxSubscribers={};maxLoanedSamples={};maxBorrowedSamples={};safeOverflow={}",
         entry["name"].as_str().unwrap_or_default(),
         entry["type"].as_str().unwrap_or_default(),
         entry["payloadSize"].as_u64().unwrap_or_default(),
@@ -263,13 +263,15 @@ fn iceoryx2_event_mapping(base: &str, entry: &JsonValue) -> String {
         entry["subscriberBuffer"].as_u64().unwrap_or_default(),
         entry["maxPublishers"].as_u64().unwrap_or_default(),
         entry["maxSubscribers"].as_u64().unwrap_or_default(),
+        entry["maxLoanedSamples"].as_u64().unwrap_or_default(),
+        entry["maxBorrowedSamples"].as_u64().unwrap_or_default(),
         entry["safeOverflow"].as_bool().unwrap_or_default(),
     )
 }
 
 fn iceoryx2_method_mapping(base: &str, entry: &JsonValue) -> String {
     format!(
-        "pattern=requestResponse;service={base}/{};requestType={};responseType={};requestPayloadSize={};responsePayloadSize={};alignment={};requestBuffer={};responseBuffer={};maxClients={};maxServers={};safeOverflow={}",
+        "pattern=requestResponse;service={base}/{};requestType={};responseType={};requestPayloadSize={};responsePayloadSize={};alignment={};requestBuffer={};responseBuffer={};maxClients={};maxServers={};maxLoanedRequests={};maxBorrowedResponses={};maxLoanedResponses={};safeOverflow={}",
         entry["name"].as_str().unwrap_or_default(),
         entry["requestType"].as_str().unwrap_or_default(),
         entry["responseType"].as_str().unwrap_or_default(),
@@ -280,6 +282,9 @@ fn iceoryx2_method_mapping(base: &str, entry: &JsonValue) -> String {
         entry["responseBuffer"].as_u64().unwrap_or_default(),
         entry["maxClients"].as_u64().unwrap_or_default(),
         entry["maxServers"].as_u64().unwrap_or_default(),
+        entry["maxLoanedRequests"].as_u64().unwrap_or_default(),
+        entry["maxBorrowedResponses"].as_u64().unwrap_or_default(),
+        entry["maxLoanedResponses"].as_u64().unwrap_or_default(),
         entry["safeOverflow"].as_bool().unwrap_or_default(),
     )
 }

@@ -105,6 +105,9 @@ public:
   auto add_event(ElementDescriptor const&) -> bool override;
   auto publish(ElementDescriptor const&, std::span<const std::byte>)
       -> std::optional<CommunicationError> override;
+  auto publish_loaned(ElementDescriptor const&, std::size_t,
+                      std::function<bool(std::span<std::byte>)>)
+      -> std::optional<CommunicationError> override;
   auto close() noexcept -> void override;
 
 private:

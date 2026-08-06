@@ -61,6 +61,8 @@ def _iceoryx2_event(element: dict) -> dict:
         "subscriberBuffer": 8,
         "maxPublishers": 2,
         "maxSubscribers": 8,
+        "maxLoanedSamples": 2,
+        "maxBorrowedSamples": 2,
         "safeOverflow": False,
     }
 
@@ -77,6 +79,9 @@ def _iceoryx2_method(name: str, request_type: str, response_type: str) -> dict:
         "responseBuffer": 8,
         "maxClients": 8,
         "maxServers": 1,
+        "maxLoanedRequests": 2,
+        "maxBorrowedResponses": 2,
+        "maxLoanedResponses": 1,
         "safeOverflow": False,
     }
 
@@ -402,10 +407,12 @@ def validate_iceoryx2_route(route: dict, service_model: dict, where: str) -> lis
         for element in service_model.get(kind, []): models[element["id"]] = kind
     native_names = set()
     event_required = {"name", "type", "payloadSize", "alignment", "history",
-                      "subscriberBuffer", "maxPublishers", "maxSubscribers", "safeOverflow"}
+                      "subscriberBuffer", "maxPublishers", "maxSubscribers", "maxLoanedSamples",
+                      "maxBorrowedSamples", "safeOverflow"}
     method_required = {"name", "requestType", "responseType", "requestPayloadSize",
                        "responsePayloadSize", "alignment", "requestBuffer", "responseBuffer",
-                       "maxClients", "maxServers", "safeOverflow"}
+                       "maxClients", "maxServers", "maxLoanedRequests", "maxBorrowedResponses",
+                       "maxLoanedResponses", "safeOverflow"}
     for element_id, mapping in mappings.get("elements", {}).items():
         kind = models.get(element_id)
         element_where = f"{where}.element[{element_id}]"
@@ -441,10 +448,12 @@ def validate_iceoryx2_route(route: dict, service_model: dict, where: str) -> lis
             for key in type_keys:
                 if not isinstance(entry.get(key), str) or not entry[key]:
                     errors.append(f"{entry_where}: {key} must be a nonempty string")
-            number_keys = (("payloadSize", "subscriberBuffer", "maxPublishers", "maxSubscribers")
+            number_keys = (("payloadSize", "subscriberBuffer", "maxPublishers", "maxSubscribers",
+                            "maxLoanedSamples", "maxBorrowedSamples")
                            if is_event else
                            ("requestPayloadSize", "responsePayloadSize", "requestBuffer",
-                            "responseBuffer", "maxClients", "maxServers"))
+                            "responseBuffer", "maxClients", "maxServers", "maxLoanedRequests",
+                            "maxBorrowedResponses", "maxLoanedResponses"))
             for key in (*number_keys, "alignment"):
                 value = entry.get(key)
                 if not isinstance(value, int) or isinstance(value, bool) or value < 1:

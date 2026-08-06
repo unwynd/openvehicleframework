@@ -20,12 +20,14 @@
 namespace {
 constexpr char kMapping[] = "pattern=pubsub;service=ovf/test/radar/objects;type=OvfRadarObjects;"
                             "payloadSize=64;alignment=8;history=1;subscriberBuffer=8;"
-                            "maxPublishers=2;maxSubscribers=8;safeOverflow=false";
+                            "maxPublishers=2;maxSubscribers=8;maxLoanedSamples=2;"
+                            "maxBorrowedSamples=2;safeOverflow=false";
 constexpr char kMethodMapping[] =
     "pattern=requestResponse;service=ovf/test/radar/calibrate;"
     "requestType=OvfCalibrateRequest;responseType=OvfCalibrateResponse;"
     "requestPayloadSize=64;responsePayloadSize=64;alignment=8;"
-    "requestBuffer=8;responseBuffer=8;maxClients=8;maxServers=1;safeOverflow=false";
+    "requestBuffer=8;responseBuffer=8;maxClients=8;maxServers=1;maxLoanedRequests=2;"
+    "maxBorrowedResponses=2;maxLoanedResponses=1;safeOverflow=false";
 constexpr char kServiceMapping[] = "ovf/test/radar";
 
 struct Context {

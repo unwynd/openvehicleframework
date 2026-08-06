@@ -79,6 +79,21 @@ auto ParseMapping(std::string_view text, Mapping& out, std::string& error) -> bo
         value.safe_overflow = false;
       else
         valid = false;
+    } else if (key == "maxLoanedSamples") {
+      bit = 1U << 18;
+      valid = Number(item_value, value.max_loaned_samples) && value.max_loaned_samples != 0;
+    } else if (key == "maxBorrowedSamples") {
+      bit = 1U << 19;
+      valid = Number(item_value, value.max_borrowed_samples) && value.max_borrowed_samples != 0;
+    } else if (key == "maxLoanedRequests") {
+      bit = 1U << 20;
+      valid = Number(item_value, value.max_loaned_requests) && value.max_loaned_requests != 0;
+    } else if (key == "maxBorrowedResponses") {
+      bit = 1U << 21;
+      valid = Number(item_value, value.max_borrowed_responses) && value.max_borrowed_responses != 0;
+    } else if (key == "maxLoanedResponses") {
+      bit = 1U << 22;
+      valid = Number(item_value, value.max_loaned_responses) && value.max_loaned_responses != 0;
     } else if (key == "requestType") {
       bit = 1U << 10;
       value.request_type = item_value;
@@ -121,10 +136,11 @@ auto ParseMapping(std::string_view text, Mapping& out, std::string& error) -> bo
   }
   constexpr std::uint32_t common = (1U << 0) | (1U << 1) | (1U << 4) | (1U << 9);
   constexpr std::uint32_t pubsub =
-      common | (1U << 2) | (1U << 3) | (1U << 5) | (1U << 6) | (1U << 7) | (1U << 8);
+      common | (1U << 2) | (1U << 3) | (1U << 5) | (1U << 6) | (1U << 7) | (1U << 8) |
+      (1U << 18) | (1U << 19);
   constexpr std::uint32_t request_response = common | (1U << 10) | (1U << 11) | (1U << 12) |
                                              (1U << 13) | (1U << 14) | (1U << 15) | (1U << 16) |
-                                             (1U << 17);
+                                             (1U << 17) | (1U << 20) | (1U << 21) | (1U << 22);
   auto expected = value.pattern == Mapping::Pattern::kPublishSubscribe ? pubsub : request_response;
   if (seen != expected) {
     error = "mapping is incomplete";
@@ -146,6 +162,9 @@ auto FormatMapping(Mapping const& value) -> std::string {
            ";responseBuffer=" + std::to_string(value.response_buffer) +
            ";maxClients=" + std::to_string(value.max_clients) +
            ";maxServers=" + std::to_string(value.max_servers) +
+           ";maxLoanedRequests=" + std::to_string(value.max_loaned_requests) +
+           ";maxBorrowedResponses=" + std::to_string(value.max_borrowed_responses) +
+           ";maxLoanedResponses=" + std::to_string(value.max_loaned_responses) +
            ";safeOverflow=" + (value.safe_overflow ? "true" : "false");
   }
   return "pattern=pubsub;service=" + value.service + ";type=" + value.type_name +
@@ -155,6 +174,8 @@ auto FormatMapping(Mapping const& value) -> std::string {
          ";subscriberBuffer=" + std::to_string(value.subscriber_buffer) +
          ";maxPublishers=" + std::to_string(value.max_publishers) +
          ";maxSubscribers=" + std::to_string(value.max_subscribers) +
+         ";maxLoanedSamples=" + std::to_string(value.max_loaned_samples) +
+         ";maxBorrowedSamples=" + std::to_string(value.max_borrowed_samples) +
          ";safeOverflow=" + (value.safe_overflow ? "true" : "false");
 }
 } // namespace ovf::com::transports::iceoryx2

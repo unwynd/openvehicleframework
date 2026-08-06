@@ -88,17 +88,53 @@ struct CallOptions {
 
 class Encoder {
 public:
+  struct CountOnly final {};
+  Encoder() = default;
+  explicit Encoder(CountOnly) noexcept : count_only_(true) {}
+  explicit Encoder(std::span<std::byte> destination) noexcept : destination_(destination) {}
   template <class UInt> auto unsigned_integer(UInt value) -> void {
     for (std::size_t index = 0; index < sizeof(UInt); ++index)
-      bytes_.push_back(static_cast<std::byte>((value >> (index * 8U)) & 0xffU));
+      append(static_cast<std::byte>((value >> (index * 8U)) & 0xffU));
   }
   auto raw(std::span<const std::byte> value) -> void {
-    bytes_.insert(bytes_.end(), value.begin(), value.end());
+    if (count_only_) {
+      size_ += value.size();
+      return;
+    }
+    if (destination_.empty()) {
+      bytes_.insert(bytes_.end(), value.begin(), value.end());
+      size_ += value.size();
+      return;
+    }
+    if (size_ > destination_.size() || value.size() > destination_.size() - size_) {
+      valid_ = false;
+      return;
+    }
+    std::memcpy(destination_.data() + size_, value.data(), value.size());
+    size_ += value.size();
   }
   auto take() && -> std::vector<std::byte> { return std::move(bytes_); }
+  [[nodiscard]] auto size() const noexcept -> std::size_t { return size_; }
+  [[nodiscard]] auto valid() const noexcept -> bool { return valid_; }
 
 private:
+  auto append(std::byte value) -> void {
+    if (count_only_) {
+      ++size_;
+    } else if (destination_.empty()) {
+      bytes_.push_back(value);
+      ++size_;
+    } else if (size_ < destination_.size()) {
+      destination_[size_++] = value;
+    } else {
+      valid_ = false;
+    }
+  }
   std::vector<std::byte> bytes_;
+  std::span<std::byte> destination_;
+  std::size_t size_{};
+  bool valid_{true};
+  bool count_only_{};
 };
 
 class Decoder {
@@ -244,6 +280,14 @@ template <class T> auto encode(T const& value) -> std::vector<std::byte> {
     return {};
   return std::move(encoder).take();
 }
+template <class T> auto encoded_size(T const& value) -> std::size_t {
+  Encoder encoder(Encoder::CountOnly{});
+  return Codec<T>::encode(encoder, value) && encoder.valid() ? encoder.size() : 0;
+}
+template <class T> auto encode_into(T const& value, std::span<std::byte> destination) -> bool {
+  Encoder encoder(destination);
+  return Codec<T>::encode(encoder, value) && encoder.valid() && encoder.size() == destination.size();
+}
 template <class T> auto decode(std::span<const std::byte> bytes, T& value) -> bool {
   Decoder decoder(bytes);
   return Codec<T>::decode(decoder, value) && decoder.empty();
@@ -292,6 +336,9 @@ public:
   virtual auto add_method(ElementDescriptor const&, MethodHandler) -> bool = 0;
   virtual auto add_event(ElementDescriptor const&) -> bool = 0;
   virtual auto publish(ElementDescriptor const&, std::span<const std::byte>)
+      -> std::optional<CommunicationError> = 0;
+  virtual auto publish_loaned(ElementDescriptor const&, std::size_t,
+                              std::function<bool(std::span<std::byte>)>)
       -> std::optional<CommunicationError> = 0;
   virtual auto close() noexcept -> void = 0;
 };

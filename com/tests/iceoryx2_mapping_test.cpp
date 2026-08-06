@@ -9,7 +9,8 @@ TEST(Iceoryx2MappingTest, ParsesFormatsAndRejectsInvalidMappings) {
   using namespace ovf::com::transports::iceoryx2;
   constexpr auto text = "pattern=pubsub;service=vehicle/radar/front/objects;type=RadarObjects;"
                         "payloadSize=64;alignment=8;history=1;subscriberBuffer=8;"
-                        "maxPublishers=2;maxSubscribers=8;safeOverflow=false";
+                        "maxPublishers=2;maxSubscribers=8;maxLoanedSamples=2;"
+                        "maxBorrowedSamples=2;safeOverflow=false";
   Mapping mapping{};
   std::string error;
   ASSERT_TRUE(ParseMapping(text, mapping, error));
@@ -30,7 +31,8 @@ TEST(Iceoryx2MappingTest, ParsesFormatsAndRejectsInvalidMappings) {
       "pattern=requestResponse;service=vehicle/radar/front/calibrate;"
       "requestType=CalibrateInput;responseType=CalibrateResult;"
       "requestPayloadSize=128;responsePayloadSize=256;alignment=8;"
-      "requestBuffer=16;responseBuffer=8;maxClients=4;maxServers=1;safeOverflow=false";
+      "requestBuffer=16;responseBuffer=8;maxClients=4;maxServers=1;maxLoanedRequests=2;"
+      "maxBorrowedResponses=2;maxLoanedResponses=1;safeOverflow=false";
   ASSERT_TRUE(ParseMapping(method, mapping, error));
   ASSERT_EQ(mapping.pattern, Mapping::Pattern::kRequestResponse);
   ASSERT_EQ(mapping.request_payload_size, 128);

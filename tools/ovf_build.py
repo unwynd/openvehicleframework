@@ -415,6 +415,8 @@ def _iceoryx_event(base: str, entry: dict) -> str:
             f"payloadSize={entry.get('payloadSize', 0)};alignment={entry.get('alignment', 0)};"
             f"history={entry.get('history', 0)};subscriberBuffer={entry.get('subscriberBuffer', 0)};"
             f"maxPublishers={entry.get('maxPublishers', 0)};maxSubscribers={entry.get('maxSubscribers', 0)};"
+            f"maxLoanedSamples={entry.get('maxLoanedSamples', 0)};"
+            f"maxBorrowedSamples={entry.get('maxBorrowedSamples', 0)};"
             f"safeOverflow={str(entry.get('safeOverflow', False)).lower()}")
 
 
@@ -425,6 +427,9 @@ def _iceoryx_method(base: str, entry: dict) -> str:
             f"responsePayloadSize={entry.get('responsePayloadSize', 0)};alignment={entry.get('alignment', 0)};"
             f"requestBuffer={entry.get('requestBuffer', 0)};responseBuffer={entry.get('responseBuffer', 0)};"
             f"maxClients={entry.get('maxClients', 0)};maxServers={entry.get('maxServers', 0)};"
+            f"maxLoanedRequests={entry.get('maxLoanedRequests', 0)};"
+            f"maxBorrowedResponses={entry.get('maxBorrowedResponses', 0)};"
+            f"maxLoanedResponses={entry.get('maxLoanedResponses', 0)};"
             f"safeOverflow={str(entry.get('safeOverflow', False)).lower()}")
 
 

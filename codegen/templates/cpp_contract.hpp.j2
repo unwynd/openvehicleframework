@@ -250,7 +250,10 @@ private:
     auto publish(ovf::com::ElementDescriptor const& element, Value const& value)
         -> std::optional<ovf::com::CommunicationError> {
         if (!valid_) return ovf::com::CommunicationError::unavailable;
-        return binding_->publish(element, ovf::com::encode(value));
+        auto size = ovf::com::encoded_size(value);
+        return binding_->publish_loaned(element, size, [&value](std::span<std::byte> destination) {
+            return ovf::com::encode_into(value, destination);
+        });
     }
     std::shared_ptr<ovf::com::ServerBinding> binding_;
     [[maybe_unused]] {{ service.name }}Skeleton* implementation_;
