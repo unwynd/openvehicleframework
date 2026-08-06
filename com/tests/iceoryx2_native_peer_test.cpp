@@ -35,7 +35,7 @@ struct Context {
   std::mutex mutex;
   std::condition_variable changed;
   std::array<std::uint8_t, 64> received{};
-  bool delivered{};
+  std::size_t delivery_count{};
   bool native_loan{};
   bool subscription_active{};
   bool discovered{};
@@ -74,7 +74,7 @@ void Sample(void* user, ovf_com_sample_v1 const* sample) {
     std::lock_guard lock(context.mutex);
     std::memcpy(context.received.data(), sample->payload.data, sample->payload.size);
     context.native_loan = sample->provider_loan != OVF_COM_INVALID_HANDLE_V1;
-    context.delivered = true;
+    ++context.delivery_count;
   }
   assert(context.transport->loan_release(context.transport, sample->provider_loan) ==
          OVF_COM_STATUS_OK);
@@ -179,13 +179,16 @@ auto PublishPattern() -> int {
   ovf_com_handle_v1 publisher{};
   ovf_com_loan_v1 loan{};
   loan.struct_size = sizeof(loan);
-  if (transport->endpoint_create(transport, &descriptor, &publisher) != OVF_COM_STATUS_OK ||
-      transport->loan_acquire(transport, publisher, 64, &loan) != OVF_COM_STATUS_OK)
+  if (transport->endpoint_create(transport, &descriptor, &publisher) != OVF_COM_STATUS_OK)
     return 5;
-  for (std::size_t i = 0; i < loan.bytes.size; ++i)
-    loan.bytes.data[i] = static_cast<std::uint8_t>(i ^ 0x5aU);
-  if (transport->loan_publish(transport, publisher, loan.handle, 64) != OVF_COM_STATUS_OK)
-    return 6;
+  for (std::size_t sample = 0; sample < 8; ++sample) {
+    if (transport->loan_acquire(transport, publisher, 64, &loan) != OVF_COM_STATUS_OK)
+      return 5;
+    for (std::size_t i = 0; i < loan.bytes.size; ++i)
+      loan.bytes.data[i] = static_cast<std::uint8_t>(i ^ 0x5aU);
+    if (transport->loan_publish(transport, publisher, loan.handle, 64) != OVF_COM_STATUS_OK)
+      return 6;
+  }
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   if (transport->endpoint_destroy(transport, publisher) != OVF_COM_STATUS_OK ||
       transport->stop(transport) != OVF_COM_STATUS_OK)
@@ -289,7 +292,7 @@ int main(int argc, char** argv) {
   {
     std::unique_lock lock(context.mutex);
     assert(context.changed.wait_for(lock, std::chrono::seconds(3),
-                                    [&context] { return context.delivered; }));
+                                    [&context] { return context.delivery_count == 8; }));
     assert(context.native_loan);
     for (std::size_t i = 0; i < context.received.size(); ++i)
       assert(context.received[i] == static_cast<std::uint8_t>(i ^ 0x5aU));

@@ -158,6 +158,16 @@ On Linux, run the generated service/client vSomeIP example as two processes:
 bazel test //tests/integration/vsomeip:radar_two_process_test
 ```
 
+Run the comparable iceoryx2 and vSomeIP communication latency and throughput
+baselines with:
+
+```sh
+bazel run --config=strict //benchmarks/com:run
+```
+
+The runner emits machine-readable JSON. See the
+[benchmark methodology](benchmarks/com/README.md) before interpreting results.
+
 See the [radar vSomeIP example](examples/radar/README.md) for the
 interactive service and client commands.
 

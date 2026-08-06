@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_python//python:defs.bzl", "py_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_binary(
+    name = "iceoryx2_benchmark",
+    srcs = ["transport_benchmark.cpp"],
+    local_defines = ["OVF_BENCHMARK_ICEORYX2"],
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = ["//com/transports/iceoryx2:transport"],
+)
+
+cc_binary(
+    name = "vsomeip_benchmark",
+    srcs = ["transport_benchmark.cpp"],
+    local_defines = ["OVF_BENCHMARK_VSOMEIP"],
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = ["//com:vsomeip_transport"],
+)
+
+py_binary(
+    name = "run",
+    srcs = ["run_benchmarks.py"],
+    data = [
+        ":iceoryx2_benchmark",
+        ":vsomeip_benchmark",
+        "//com:vsomeip_platform_bundle",
+    ],
+    main = "run_benchmarks.py",
+    target_compatible_with = ["@platforms//os:linux"],
+)

@@ -536,41 +536,46 @@ void ReceiveLoop(Transport* self) {
       break;
     bool received_any{};
     for (auto const& [subscription, endpoint] : active) {
-      iox2_sample_h native_sample{};
-      if (iox2_subscriber_receive(&endpoint->subscriber, nullptr, &native_sample) != IOX2_OK ||
-          native_sample == nullptr)
-        continue;
-      received_any = true;
-      void const* payload{};
-      iox2_sample_payload(&native_sample, &payload, nullptr);
-      ovf_com_handle_v1 loan_handle{};
-      std::uint64_t sequence{};
-      auto received_loan = std::make_shared<ReceivedLoan>();
-      received_loan->sample.store(native_sample);
-      {
-        std::lock_guard lock(self->mutex);
-        loan_handle = self->next_handle++;
-        sequence = ++self->sequence;
-      }
-      {
-        std::lock_guard lock(self->received_registry->mutex);
-        self->received_registry->loans.emplace(loan_handle, received_loan);
-      }
-      auto* task =
-          new (std::nothrow) SampleTask{subscription,
-                                        self->received_registry,
-                                        received_loan,
-                                        {sizeof(ovf_com_sample_v1),
-                                         {static_cast<std::uint8_t const*>(payload),
-                                          iox2_sample_payload_number_of_bytes(&native_sample)},
-                                         loan_handle,
-                                         sequence,
-                                         endpoint->descriptor.route_epoch}};
-      if (task)
-        (void)Dispatch(*self, RunSample, ReleaseSample, task);
-      else {
-        std::lock_guard lock(self->received_registry->mutex);
-        self->received_registry->loans.erase(loan_handle);
+      // One listener notification can represent multiple queued samples. Drain
+      // the queue before polling again so coalesced notifications cannot strand
+      // a burst behind the next poll timeout.
+      for (;;) {
+        iox2_sample_h native_sample{};
+        if (iox2_subscriber_receive(&endpoint->subscriber, nullptr, &native_sample) != IOX2_OK ||
+            native_sample == nullptr)
+          break;
+        received_any = true;
+        void const* payload{};
+        iox2_sample_payload(&native_sample, &payload, nullptr);
+        ovf_com_handle_v1 loan_handle{};
+        std::uint64_t sequence{};
+        auto received_loan = std::make_shared<ReceivedLoan>();
+        received_loan->sample.store(native_sample);
+        {
+          std::lock_guard lock(self->mutex);
+          loan_handle = self->next_handle++;
+          sequence = ++self->sequence;
+        }
+        {
+          std::lock_guard lock(self->received_registry->mutex);
+          self->received_registry->loans.emplace(loan_handle, received_loan);
+        }
+        auto* task =
+            new (std::nothrow) SampleTask{subscription,
+                                          self->received_registry,
+                                          received_loan,
+                                          {sizeof(ovf_com_sample_v1),
+                                           {static_cast<std::uint8_t const*>(payload),
+                                            iox2_sample_payload_number_of_bytes(&native_sample)},
+                                           loan_handle,
+                                           sequence,
+                                           endpoint->descriptor.route_epoch}};
+        if (task)
+          (void)Dispatch(*self, RunSample, ReleaseSample, task);
+        else {
+          std::lock_guard lock(self->received_registry->mutex);
+          self->received_registry->loans.erase(loan_handle);
+        }
       }
     }
     for (auto const& [endpoint_handle, endpoint] : servers) {
