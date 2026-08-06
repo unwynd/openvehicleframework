@@ -12,6 +12,7 @@
 #include <mutex>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace {
 constexpr vsomeip::service_t kService = 0x1234;
@@ -19,6 +20,10 @@ constexpr vsomeip::instance_t kInstance = 1;
 constexpr vsomeip::method_t kMethod = 1;
 constexpr vsomeip::event_t kEvent = 0x8001;
 constexpr vsomeip::eventgroup_t kEventGroup = 1;
+constexpr vsomeip::service_t kPeerService = 0x1235;
+constexpr vsomeip::instance_t kPeerInstance = 2;
+constexpr vsomeip::method_t kSilentMethod = 2;
+constexpr vsomeip::method_t kErrorMethod = 3;
 
 auto Dispatch(void*, ovf_com_task_fn_v1 task, ovf_com_task_release_fn_v1 release, void* user)
     -> ovf_com_status_v1 {
@@ -56,9 +61,10 @@ struct Server {
   int requests{};
 };
 void OnRequest(void* user, ovf_com_handle_v1 request, ovf_com_bytes_view_v1 payload,
-               std::uint64_t) {
+               std::uint64_t deadline) {
   auto& server = *static_cast<Server*>(user);
   assert(payload.size == 2 && payload.data[0] == 1 && payload.data[1] == 2);
+  assert(deadline == 0);
   ++server.requests;
   std::uint8_t response[]{3, 4, 5};
   assert(server.provider->respond(server.provider, request, OVF_COM_STATUS_OK,
@@ -81,6 +87,7 @@ struct Peer {
                                vsomeip::event_type_e::ET_EVENT,
                                vsomeip::reliability_type_e::RT_RELIABLE);
     application->subscribe(kService, kInstance, kEventGroup, 1);
+    application->offer_service(kPeerService, kPeerInstance, 1, 0);
   }
   void OnAvailability(vsomeip::service_t, vsomeip::instance_t, bool value) {
     if (!value)
@@ -100,6 +107,16 @@ struct Peer {
     condition.notify_all();
   }
   void OnMessage(std::shared_ptr<vsomeip::message> const& message) {
+    if (message->get_service() == kPeerService && message->get_method() == kErrorMethod) {
+      auto response = vsomeip::runtime::get()->create_response(message);
+      std::uint8_t error[]{0x42};
+      response->set_payload(vsomeip::runtime::get()->create_payload(error, sizeof(error)));
+      response->set_return_code(vsomeip::return_code_e::E_NOT_OK);
+      application->send(response);
+      return;
+    }
+    if (message->get_service() == kPeerService && message->get_method() == kSilentMethod)
+      return;
     auto payload = message->get_payload();
     std::lock_guard lock(mutex);
     if (message->get_message_type() == vsomeip::message_type_e::MT_RESPONSE) {
@@ -112,6 +129,38 @@ struct Peer {
     condition.notify_all();
   }
 };
+struct CompletionState {
+  std::mutex mutex;
+  std::condition_variable condition;
+  ovf_com_status_v1 status{OVF_COM_STATUS_TRANSPORT_ERROR};
+  std::vector<std::uint8_t> payload;
+  bool complete{};
+};
+void OnCompletion(void* user, ovf_com_handle_v1, ovf_com_status_v1 status,
+                  ovf_com_bytes_view_v1 payload) {
+  auto& completion = *static_cast<CompletionState*>(user);
+  {
+    std::lock_guard lock(completion.mutex);
+    completion.status = status;
+    completion.payload.clear();
+    if (payload.size)
+      completion.payload.assign(payload.data, payload.data + payload.size);
+    completion.complete = true;
+  }
+  completion.condition.notify_all();
+}
+void Reset(CompletionState& completion) {
+  std::lock_guard lock(completion.mutex);
+  completion.status = OVF_COM_STATUS_TRANSPORT_ERROR;
+  completion.payload.clear();
+  completion.complete = false;
+}
+void WaitFor(CompletionState& completion, ovf_com_status_v1 expected) {
+  std::unique_lock lock(completion.mutex);
+  assert(completion.condition.wait_for(lock, std::chrono::seconds(3),
+                                       [&completion] { return completion.complete; }));
+  assert(completion.status == expected);
+}
 } // namespace
 
 int main() {
@@ -150,6 +199,9 @@ int main() {
   peer.application->register_message_handler(
       kService, kInstance, vsomeip::ANY_METHOD,
       [&peer](std::shared_ptr<vsomeip::message> const& message) { peer.OnMessage(message); });
+  peer.application->register_message_handler(
+      kPeerService, kPeerInstance, vsomeip::ANY_METHOD,
+      [&peer](std::shared_ptr<vsomeip::message> const& message) { peer.OnMessage(message); });
   std::thread peer_thread([&peer] { peer.application->start(); });
 
   {
@@ -166,6 +218,44 @@ int main() {
                                    [&peer] { return peer.response && peer.event; }));
   }
   assert(server.requests == 1);
+
+  constexpr std::string_view silent_mapping =
+      "service=4661;instance=2;element=2;eventGroup=0;major=1;minor=0;"
+      "kind=method;reliable=true";
+  constexpr std::string_view error_mapping =
+      "service=4661;instance=2;element=3;eventGroup=0;major=1;minor=0;"
+      "kind=method;reliable=true";
+  auto silent = Descriptor(OVF_COM_ENDPOINT_METHOD_CLIENT, Id(5), silent_mapping);
+  auto error = Descriptor(OVF_COM_ENDPOINT_METHOD_CLIENT, Id(6), error_mapping);
+  ovf_com_handle_v1 silent_client{}, duplicate_client{}, error_client{};
+  assert(provider->endpoint_create(provider, &silent, &silent_client) == OVF_COM_STATUS_OK);
+  assert(provider->endpoint_create(provider, &silent, &duplicate_client) == OVF_COM_STATUS_OK);
+  assert(provider->endpoint_create(provider, &error, &error_client) == OVF_COM_STATUS_OK);
+
+  CompletionState completion;
+  std::uint8_t request_payload[]{7};
+  ovf_com_handle_v1 operation{};
+  assert(provider->request(provider, silent_client, {request_payload, sizeof(request_payload)},
+                           Now(nullptr) + 100'000'000ULL, &OnCompletion, &completion,
+                           &operation) == OVF_COM_STATUS_OK);
+  WaitFor(completion, OVF_COM_STATUS_DEADLINE_EXCEEDED);
+  assert(provider->endpoint_destroy(provider, silent_client) == OVF_COM_STATUS_OK);
+
+  Reset(completion);
+  assert(provider->request(provider, duplicate_client, {request_payload, sizeof(request_payload)},
+                           Now(nullptr) + 2'000'000'000ULL, &OnCompletion, &completion,
+                           &operation) == OVF_COM_STATUS_OK);
+  assert(provider->cancel(provider, operation) == OVF_COM_STATUS_OK);
+  WaitFor(completion, OVF_COM_STATUS_CANCELLED);
+
+  Reset(completion);
+  assert(provider->request(provider, error_client, {request_payload, sizeof(request_payload)},
+                           Now(nullptr) + 2'000'000'000ULL, &OnCompletion, &completion,
+                           &operation) == OVF_COM_STATUS_OK);
+  WaitFor(completion, OVF_COM_STATUS_APPLICATION_ERROR);
+  assert((completion.payload == std::vector<std::uint8_t>{0x42}));
+  assert(provider->endpoint_destroy(provider, error_client) == OVF_COM_STATUS_OK);
+  assert(provider->endpoint_destroy(provider, duplicate_client) == OVF_COM_STATUS_OK);
 
   peer.application->clear_all_handler();
   peer.application->stop();

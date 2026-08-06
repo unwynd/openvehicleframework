@@ -63,8 +63,17 @@ enum {
   OVF_COM_CAP_DEADLINES = UINT64_C(1) << 7,
   OVF_COM_CAP_CANCELLATION = UINT64_C(1) << 8,
   OVF_COM_CAP_REQUEST_LOANS = UINT64_C(1) << 9,
-  OVF_COM_CAP_RESPONSE_LOANS = UINT64_C(1) << 10
+  OVF_COM_CAP_RESPONSE_LOANS = UINT64_C(1) << 10,
+  OVF_COM_CAP_SUBSCRIPTION_STATE = UINT64_C(1) << 11
 };
+
+typedef enum ovf_com_subscription_state_v1 {
+  OVF_COM_SUBSCRIPTION_REQUESTED = 0,
+  OVF_COM_SUBSCRIPTION_ACTIVE = 1,
+  OVF_COM_SUBSCRIPTION_REJECTED = 2,
+  OVF_COM_SUBSCRIPTION_SUSPENDED = 3,
+  OVF_COM_SUBSCRIPTION_WITHDRAWN = 4
+} ovf_com_subscription_state_v1;
 
 typedef struct ovf_com_string_view_v1 {
   const char* data;
@@ -169,8 +178,13 @@ typedef void (*ovf_com_sample_callback_v1)(void*, const ovf_com_sample_v1*);
 typedef void (*ovf_com_discovery_callback_v1)(void*, const ovf_com_discovery_entry_v1*);
 typedef void (*ovf_com_completion_callback_v1)(void*, ovf_com_handle_v1 operation,
                                                ovf_com_status_v1, ovf_com_bytes_view_v1 payload);
+/* deadline_ns is zero when the provider cannot express a meaningful deadline in the server
+   host's monotonic clock. */
 typedef void (*ovf_com_request_callback_v1)(void*, ovf_com_handle_v1 request,
                                             ovf_com_bytes_view_v1 payload, uint64_t deadline_ns);
+typedef void (*ovf_com_subscription_state_callback_v1)(void*, ovf_com_handle_v1 subscription,
+                                                       ovf_com_subscription_state_v1,
+                                                       ovf_com_status_v1 reason);
 
 typedef struct ovf_com_transport_v1 ovf_com_transport_v1;
 typedef ovf_com_status_v1 (*ovf_com_transport_create_fn_v1)(const ovf_com_host_api_v1*,
@@ -194,6 +208,8 @@ struct ovf_com_transport_v1 {
   ovf_com_status_v1 (*endpoint_destroy)(ovf_com_transport_v1*, ovf_com_handle_v1);
   ovf_com_status_v1 (*subscribe)(ovf_com_transport_v1*, ovf_com_handle_v1,
                                  ovf_com_sample_callback_v1, void*, ovf_com_handle_v1*);
+  /* After this returns, no sample or subscription-state callback for the handle is executing or
+     may begin. Calling it reentrantly from that subscription's callback is supported. */
   ovf_com_status_v1 (*unsubscribe)(ovf_com_transport_v1*, ovf_com_handle_v1);
   ovf_com_status_v1 (*publish)(ovf_com_transport_v1*, ovf_com_handle_v1, ovf_com_bytes_view_v1);
   ovf_com_status_v1 (*publish_iov)(ovf_com_transport_v1*, ovf_com_handle_v1,
@@ -205,6 +221,8 @@ struct ovf_com_transport_v1 {
   ovf_com_status_v1 (*loan_release)(ovf_com_transport_v1*, ovf_com_handle_v1);
   ovf_com_status_v1 (*request)(ovf_com_transport_v1*, ovf_com_handle_v1, ovf_com_bytes_view_v1,
                                uint64_t, ovf_com_completion_callback_v1, void*, ovf_com_handle_v1*);
+  /* Cancels local interest and produces a CANCELLED terminal completion. It does not promise
+     cancellation of work already executing in a remote provider. */
   ovf_com_status_v1 (*cancel)(ovf_com_transport_v1*, ovf_com_handle_v1);
   ovf_com_status_v1 (*set_request_handler)(ovf_com_transport_v1*, ovf_com_handle_v1,
                                            ovf_com_request_callback_v1, void*);
@@ -221,6 +239,11 @@ struct ovf_com_transport_v1 {
                                              ovf_com_status_v1, ovf_com_loan_v1*);
   ovf_com_status_v1 (*response_loan_send)(ovf_com_transport_v1*, ovf_com_handle_v1,
                                           ovf_com_handle_v1, size_t);
+  /* Registers for asynchronous activation state. The current state is reported after successful
+     registration; middleware-native subscription identifiers remain provider-private. */
+  ovf_com_status_v1 (*subscription_set_state_handler)(ovf_com_transport_v1*, ovf_com_handle_v1,
+                                                      ovf_com_subscription_state_callback_v1,
+                                                      void*);
 };
 
 #define OVF_COM_TRANSPORT_V1_BASE_SIZE offsetof(ovf_com_transport_v1, request_loan_acquire)

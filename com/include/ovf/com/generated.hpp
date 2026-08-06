@@ -75,6 +75,13 @@ enum class CommunicationError : std::uint8_t {
   shutting_down,
   provider_failure
 };
+enum class SubscriptionState : std::uint8_t {
+  requested,
+  active,
+  rejected,
+  suspended,
+  withdrawn,
+};
 
 template <class Value, class ApplicationError>
 using MethodResult = std::variant<Value, ApplicationError, CommunicationError>;
@@ -382,8 +389,10 @@ public:
 class RawSubscription {
 public:
   using Callback = std::function<void(std::span<const std::byte>)>;
+  using StateCallback = std::function<void(SubscriptionState, std::optional<CommunicationError>)>;
   virtual ~RawSubscription() = default;
   virtual auto set_callback(Callback) -> void = 0;
+  virtual auto set_state_callback(StateCallback) -> void = 0;
   virtual auto close() noexcept -> void = 0;
 };
 class ClientBinding {
@@ -459,6 +468,7 @@ private:
 template <class T> class EventSubscription {
 public:
   using Callback = std::function<void(T const&)>;
+  using StateCallback = RawSubscription::StateCallback;
   using Decode = bool (*)(std::span<const std::byte>, T&);
   EventSubscription(std::shared_ptr<RawSubscription> state, Decode decode)
       : state_(std::move(state)), decode_(decode) {}
@@ -474,6 +484,10 @@ public:
       if (decode(bytes, value))
         callback(value);
     });
+  }
+  auto on_state(StateCallback callback) -> void {
+    if (state_)
+      state_->set_state_callback(std::move(callback));
   }
   auto close() noexcept -> void {
     if (state_)

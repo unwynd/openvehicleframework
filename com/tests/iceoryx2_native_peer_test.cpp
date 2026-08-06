@@ -37,12 +37,23 @@ struct Context {
   std::array<std::uint8_t, 64> received{};
   bool delivered{};
   bool native_loan{};
+  bool subscription_active{};
   bool discovered{};
   bool withdrawn{};
   bool completed{};
   ovf_com_status_v1 completion_status{OVF_COM_STATUS_TRANSPORT_ERROR};
   std::vector<std::uint8_t> response;
 };
+void SubscriptionState(void* user, ovf_com_handle_v1, ovf_com_subscription_state_v1 state,
+                       ovf_com_status_v1 reason) {
+  auto& context = *static_cast<Context*>(user);
+  {
+    std::lock_guard lock(context.mutex);
+    context.subscription_active =
+        state == OVF_COM_SUBSCRIPTION_ACTIVE && reason == OVF_COM_STATUS_OK;
+  }
+  context.changed.notify_all();
+}
 void Log(void*, ovf_com_log_level_v1, ovf_com_string_view_v1) {}
 auto Dispatch(void*, ovf_com_task_fn_v1 task, ovf_com_task_release_fn_v1 release, void* user)
     -> ovf_com_status_v1 {
@@ -249,6 +260,9 @@ int main(int argc, char** argv) {
          OVF_COM_STATUS_OK);
   assert(transport->subscribe(transport, subscriber, Sample, &context, &subscription) ==
          OVF_COM_STATUS_OK);
+  assert(transport->subscription_set_state_handler(transport, subscription, SubscriptionState,
+                                                   &context) == OVF_COM_STATUS_OK);
+  assert(context.subscription_active);
 
   auto publisher_descriptor = Descriptor(OVF_COM_ENDPOINT_EVENT_PUBLISHER);
   ovf_com_handle_v1 bounded_publisher{};

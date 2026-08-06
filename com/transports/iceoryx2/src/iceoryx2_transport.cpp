@@ -89,6 +89,7 @@ struct Subscription final {
   ovf_com_sample_callback_v1 callback{};
   void* user{};
   std::atomic_bool active{true};
+  std::recursive_mutex callback_gate;
 };
 struct Loan final {
   iox2_sample_mut_h sample{};
@@ -264,6 +265,7 @@ struct SampleTask {
 };
 void RunSample(void* data) {
   auto& task = *static_cast<SampleTask*>(data);
+  std::lock_guard callback_lock(task.subscription->callback_gate);
   if (task.subscription->active.load(std::memory_order_acquire))
     task.subscription->callback(task.subscription->user, &task.sample);
 }
@@ -736,7 +738,8 @@ auto Capabilities(ovf_com_transport_v1* api, ovf_com_capabilities_v1* out) -> ov
   *out = {sizeof(*out),
           OVF_COM_CAP_DISCOVERY | OVF_COM_CAP_EVENTS | OVF_COM_CAP_METHODS | OVF_COM_CAP_LOANS |
               OVF_COM_CAP_RELIABLE | OVF_COM_CAP_ORDERED | OVF_COM_CAP_DEADLINES |
-              OVF_COM_CAP_CANCELLATION | OVF_COM_CAP_REQUEST_LOANS | OVF_COM_CAP_RESPONSE_LOANS,
+              OVF_COM_CAP_CANCELLATION | OVF_COM_CAP_REQUEST_LOANS | OVF_COM_CAP_RESPONSE_LOANS |
+              OVF_COM_CAP_SUBSCRIPTION_STATE,
           OVF_COM_ISOLATION_INDEPENDENT,
           self.max_endpoints,
           self.max_endpoints,
@@ -953,12 +956,31 @@ auto Subscribe(ovf_com_transport_v1* api, ovf_com_handle_v1 endpoint_handle,
 }
 auto Unsubscribe(ovf_com_transport_v1* api, ovf_com_handle_v1 handle) -> ovf_com_status_v1 {
   auto& self = Self(api);
-  std::lock_guard lock(self.mutex);
-  auto found = self.subscriptions.find(handle);
-  if (found == self.subscriptions.end())
-    return OVF_COM_STATUS_NOT_FOUND;
-  found->second->active.store(false, std::memory_order_release);
-  self.subscriptions.erase(found);
+  std::shared_ptr<Subscription> subscription;
+  {
+    std::lock_guard lock(self.mutex);
+    auto found = self.subscriptions.find(handle);
+    if (found == self.subscriptions.end())
+      return OVF_COM_STATUS_NOT_FOUND;
+    subscription = found->second;
+    self.subscriptions.erase(found);
+  }
+  std::lock_guard callback_lock(subscription->callback_gate);
+  subscription->active.store(false, std::memory_order_release);
+  return OVF_COM_STATUS_OK;
+}
+auto SetSubscriptionStateHandler(ovf_com_transport_v1* api, ovf_com_handle_v1 handle,
+                                 ovf_com_subscription_state_callback_v1 callback, void* user)
+    -> ovf_com_status_v1 {
+  if (!callback)
+    return OVF_COM_STATUS_INVALID_ARGUMENT;
+  auto& self = Self(api);
+  {
+    std::lock_guard lock(self.mutex);
+    if (!self.subscriptions.contains(handle))
+      return OVF_COM_STATUS_NOT_FOUND;
+  }
+  callback(user, handle, OVF_COM_SUBSCRIPTION_ACTIVE, OVF_COM_STATUS_OK);
   return OVF_COM_STATUS_OK;
 }
 auto LoanAcquire(ovf_com_transport_v1* api, ovf_com_handle_v1 endpoint_handle, std::size_t size,
@@ -1424,7 +1446,8 @@ auto Create(ovf_com_host_api_v1 const* host, ovf_com_transport_config_v1 const* 
                RequestLoanAcquire,
                RequestLoanSend,
                ResponseLoanAcquire,
-               ResponseLoanSend};
+               ResponseLoanSend,
+               SetSubscriptionStateHandler};
   *out = &self.release()->api;
   return OVF_COM_STATUS_OK;
 }
@@ -1478,6 +1501,9 @@ auto SafeCreate(ovf_com_host_api_v1 const* host, ovf_com_transport_config_v1 con
                                       std::size_t, ovf_com_status_v1, ovf_com_loan_v1*>;
     api.response_loan_send = &Safe<ResponseLoanSend, ovf_com_transport_v1*, ovf_com_handle_v1,
                                    ovf_com_handle_v1, std::size_t>;
+    api.subscription_set_state_handler =
+        &Safe<SetSubscriptionStateHandler, ovf_com_transport_v1*, ovf_com_handle_v1,
+              ovf_com_subscription_state_callback_v1, void*>;
   }
   return result;
 }

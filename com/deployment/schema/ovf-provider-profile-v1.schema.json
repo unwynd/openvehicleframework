@@ -11,7 +11,7 @@
     "isolation": { "enum": ["independent", "sharedEngine", "processSingleton"] },
     "features": {
       "type": "array", "uniqueItems": true,
-      "items": { "enum": ["discovery", "events", "methods", "loans", "scatterGather", "reliable", "ordered", "deadlines", "cancellation"] }
+      "items": { "enum": ["discovery", "events", "methods", "loans", "scatterGather", "reliable", "ordered", "deadlines", "cancellation", "subscriptionState"] }
     },
     "limits": {
       "type": "object", "additionalProperties": false,

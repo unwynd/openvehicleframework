@@ -39,10 +39,18 @@ struct State {
   int completions{};
   int cancellations{};
   int shutdowns{};
+  int subscription_active{};
   std::array<std::uint8_t, 8> last{};
   std::size_t last_size{};
   ovf_com_transport_v1* transport{};
 };
+void SubscriptionState(void* user, ovf_com_handle_v1, ovf_com_subscription_state_v1 state,
+                       ovf_com_status_v1 reason) {
+  auto& context = *static_cast<State*>(user);
+  assert(reason == OVF_COM_STATUS_OK);
+  if (state == OVF_COM_SUBSCRIPTION_ACTIVE)
+    ++context.subscription_active;
+}
 void Discovery(void* user, const ovf_com_discovery_entry_v1* entry) {
   auto& state = *static_cast<State*>(user);
   assert(entry && entry->available <= 1 && entry->route_epoch == 7);
@@ -117,6 +125,9 @@ int main() {
   ovf_com_handle_v1 subscription{};
   assert(transport->subscribe(transport, subscriber, &Sample, &state, &subscription) ==
          OVF_COM_STATUS_OK);
+  assert(transport->subscription_set_state_handler(transport, subscription, &SubscriptionState,
+                                                   &state) == OVF_COM_STATUS_OK);
+  assert(state.subscription_active == 1);
 
   const std::uint8_t first[]{1, 2, 3};
   assert(transport->publish(transport, publisher, {first, sizeof(first)}) == OVF_COM_STATUS_OK);

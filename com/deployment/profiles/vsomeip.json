@@ -2,7 +2,7 @@
   "profileVersion": 1,
   "name": "vsomeip",
   "isolation": "processSingleton",
-  "features": ["discovery", "events", "methods", "reliable", "ordered", "deadlines", "cancellation"],
+  "features": ["discovery", "events", "methods", "reliable", "ordered", "deadlines", "cancellation", "subscriptionState"],
   "limits": {
     "maxPayloadSize": 1048560,
     "maxHistoryDepth": 1,

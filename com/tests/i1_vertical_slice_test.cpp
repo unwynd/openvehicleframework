@@ -91,6 +91,13 @@ int main() {
   int radar_samples{};
   RadarFrame received{};
   auto radar_subscription = proxy.subscribeRadarObjectsChanged();
+  bool radar_subscription_active{};
+  radar_subscription.on_state(
+      [&](ovf::com::SubscriptionState state, std::optional<ovf::com::CommunicationError> reason) {
+        assert(!reason);
+        radar_subscription_active = state == ovf::com::SubscriptionState::active;
+      });
+  assert(radar_subscription_active);
   radar_subscription.on_sample([&](RadarFrame const& frame) {
     received = frame;
     ++radar_samples;

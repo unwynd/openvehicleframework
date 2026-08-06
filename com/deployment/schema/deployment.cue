@@ -3,7 +3,7 @@
 package ovf_deployment
 
 #Feature: "discovery" | "events" | "methods" | "loans" | "scatterGather" |
-	"reliable" | "ordered" | "deadlines" | "cancellation"
+	"reliable" | "ordered" | "deadlines" | "cancellation" | "subscriptionState"
 
 #Requirements: {
 	features?: [...#Feature]

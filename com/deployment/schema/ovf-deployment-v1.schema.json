@@ -13,7 +13,7 @@
   },
   "$defs": {
     "uuid": { "type": "string", "format": "uuid", "pattern": "^[0-9a-f-]{36}$" },
-    "features": { "type": "array", "uniqueItems": true, "items": { "enum": ["discovery", "events", "methods", "loans", "scatterGather", "reliable", "ordered", "deadlines", "cancellation"] } },
+    "features": { "type": "array", "uniqueItems": true, "items": { "enum": ["discovery", "events", "methods", "loans", "scatterGather", "reliable", "ordered", "deadlines", "cancellation", "subscriptionState"] } },
     "limits": {
       "type": "object", "additionalProperties": false,
       "properties": {

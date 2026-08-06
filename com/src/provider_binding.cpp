@@ -54,6 +54,12 @@ auto HasResponseLoans(ovf_com_transport_v1& provider) -> bool {
                       &ovf_com_transport_v1::response_loan_send);
 }
 
+auto HasSubscriptionState(ovf_com_transport_v1& provider) -> bool {
+  return HasCapability(provider, OVF_COM_CAP_SUBSCRIPTION_STATE) &&
+         HasExtension(provider, offsetof(ovf_com_transport_v1, subscription_set_state_handler),
+                      &ovf_com_transport_v1::subscription_set_state_handler);
+}
+
 auto MapStatus(ovf_com_status_v1 status) -> CommunicationError {
   switch (status) {
   case OVF_COM_STATUS_NOT_FOUND:
@@ -175,26 +181,53 @@ private:
   std::shared_ptr<OperationState> self_;
 };
 
-class SubscriptionState final : public RawSubscription {
+class ProviderSubscriptionState final : public RawSubscription {
 public:
-  SubscriptionState(ovf_com_transport_v1& provider, ovf_com_handle_v1 endpoint)
+  ProviderSubscriptionState(ovf_com_transport_v1& provider, ovf_com_handle_v1 endpoint)
       : provider_(&provider), endpoint_(endpoint) {}
-  ~SubscriptionState() override { close(); }
+  ~ProviderSubscriptionState() override { close(); }
   auto start() -> ovf_com_status_v1 {
-    return provider_->subscribe(provider_, endpoint_, &OnSample, this, &subscription_);
+    auto status = provider_->subscribe(provider_, endpoint_, &OnSample, this, &subscription_);
+    if (status != OVF_COM_STATUS_OK)
+      return status;
+    if (HasSubscriptionState(*provider_)) {
+      status = provider_->subscription_set_state_handler(provider_, subscription_, &OnState, this);
+      if (status != OVF_COM_STATUS_OK)
+        return status;
+    } else {
+      on_state(OVF_COM_SUBSCRIPTION_ACTIVE, OVF_COM_STATUS_OK);
+    }
+    return OVF_COM_STATUS_OK;
   }
   auto set_callback(Callback callback) -> void override {
     std::lock_guard lock(mutex_);
     callback_ = std::move(callback);
   }
+  auto set_state_callback(StateCallback callback) -> void override {
+    std::optional<std::pair<ovf_com_subscription_state_v1, ovf_com_status_v1>> state;
+    {
+      std::lock_guard lock(mutex_);
+      state_callback_ = callback;
+      state = state_;
+    }
+    if (callback && state)
+      callback(ToState(state->first), state->second == OVF_COM_STATUS_OK
+                                          ? std::optional<CommunicationError>{}
+                                          : MapStatus(state->second));
+  }
   auto close() noexcept -> void override {
     ovf_com_handle_v1 subscription{}, endpoint{};
+    StateCallback state_callback;
     {
       std::lock_guard lock(mutex_);
       subscription = std::exchange(subscription_, OVF_COM_INVALID_HANDLE_V1);
       endpoint = std::exchange(endpoint_, OVF_COM_INVALID_HANDLE_V1);
       callback_ = {};
+      state_callback = std::move(state_callback_);
+      state_callback_ = {};
     }
+    if (subscription && state_callback)
+      state_callback(ovf::com::SubscriptionState::withdrawn, {});
     if (subscription)
       (void)provider_->unsubscribe(provider_, subscription);
     if (endpoint)
@@ -203,7 +236,37 @@ public:
 
 private:
   static void OnSample(void* user, ovf_com_sample_v1 const* sample) {
-    static_cast<SubscriptionState*>(user)->on_sample(sample);
+    static_cast<ProviderSubscriptionState*>(user)->on_sample(sample);
+  }
+  static void OnState(void* user, ovf_com_handle_v1, ovf_com_subscription_state_v1 state,
+                      ovf_com_status_v1 reason) {
+    static_cast<ProviderSubscriptionState*>(user)->on_state(state, reason);
+  }
+  static auto ToState(ovf_com_subscription_state_v1 state) -> ovf::com::SubscriptionState {
+    switch (state) {
+    case OVF_COM_SUBSCRIPTION_REQUESTED:
+      return ovf::com::SubscriptionState::requested;
+    case OVF_COM_SUBSCRIPTION_ACTIVE:
+      return ovf::com::SubscriptionState::active;
+    case OVF_COM_SUBSCRIPTION_REJECTED:
+      return ovf::com::SubscriptionState::rejected;
+    case OVF_COM_SUBSCRIPTION_SUSPENDED:
+      return ovf::com::SubscriptionState::suspended;
+    case OVF_COM_SUBSCRIPTION_WITHDRAWN:
+      return ovf::com::SubscriptionState::withdrawn;
+    }
+    return ovf::com::SubscriptionState::rejected;
+  }
+  auto on_state(ovf_com_subscription_state_v1 state, ovf_com_status_v1 reason) -> void {
+    StateCallback callback;
+    {
+      std::lock_guard lock(mutex_);
+      state_ = std::pair{state, reason};
+      callback = state_callback_;
+    }
+    if (callback)
+      callback(ToState(state), reason == OVF_COM_STATUS_OK ? std::optional<CommunicationError>{}
+                                                           : MapStatus(reason));
   }
   auto on_sample(ovf_com_sample_v1 const* sample) -> void {
     Callback callback;
@@ -222,6 +285,8 @@ private:
   ovf_com_handle_v1 subscription_{};
   std::mutex mutex_;
   Callback callback_;
+  StateCallback state_callback_;
+  std::optional<std::pair<ovf_com_subscription_state_v1, ovf_com_status_v1>> state_;
 };
 
 auto Descriptor(RouteBinding const& route, ElementDescriptor const& element,
@@ -503,7 +568,7 @@ auto ProviderClientBinding::subscribe(ElementDescriptor const& element)
   auto status = provider_->endpoint_create(provider_, &descriptor, &endpoint);
   if (status != OVF_COM_STATUS_OK)
     return {};
-  auto state = std::make_shared<SubscriptionState>(*provider_, endpoint);
+  auto state = std::make_shared<ProviderSubscriptionState>(*provider_, endpoint);
   if (state->start() != OVF_COM_STATUS_OK)
     return {};
   return state;
