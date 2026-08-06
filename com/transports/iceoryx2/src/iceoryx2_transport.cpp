@@ -11,8 +11,8 @@
 
 #include <algorithm>
 #include <atomic>
-#include <chrono>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -44,7 +44,6 @@ struct Endpoint final {
   ovf_com_request_callback_v1 request_callback{};
   void* request_user{};
   std::string announcement;
-  std::atomic_bool degraded{};
 
   ~Endpoint() {
     if (listener)
@@ -95,6 +94,20 @@ struct Loan final {
   iox2_sample_mut_h sample{};
   ovf_com_handle_v1 endpoint{};
   std::size_t size{};
+};
+struct RequestLoan final {
+  iox2_request_mut_h request{};
+  ovf_com_handle_v1 endpoint{};
+  std::size_t payload_size{};
+  std::uint64_t deadline_ns{};
+};
+struct ResponseLoan final {
+  iox2_response_mut_h response{};
+  iox2_active_request_h request{};
+  std::shared_ptr<Endpoint> endpoint;
+  std::size_t payload_size{};
+  ovf_com_handle_v1 request_handle{};
+  ovf_com_handle_v1 endpoint_handle{};
 };
 struct ReceivedLoan final {
   std::atomic<iox2_sample_h> sample{};
@@ -154,6 +167,8 @@ struct Transport final {
   std::map<ovf_com_handle_v1, std::shared_ptr<Endpoint>> endpoints;
   std::map<ovf_com_handle_v1, std::shared_ptr<Subscription>> subscriptions;
   std::map<ovf_com_handle_v1, Loan> loans;
+  std::map<ovf_com_handle_v1, RequestLoan> request_loans;
+  std::map<ovf_com_handle_v1, ResponseLoan> response_loans;
   std::shared_ptr<ReceivedRegistry> received_registry{std::make_shared<ReceivedRegistry>()};
   std::map<ovf_com_handle_v1, std::shared_ptr<Watch>> watches;
   std::map<ovf_com_handle_v1, Pending> pending;
@@ -175,11 +190,8 @@ auto Parse(ovf_com_string_view_v1 text, native::Mapping& mapping) -> bool {
 auto IoStatus(int value) -> ovf_com_status_v1 {
   return value == IOX2_OK ? OVF_COM_STATUS_OK : OVF_COM_STATUS_TRANSPORT_ERROR;
 }
-auto OnDegradation(iox2_degradation_cause_e, iox2_degradation_info_h_ref,
-                   iox2_callback_context context) -> iox2_degradation_action_e {
-  auto* endpoint = static_cast<Endpoint*>(context);
-  if (endpoint)
-    endpoint->degraded.store(true, std::memory_order_release);
+auto OnDegradation(iox2_degradation_cause_e, iox2_degradation_info_h_ref, iox2_callback_context)
+    -> iox2_degradation_action_e {
   return iox2_degradation_action_e_DEGRADE_AND_FAIL;
 }
 void Wake(Transport& self) noexcept {
@@ -206,8 +218,8 @@ auto CreateSignal(Transport& self, Endpoint& endpoint, bool notify, bool listen)
   auto result = iox2_service_name_new(nullptr, name.data(), name.size(), &endpoint.signal_name);
   if (result != IOX2_OK)
     return IoStatus(result);
-  auto builder = iox2_node_service_builder(
-      &self.node, nullptr, iox2_cast_service_name_ptr(endpoint.signal_name));
+  auto builder = iox2_node_service_builder(&self.node, nullptr,
+                                           iox2_cast_service_name_ptr(endpoint.signal_name));
   auto event = iox2_service_builder_event(builder);
   iox2_service_builder_event_set_max_notifiers(&event, 128);
   iox2_service_builder_event_set_max_listeners(&event, 128);
@@ -218,16 +230,16 @@ auto CreateSignal(Transport& self, Endpoint& endpoint, bool notify, bool listen)
   if (listen) {
     auto listener_builder =
         iox2_port_factory_event_listener_builder(&endpoint.signal_service, nullptr);
-    result = iox2_port_factory_listener_builder_create(listener_builder, nullptr,
-                                                        &endpoint.listener);
+    result =
+        iox2_port_factory_listener_builder_create(listener_builder, nullptr, &endpoint.listener);
     if (result != IOX2_OK)
       return IoStatus(result);
   }
   if (notify) {
     auto notifier_builder =
         iox2_port_factory_event_notifier_builder(&endpoint.signal_service, nullptr);
-    result = iox2_port_factory_notifier_builder_create(notifier_builder, nullptr,
-                                                        &endpoint.notifier);
+    result =
+        iox2_port_factory_notifier_builder_create(notifier_builder, nullptr, &endpoint.notifier);
   }
   return IoStatus(result);
 }
@@ -268,31 +280,55 @@ struct CompletionTask {
   ovf_com_handle_v1 operation{};
   ovf_com_status_v1 status{};
   std::vector<std::uint8_t> payload;
+  iox2_response_h response{};
+  std::uint8_t const* response_payload{};
+  std::size_t response_size{};
 };
 void RunCompletion(void* data) {
   auto& task = *static_cast<CompletionTask*>(data);
-  task.callback(task.user, task.operation, task.status, {task.payload.data(), task.payload.size()});
+  auto const* bytes = task.response ? task.response_payload : task.payload.data();
+  auto size = task.response ? task.response_size : task.payload.size();
+  task.callback(task.user, task.operation, task.status, {bytes, size});
 }
-void DeleteCompletion(void* data) { delete static_cast<CompletionTask*>(data); }
+void DeleteCompletion(void* data) {
+  auto task = std::unique_ptr<CompletionTask>(static_cast<CompletionTask*>(data));
+  if (task->response)
+    iox2_response_drop(task->response);
+}
 void Complete(Transport& self, Pending pending, ovf_com_handle_v1 operation,
               ovf_com_status_v1 status, std::vector<std::uint8_t> payload = {}) {
   if (pending.response)
     iox2_pending_response_drop(pending.response);
   auto* task = new (std::nothrow)
       CompletionTask{pending.callback, pending.user, operation, status, std::move(payload)};
-  if (task)
-    (void)Dispatch(self, RunCompletion, DeleteCompletion, task);
+  if (!task || Dispatch(self, RunCompletion, DeleteCompletion, task) != OVF_COM_STATUS_OK)
+    pending.callback(pending.user, operation, OVF_COM_STATUS_RESOURCE_EXHAUSTED, {});
+}
+void CompleteNative(Transport& self, Pending pending, ovf_com_handle_v1 operation,
+                    ovf_com_status_v1 status, iox2_response_h response, std::uint8_t const* payload,
+                    std::size_t payload_size) {
+  if (pending.response)
+    iox2_pending_response_drop(pending.response);
+  auto* task = new (std::nothrow) CompletionTask{
+      pending.callback, pending.user, operation, status, {}, response, payload, payload_size};
+  if (!task) {
+    iox2_response_drop(response);
+    pending.callback(pending.user, operation, OVF_COM_STATUS_RESOURCE_EXHAUSTED, {});
+  } else if (Dispatch(self, RunCompletion, DeleteCompletion, task) != OVF_COM_STATUS_OK) {
+    pending.callback(pending.user, operation, OVF_COM_STATUS_RESOURCE_EXHAUSTED, {});
+  }
 }
 struct RequestTask {
   ovf_com_request_callback_v1 callback{};
   void* user{};
   ovf_com_handle_v1 request{};
   uint64_t deadline{};
-  std::vector<std::uint8_t> payload;
+  std::uint8_t const* payload{};
+  std::size_t payload_size{};
 };
 void RunRequest(void* data) {
   auto& task = *static_cast<RequestTask*>(data);
-  task.callback(task.user, task.request, {task.payload.data(), task.payload.size()}, task.deadline);
+  task.callback(task.user, task.request, {task.payload, task.payload_size}, task.deadline);
 }
 void DeleteRequest(void* data) { delete static_cast<RequestTask*>(data); }
 struct RequestHeader {
@@ -372,6 +408,7 @@ void ReleaseAnnouncement(Transport& self, std::string const& base) {
 auto Respond(ovf_com_transport_v1*, ovf_com_handle_v1, ovf_com_status_v1, ovf_com_bytes_view_v1)
     -> ovf_com_status_v1;
 void ReceiveLoop(Transport* self) {
+  std::uint64_t next_dead_node_cleanup{};
   while (self->running.load(std::memory_order_acquire)) {
     std::vector<std::pair<std::shared_ptr<Subscription>, std::shared_ptr<Endpoint>>> active;
     std::vector<std::pair<ovf_com_handle_v1, std::shared_ptr<Endpoint>>> servers;
@@ -505,12 +542,22 @@ void ReceiveLoop(Transport* self) {
                                                     endpoint->request_user,
                                                     request_handle,
                                                     header.deadline_ns,
-                                                    {begin, begin + header.payload_size}};
+                                                    begin,
+                                                    header.payload_size};
         if (!task || Dispatch(*self, RunRequest, DeleteRequest, task) != OVF_COM_STATUS_OK)
           (void)Respond(&self->api, request_handle, OVF_COM_STATUS_RESOURCE_EXHAUSTED, {});
       }
     }
     auto now = self->host->monotonic_time_ns(self->host->user_data);
+#if !defined(__APPLE__)
+    if (!watches.empty() && now >= next_dead_node_cleanup) {
+      iox2_cleanup_state_t cleanup{};
+      iox2_node_try_cleanup_dead_nodes(&self->node, &cleanup);
+      next_dead_node_cleanup = now + 500'000'000ULL;
+    }
+#else
+    (void)next_dead_node_cleanup;
+#endif
     for (auto operation : operations) {
       iox2_response_h native_response{};
       Pending owned{};
@@ -545,25 +592,19 @@ void ReceiveLoop(Transport* self) {
                   header.status <= OVF_COM_STATUS_APPLICATION_ERROR &&
                   header.payload_size <= size - sizeof(header);
         }
-        std::vector<std::uint8_t> payload;
-        if (valid) {
-          auto begin = static_cast<std::uint8_t const*>(bytes) + sizeof(header);
-          payload.assign(begin, begin + header.payload_size);
-        }
-        iox2_response_drop(native_response);
-        Complete(*self, owned, operation,
-                 valid ? static_cast<ovf_com_status_v1>(header.status)
-                       : OVF_COM_STATUS_TRANSPORT_ERROR,
-                 std::move(payload));
+        auto begin = valid ? static_cast<std::uint8_t const*>(bytes) + sizeof(header) : nullptr;
+        CompleteNative(*self, owned, operation,
+                       valid ? static_cast<ovf_com_status_v1>(header.status)
+                             : OVF_COM_STATUS_TRANSPORT_ERROR,
+                       native_response, valid ? begin : nullptr, valid ? header.payload_size : 0);
       } else {
         Complete(*self, owned, operation,
                  expired ? OVF_COM_STATUS_DEADLINE_EXCEEDED : OVF_COM_STATUS_TRANSPORT_ERROR);
       }
     }
     for (auto const& [handle, watch] : watches) {
-      auto available = watch->service &&
-                       iox2_port_factory_event_dynamic_config_number_of_notifiers(
-                           &watch->service) > 0;
+      auto available = watch->service && iox2_port_factory_event_dynamic_config_number_of_notifiers(
+                                             &watch->service) > 0;
       if (available == watch->available)
         continue;
       {
@@ -639,6 +680,14 @@ auto Stop(ovf_com_transport_v1* api) -> ovf_com_status_v1 {
     for (auto& [_, loan] : self.loans)
       iox2_sample_mut_drop(loan.sample);
     self.loans.clear();
+    for (auto& [_, loan] : self.request_loans)
+      iox2_request_mut_drop(loan.request);
+    self.request_loans.clear();
+    for (auto& [_, loan] : self.response_loans) {
+      iox2_response_mut_drop(loan.response);
+      iox2_active_request_drop(loan.request);
+    }
+    self.response_loans.clear();
     {
       std::lock_guard received_lock(self.received_registry->mutex);
       self.received_registry->loans.clear();
@@ -648,6 +697,15 @@ auto Stop(ovf_com_transport_v1* api) -> ovf_com_status_v1 {
     self.active_requests.clear();
     pending.assign(self.pending.begin(), self.pending.end());
     self.pending.clear();
+    // Pending response handles belong to the node. Release them before tearing
+    // down endpoints and the node; completion callbacks are dispatched after
+    // the transport state has been fully withdrawn below.
+    for (auto& [_, value] : pending) {
+      if (value.response) {
+        iox2_pending_response_drop(value.response);
+        value.response = nullptr;
+      }
+    }
     for (auto& [_, watch] : self.watches)
       watch->active.store(false, std::memory_order_release);
     self.watches.clear();
@@ -678,7 +736,7 @@ auto Capabilities(ovf_com_transport_v1* api, ovf_com_capabilities_v1* out) -> ov
   *out = {sizeof(*out),
           OVF_COM_CAP_DISCOVERY | OVF_COM_CAP_EVENTS | OVF_COM_CAP_METHODS | OVF_COM_CAP_LOANS |
               OVF_COM_CAP_RELIABLE | OVF_COM_CAP_ORDERED | OVF_COM_CAP_DEADLINES |
-              OVF_COM_CAP_CANCELLATION,
+              OVF_COM_CAP_CANCELLATION | OVF_COM_CAP_REQUEST_LOANS | OVF_COM_CAP_RESPONSE_LOANS,
           OVF_COM_ISOLATION_INDEPENDENT,
           self.max_endpoints,
           self.max_endpoints,
@@ -731,8 +789,8 @@ auto EndpointCreate(ovf_com_transport_v1* api, ovf_com_endpoint_descriptor_v1 co
     iox2_service_builder_pub_sub_set_max_subscribers(&pubsub, mapping.max_subscribers);
     iox2_service_builder_pub_sub_set_history_size(&pubsub, mapping.history_depth);
     iox2_service_builder_pub_sub_set_subscriber_max_buffer_size(&pubsub, mapping.subscriber_buffer);
-    iox2_service_builder_pub_sub_set_subscriber_max_borrowed_samples(
-        &pubsub, mapping.max_borrowed_samples);
+    iox2_service_builder_pub_sub_set_subscriber_max_borrowed_samples(&pubsub,
+                                                                     mapping.max_borrowed_samples);
     iox2_service_builder_pub_sub_set_enable_safe_overflow(&pubsub, mapping.safe_overflow);
     result = iox2_service_builder_pub_sub_open_or_create(pubsub, nullptr, &endpoint->service);
     if (result != IOX2_OK)
@@ -745,12 +803,12 @@ auto EndpointCreate(ovf_com_transport_v1* api, ovf_com_endpoint_descriptor_v1 co
       iox2_port_factory_publisher_builder_set_allocation_strategy(
           &builder, iox2_allocation_strategy_e_STATIC);
       iox2_port_factory_publisher_builder_set_degradation_handler(&builder, OnDegradation,
-                                                                   endpoint.get());
+                                                                  endpoint.get());
       result = iox2_port_factory_publisher_builder_create(builder, nullptr, &endpoint->publisher);
     } else {
       auto builder = iox2_port_factory_pub_sub_subscriber_builder(&endpoint->service, nullptr);
       iox2_port_factory_subscriber_builder_set_degradation_handler(&builder, OnDegradation,
-                                                                    endpoint.get());
+                                                                   endpoint.get());
       result = iox2_port_factory_subscriber_builder_create(builder, nullptr, &endpoint->subscriber);
     }
   } else {
@@ -771,8 +829,8 @@ auto EndpointCreate(ovf_com_transport_v1* api, ovf_com_endpoint_descriptor_v1 co
                                                                    mapping.response_buffer);
     iox2_service_builder_request_response_max_clients(&request_response, mapping.max_clients);
     iox2_service_builder_request_response_max_servers(&request_response, mapping.max_servers);
-    iox2_service_builder_request_response_max_loaned_requests(
-        &request_response, mapping.max_loaned_requests);
+    iox2_service_builder_request_response_max_loaned_requests(&request_response,
+                                                              mapping.max_loaned_requests);
     iox2_service_builder_request_response_max_borrowed_responses_per_pending_response(
         &request_response, mapping.max_borrowed_responses);
     iox2_service_builder_request_response_enable_safe_overflow_for_requests(&request_response,
@@ -788,12 +846,12 @@ auto EndpointCreate(ovf_com_transport_v1* api, ovf_com_endpoint_descriptor_v1 co
           iox2_port_factory_request_response_client_builder(&endpoint->request_response, nullptr);
       iox2_port_factory_client_builder_set_initial_max_slice_len(
           &builder, mapping.request_payload_size + sizeof(RequestHeader));
-      iox2_port_factory_client_builder_set_allocation_strategy(
-          &builder, iox2_allocation_strategy_e_STATIC);
+      iox2_port_factory_client_builder_set_allocation_strategy(&builder,
+                                                               iox2_allocation_strategy_e_STATIC);
       iox2_port_factory_client_builder_set_request_degradation_handler(&builder, OnDegradation,
-                                                                        endpoint.get());
+                                                                       endpoint.get());
       iox2_port_factory_client_builder_set_response_degradation_handler(&builder, OnDegradation,
-                                                                         endpoint.get());
+                                                                        endpoint.get());
       result = iox2_port_factory_client_builder_create(builder, nullptr, &endpoint->client);
     } else {
       auto builder =
@@ -802,25 +860,24 @@ auto EndpointCreate(ovf_com_transport_v1* api, ovf_com_endpoint_descriptor_v1 co
           &builder, mapping.response_payload_size + sizeof(ResponseHeader));
       iox2_port_factory_server_builder_set_max_loaned_responses_per_request(
           &builder, mapping.max_loaned_responses);
-      iox2_port_factory_server_builder_set_allocation_strategy(
-          &builder, iox2_allocation_strategy_e_STATIC);
+      iox2_port_factory_server_builder_set_allocation_strategy(&builder,
+                                                               iox2_allocation_strategy_e_STATIC);
       iox2_port_factory_server_builder_set_request_degradation_handler(&builder, OnDegradation,
-                                                                        endpoint.get());
+                                                                       endpoint.get());
       iox2_port_factory_server_builder_set_response_degradation_handler(&builder, OnDegradation,
-                                                                         endpoint.get());
+                                                                        endpoint.get());
       result = iox2_port_factory_server_builder_create(builder, nullptr, &endpoint->server);
     }
   }
   if (result != IOX2_OK)
     return IoStatus(result);
-  auto signal_status = CreateSignal(
-      self, *endpoint,
-      descriptor->kind == OVF_COM_ENDPOINT_EVENT_PUBLISHER ||
-          descriptor->kind == OVF_COM_ENDPOINT_METHOD_CLIENT ||
-          descriptor->kind == OVF_COM_ENDPOINT_METHOD_SERVER,
-      descriptor->kind == OVF_COM_ENDPOINT_EVENT_SUBSCRIBER ||
-          descriptor->kind == OVF_COM_ENDPOINT_METHOD_CLIENT ||
-          descriptor->kind == OVF_COM_ENDPOINT_METHOD_SERVER);
+  auto signal_status = CreateSignal(self, *endpoint,
+                                    descriptor->kind == OVF_COM_ENDPOINT_EVENT_PUBLISHER ||
+                                        descriptor->kind == OVF_COM_ENDPOINT_METHOD_CLIENT ||
+                                        descriptor->kind == OVF_COM_ENDPOINT_METHOD_SERVER,
+                                    descriptor->kind == OVF_COM_ENDPOINT_EVENT_SUBSCRIBER ||
+                                        descriptor->kind == OVF_COM_ENDPOINT_METHOD_CLIENT ||
+                                        descriptor->kind == OVF_COM_ENDPOINT_METHOD_SERVER);
   if (signal_status != OVF_COM_STATUS_OK)
     return signal_status;
   if (descriptor->kind == OVF_COM_ENDPOINT_EVENT_PUBLISHER ||
@@ -850,6 +907,12 @@ auto EndpointDestroy(ovf_com_transport_v1* api, ovf_com_handle_v1 handle) -> ovf
       return OVF_COM_STATUS_INVALID_STATE;
   for (auto const& [_, loan] : self.loans)
     if (loan.endpoint == handle)
+      return OVF_COM_STATUS_INVALID_STATE;
+  for (auto const& [_, loan] : self.request_loans)
+    if (loan.endpoint == handle)
+      return OVF_COM_STATUS_INVALID_STATE;
+  for (auto const& [_, loan] : self.response_loans)
+    if (loan.endpoint_handle == handle)
       return OVF_COM_STATUS_INVALID_STATE;
   for (auto const& [_, operation] : self.pending)
     if (operation.endpoint == handle)
@@ -911,7 +974,7 @@ auto LoanAcquire(ovf_com_transport_v1* api, ovf_com_handle_v1 endpoint_handle, s
       return OVF_COM_STATUS_NOT_FOUND;
     endpoint = found->second;
   }
-  if (!endpoint->publisher || size == 0 || size > endpoint->mapping.payload_size)
+  if (!endpoint->publisher || size > endpoint->mapping.payload_size)
     return OVF_COM_STATUS_INVALID_ARGUMENT;
   iox2_sample_mut_h sample{};
   auto result = iox2_publisher_loan_slice_uninit(&endpoint->publisher, nullptr, &sample, size);
@@ -963,6 +1026,17 @@ auto LoanRelease(ovf_com_transport_v1* api, ovf_com_handle_v1 handle) -> ovf_com
     self.loans.erase(found);
     return OVF_COM_STATUS_OK;
   }
+  if (auto found = self.request_loans.find(handle); found != self.request_loans.end()) {
+    iox2_request_mut_drop(found->second.request);
+    self.request_loans.erase(found);
+    return OVF_COM_STATUS_OK;
+  }
+  if (auto found = self.response_loans.find(handle); found != self.response_loans.end()) {
+    iox2_response_mut_drop(found->second.response);
+    iox2_active_request_drop(found->second.request);
+    self.response_loans.erase(found);
+    return OVF_COM_STATUS_OK;
+  }
   std::lock_guard received_lock(self.received_registry->mutex);
   if (auto found = self.received_registry->loans.find(handle);
       found != self.received_registry->loans.end()) {
@@ -1006,6 +1080,80 @@ auto PublishIov(ovf_com_transport_v1* api, ovf_com_handle_v1 endpoint,
   }
   return LoanPublish(api, endpoint, loan.handle, size);
 }
+auto RequestLoanAcquire(ovf_com_transport_v1* api, ovf_com_handle_v1 endpoint_handle,
+                        std::size_t payload_size, std::uint64_t deadline, ovf_com_loan_v1* out)
+    -> ovf_com_status_v1 {
+  if (!out || out->struct_size < sizeof(*out))
+    return OVF_COM_STATUS_INVALID_ARGUMENT;
+  auto& self = Self(api);
+  std::lock_guard lock(self.mutex);
+  auto found = self.endpoints.find(endpoint_handle);
+  if (found == self.endpoints.end())
+    return OVF_COM_STATUS_NOT_FOUND;
+  auto const& endpoint = found->second;
+  if (!endpoint->client || payload_size > endpoint->mapping.request_payload_size)
+    return OVF_COM_STATUS_INVALID_ARGUMENT;
+  if (!self.running)
+    return OVF_COM_STATUS_SHUTTING_DOWN;
+  if (self.request_loans.size() + self.pending.size() >= self.max_operations)
+    return OVF_COM_STATUS_RESOURCE_EXHAUSTED;
+  if (deadline && self.host->monotonic_time_ns(self.host->user_data) >= deadline)
+    return OVF_COM_STATUS_DEADLINE_EXCEEDED;
+  auto wire_size = sizeof(RequestHeader) + payload_size;
+  iox2_request_mut_h request{};
+  auto result = iox2_client_loan_slice_uninit(&endpoint->client, nullptr, &request, wire_size);
+  if (result != IOX2_OK)
+    return OVF_COM_STATUS_RESOURCE_EXHAUSTED;
+  void* wire{};
+  iox2_request_mut_payload_mut(&request, &wire, nullptr);
+  RequestHeader header{
+      kRequestMagic, kEnvelopeVersion, 0, deadline, static_cast<std::uint32_t>(payload_size), 0};
+  std::memcpy(wire, &header, sizeof(header));
+  auto handle = self.next_handle++;
+  self.request_loans.emplace(handle, RequestLoan{request, endpoint_handle, payload_size, deadline});
+  *out = {sizeof(*out),
+          handle,
+          {static_cast<std::uint8_t*>(wire) + sizeof(RequestHeader), payload_size}};
+  return OVF_COM_STATUS_OK;
+}
+auto RequestLoanSend(ovf_com_transport_v1* api, ovf_com_handle_v1 endpoint_handle,
+                     ovf_com_handle_v1 loan_handle, std::size_t used,
+                     ovf_com_completion_callback_v1 callback, void* user, ovf_com_handle_v1* out)
+    -> ovf_com_status_v1 {
+  if (!callback || !out)
+    return OVF_COM_STATUS_INVALID_ARGUMENT;
+  auto& self = Self(api);
+  std::shared_ptr<Endpoint> endpoint;
+  RequestLoan loan{};
+  {
+    std::lock_guard lock(self.mutex);
+    auto found = self.request_loans.find(loan_handle);
+    if (found == self.request_loans.end())
+      return OVF_COM_STATUS_NOT_FOUND;
+    if (found->second.endpoint != endpoint_handle || found->second.payload_size != used)
+      return OVF_COM_STATUS_INVALID_ARGUMENT;
+    if (self.pending.size() >= self.max_operations)
+      return OVF_COM_STATUS_RESOURCE_EXHAUSTED;
+    auto endpoint_found = self.endpoints.find(endpoint_handle);
+    if (endpoint_found == self.endpoints.end())
+      return OVF_COM_STATUS_NOT_FOUND;
+    endpoint = endpoint_found->second;
+    loan = found->second;
+    self.request_loans.erase(found);
+  }
+  iox2_pending_response_h response{};
+  auto result = iox2_request_mut_send(loan.request, nullptr, &response);
+  if (result != IOX2_OK)
+    return IoStatus(result);
+  Notify(*endpoint, 1);
+  std::lock_guard lock(self.mutex);
+  auto operation = self.next_handle++;
+  self.pending.emplace(operation,
+                       Pending{endpoint_handle, response, loan.deadline_ns, callback, user});
+  *out = operation;
+  Wake(self);
+  return OVF_COM_STATUS_OK;
+}
 auto Request(ovf_com_transport_v1* api, ovf_com_handle_v1 endpoint_handle,
              ovf_com_bytes_view_v1 payload, std::uint64_t deadline,
              ovf_com_completion_callback_v1 callback, void* user, ovf_com_handle_v1* out)
@@ -1038,7 +1186,8 @@ auto Request(ovf_com_transport_v1* api, ovf_com_handle_v1 endpoint_handle,
   if (self.pending.size() >= self.max_operations)
     return OVF_COM_STATUS_RESOURCE_EXHAUSTED;
   iox2_request_mut_h native_request{};
-  auto result = iox2_client_loan_slice_uninit(&endpoint->client, nullptr, &native_request, wire_size);
+  auto result =
+      iox2_client_loan_slice_uninit(&endpoint->client, nullptr, &native_request, wire_size);
   if (result != IOX2_OK)
     return OVF_COM_STATUS_RESOURCE_EXHAUSTED;
   void* wire{};
@@ -1073,18 +1222,75 @@ auto Cancel(ovf_com_transport_v1* api, ovf_com_handle_v1 operation) -> ovf_com_s
 }
 auto SetRequestHandler(ovf_com_transport_v1* api, ovf_com_handle_v1 endpoint_handle,
                        ovf_com_request_callback_v1 callback, void* user) -> ovf_com_status_v1 {
-  if (!callback)
-    return OVF_COM_STATUS_INVALID_ARGUMENT;
   auto& self = Self(api);
   std::lock_guard lock(self.mutex);
   auto found = self.endpoints.find(endpoint_handle);
   if (found == self.endpoints.end())
     return OVF_COM_STATUS_NOT_FOUND;
-  if (!found->second->server || found->second->request_callback)
+  if (!found->second->server)
+    return OVF_COM_STATUS_INVALID_STATE;
+  if (callback && found->second->request_callback)
     return OVF_COM_STATUS_INVALID_STATE;
   found->second->request_callback = callback;
-  found->second->request_user = user;
+  found->second->request_user = callback ? user : nullptr;
   return OVF_COM_STATUS_OK;
+}
+auto ResponseLoanAcquire(ovf_com_transport_v1* api, ovf_com_handle_v1 request_handle,
+                         std::size_t payload_size, ovf_com_status_v1 status, ovf_com_loan_v1* out)
+    -> ovf_com_status_v1 {
+  if (!out || out->struct_size < sizeof(*out) || status > OVF_COM_STATUS_APPLICATION_ERROR)
+    return OVF_COM_STATUS_INVALID_ARGUMENT;
+  auto& self = Self(api);
+  std::lock_guard lock(self.mutex);
+  auto found = self.active_requests.find(request_handle);
+  if (found == self.active_requests.end())
+    return OVF_COM_STATUS_NOT_FOUND;
+  if (self.response_loans.size() >= self.max_operations)
+    return OVF_COM_STATUS_RESOURCE_EXHAUSTED;
+  auto endpoint_found = self.endpoints.find(found->second.endpoint);
+  if (endpoint_found == self.endpoints.end() ||
+      payload_size > endpoint_found->second->mapping.response_payload_size)
+    return OVF_COM_STATUS_INVALID_ARGUMENT;
+  auto wire_size = sizeof(ResponseHeader) + payload_size;
+  iox2_response_mut_h response{};
+  auto result =
+      iox2_active_request_loan_slice_uninit(&found->second.request, nullptr, &response, wire_size);
+  if (result != IOX2_OK)
+    return OVF_COM_STATUS_RESOURCE_EXHAUSTED;
+  void* wire{};
+  iox2_response_mut_payload_mut(&response, &wire, nullptr);
+  ResponseHeader header{kResponseMagic, kEnvelopeVersion, static_cast<std::uint16_t>(status),
+                        static_cast<std::uint32_t>(payload_size), 0};
+  std::memcpy(wire, &header, sizeof(header));
+  auto loan_handle = self.next_handle++;
+  self.response_loans.emplace(loan_handle,
+                              ResponseLoan{response, found->second.request, endpoint_found->second,
+                                           payload_size, request_handle, found->second.endpoint});
+  self.active_requests.erase(found);
+  *out = {sizeof(*out),
+          loan_handle,
+          {static_cast<std::uint8_t*>(wire) + sizeof(ResponseHeader), payload_size}};
+  return OVF_COM_STATUS_OK;
+}
+auto ResponseLoanSend(ovf_com_transport_v1* api, ovf_com_handle_v1 request_handle,
+                      ovf_com_handle_v1 loan_handle, std::size_t used) -> ovf_com_status_v1 {
+  auto& self = Self(api);
+  ResponseLoan loan{};
+  {
+    std::lock_guard lock(self.mutex);
+    auto found = self.response_loans.find(loan_handle);
+    if (found == self.response_loans.end())
+      return OVF_COM_STATUS_NOT_FOUND;
+    if (found->second.payload_size != used || found->second.request_handle != request_handle)
+      return OVF_COM_STATUS_INVALID_ARGUMENT;
+    loan = found->second;
+    self.response_loans.erase(found);
+  }
+  auto result = iox2_response_mut_send(loan.response);
+  iox2_active_request_drop(loan.request);
+  if (result == IOX2_OK)
+    Notify(*loan.endpoint, 2);
+  return IoStatus(result);
 }
 auto Respond(ovf_com_transport_v1* api, ovf_com_handle_v1 request_handle, ovf_com_status_v1 status,
              ovf_com_bytes_view_v1 payload) -> ovf_com_status_v1 {
@@ -1214,7 +1420,11 @@ auto Create(ovf_com_host_api_v1 const* host, ovf_com_transport_config_v1 const* 
                Request,
                Cancel,
                SetRequestHandler,
-               Respond};
+               Respond,
+               RequestLoanAcquire,
+               RequestLoanSend,
+               ResponseLoanAcquire,
+               ResponseLoanSend};
   *out = &self.release()->api;
   return OVF_COM_STATUS_OK;
 }
@@ -1259,6 +1469,15 @@ auto SafeCreate(ovf_com_host_api_v1 const* host, ovf_com_transport_config_v1 con
                                     ovf_com_request_callback_v1, void*>;
     api.respond = &Safe<Respond, ovf_com_transport_v1*, ovf_com_handle_v1, ovf_com_status_v1,
                         ovf_com_bytes_view_v1>;
+    api.request_loan_acquire = &Safe<RequestLoanAcquire, ovf_com_transport_v1*, ovf_com_handle_v1,
+                                     std::size_t, std::uint64_t, ovf_com_loan_v1*>;
+    api.request_loan_send =
+        &Safe<RequestLoanSend, ovf_com_transport_v1*, ovf_com_handle_v1, ovf_com_handle_v1,
+              std::size_t, ovf_com_completion_callback_v1, void*, ovf_com_handle_v1*>;
+    api.response_loan_acquire = &Safe<ResponseLoanAcquire, ovf_com_transport_v1*, ovf_com_handle_v1,
+                                      std::size_t, ovf_com_status_v1, ovf_com_loan_v1*>;
+    api.response_loan_send = &Safe<ResponseLoanSend, ovf_com_transport_v1*, ovf_com_handle_v1,
+                                   ovf_com_handle_v1, std::size_t>;
   }
   return result;
 }

@@ -98,8 +98,12 @@ public:
 {% for method in service.methods|sort(attribute="tag") %}
     auto {{ method.name }}({{ method.input|cpp_type }} request, ovf::com::CallOptions options)
         -> ovf::com::Operation<ovf::com::MethodResult<{{ method.output|cpp_type }}, {{ method.application_error }}>> {
-        auto payload = ovf::com::encode(request);
-        auto state = binding_->invoke({{ service.name }}Contract::{{ method.name }}Descriptor, payload, options);
+        auto size = ovf::com::encoded_size(request);
+        auto state = binding_->invoke_loaned(
+            {{ service.name }}Contract::{{ method.name }}Descriptor, size,
+            [request = std::move(request)](std::span<std::byte> output) {
+                return ovf::com::encode_into(request, output);
+            }, options);
         return {std::move(state), +[](ovf::com::RawResult const& raw)
             -> ovf::com::MethodResult<{{ method.output|cpp_type }}, {{ method.application_error }}> {
             if (raw.has_error) return raw.error;
@@ -191,19 +195,17 @@ public:
                 if (!ovf::com::decode(bytes, request)) return ovf::com::RawServerResult{};
                 auto result = implementation_->{{ method.name }}(request);
                 if (result.index() == 0)
-                    return ovf::com::RawServerResult{{ '{' }}{}, false, false,
-                                                    ovf::com::encode(std::get<0>(result))};
+                    return ovf::com::make_raw_result(std::move(std::get<0>(result)));
 {% if method.errors %}
                 if (result.index() == 1) {
                     auto const& application = std::get<1>(result);
-                    std::vector<std::byte> payload{static_cast<std::byte>(application.index())};
 {% for error in method.errors %}
                     {% if loop.first %}if{% else %}else if{% endif %} (application.index() == {{ loop.index0 }}) {
-                        auto encoded = ovf::com::encode(std::get<{{ loop.index0 }}>(application));
-                        payload.insert(payload.end(), encoded.begin(), encoded.end());
+                        return ovf::com::make_application_raw_result(
+                            {{ loop.index0 }}, std::move(std::get<{{ loop.index0 }}>(application)));
                     }
 {% endfor %}
-                    return ovf::com::RawServerResult{{ '{' }}{}, false, true, std::move(payload)};
+                    return ovf::com::RawServerResult{};
                 }
 {% endif %}
                 return ovf::com::RawServerResult{std::get<ovf::com::CommunicationError>(result),
@@ -216,8 +218,7 @@ public:
                 if (!bytes.empty()) return ovf::com::RawServerResult{};
                 auto result = implementation_->get{{ field.name }}();
                 if (result.index() == 0)
-                    return ovf::com::RawServerResult{{ '{' }}{}, false, false,
-                                                    ovf::com::encode(std::get<0>(result))};
+                    return ovf::com::make_raw_result(std::move(std::get<0>(result)));
                 if (result.index() == 1) return ovf::com::RawServerResult{};
                 return ovf::com::RawServerResult{std::get<ovf::com::CommunicationError>(result),
                                                 true, false, {}};

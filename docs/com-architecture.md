@@ -88,12 +88,34 @@ second native middleware configuration.
 
 - The in-process transport is the reference implementation for discovery,
   events, methods, deadlines, cancellation, and shutdown behavior.
-- The iceoryx2 transport supports discovery, variable-size events, native
-  publisher/subscriber loans, scatter/gather publication, request/response
-  methods, application errors, deadlines, cancellation, and ordered delivery.
-  Provider availability uses a binding-owned discovery service; application
-  payloads use iceoryx2's native publish/subscribe and request/response
-  messaging patterns.
+- The iceoryx2 transport is daemonless: every process owns an iceoryx2 node and
+  exchanges application data through native publish/subscribe and
+  request/response services. Generated event, request, and response encoders
+  write directly into provider-owned loans; older ABI providers use the bounded
+  copy fallback.
+- Each data service has a binding-owned event service used only for readiness
+  notification. Its listener file descriptor is integrated with the transport
+  reactor, so delivery does not depend on a sleep-and-poll loop. A bounded
+  reactor timeout reconciles deadlines and abnormal peer state.
+- Provider discovery uses a separate `<service>/__ovf_provider` event service.
+  Current notifier count is the authoritative availability snapshot, while
+  notifier-created, notifier-dropped, and notifier-dead events wake discovery
+  watches. No discovery daemon or payload publisher heuristic is required.
+- Event samples remain provider-owned until the synchronous application
+  callback returns. The callback decodes directly from the shared-memory view;
+  retaining that view beyond the callback is invalid. Request and response
+  loans are consumed exactly once by send, publish, release, cancellation, or
+  shutdown.
+- Incoming method requests are dispatched as views over their active native
+  request, and incoming native responses remain borrowed through the completion
+  callback. The asynchronous C++ operation then performs one ownership copy so
+  its result can safely outlive the transport callback. Typed decoding may copy
+  fields into the generated value; the transport adds no intermediate staging
+  copy.
+- Deployment fixes publisher, subscriber, client, server, history, buffer, and
+  outstanding-loan budgets. iceoryx2 services use static allocation and reject
+  creation or traffic when these bounds cannot be honored; the binding does not
+  silently degrade delivery guarantees.
 - The vSomeIP transport supports discovery, events, and request/response on
   Linux. Its native peer test is platform-gated.
 - A Cyclone DDS transport is planned but is not implemented.
@@ -105,8 +127,12 @@ errors, field reads, event delivery, and field notifications.
 
 ## Stability boundary
 
-The C transport ABI is versioned, but ABI compatibility is not promised before
-an explicit version-1 readiness gate. Generated C++ APIs and deployment
-artifacts are likewise experimental. Capability validation, bounded resource
-behavior, deterministic code generation, and explicit teardown are design
-inputs; they are not evidence of a safety-qualified implementation.
+The C transport ABI is versioned and extended append-only. Consumers validate
+`struct_size` before reading optional function pointers and negotiate native
+event, request, and response loans through capability bits. Older version-1
+providers remain usable through the base-size boundary and copy fallback.
+Compatibility is not promised before an explicit version-1 readiness gate.
+Generated C++ APIs and deployment artifacts are likewise experimental.
+Capability validation, bounded resource behavior, deterministic code
+generation, and explicit teardown are design inputs; they are not evidence of
+a safety-qualified implementation.

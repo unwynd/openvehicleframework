@@ -25,7 +25,7 @@ int main(void) {
   ovf_com_transport_config_v1 config = {sizeof(config), {0, 0}, {0, 0}, 1, 1};
   ovf_com_transport_v1* transport = 0;
   assert(factory->create(&host, &config, &transport) == OVF_COM_STATUS_OK);
-  assert(transport && transport->struct_size == sizeof(*transport));
+  assert(transport && transport->struct_size >= OVF_COM_TRANSPORT_V1_BASE_SIZE);
   ovf_com_capabilities_v1 capabilities = {0};
   capabilities.struct_size = sizeof(capabilities);
   assert(transport->get_capabilities(transport, &capabilities) == OVF_COM_STATUS_OK);

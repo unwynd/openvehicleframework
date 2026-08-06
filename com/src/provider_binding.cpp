@@ -25,6 +25,35 @@ auto DeadlineNs(std::chrono::steady_clock::time_point value) -> std::uint64_t {
       std::chrono::duration_cast<std::chrono::nanoseconds>(value.time_since_epoch()).count());
 }
 
+template <class Member>
+auto HasExtension(ovf_com_transport_v1 const& provider, std::size_t offset,
+                  Member ovf_com_transport_v1::* member) -> bool {
+  return provider.struct_size >= offset + sizeof(provider.*member) && provider.*member != nullptr;
+}
+
+auto HasCapability(ovf_com_transport_v1& provider, std::uint64_t capability) -> bool {
+  ovf_com_capabilities_v1 capabilities{};
+  capabilities.struct_size = sizeof(capabilities);
+  return provider.get_capabilities(&provider, &capabilities) == OVF_COM_STATUS_OK &&
+         (capabilities.feature_bits & capability) == capability;
+}
+
+auto HasRequestLoans(ovf_com_transport_v1& provider) -> bool {
+  return HasCapability(provider, OVF_COM_CAP_REQUEST_LOANS) &&
+         HasExtension(provider, offsetof(ovf_com_transport_v1, request_loan_acquire),
+                      &ovf_com_transport_v1::request_loan_acquire) &&
+         HasExtension(provider, offsetof(ovf_com_transport_v1, request_loan_send),
+                      &ovf_com_transport_v1::request_loan_send);
+}
+
+auto HasResponseLoans(ovf_com_transport_v1& provider) -> bool {
+  return HasCapability(provider, OVF_COM_CAP_RESPONSE_LOANS) &&
+         HasExtension(provider, offsetof(ovf_com_transport_v1, response_loan_acquire),
+                      &ovf_com_transport_v1::response_loan_acquire) &&
+         HasExtension(provider, offsetof(ovf_com_transport_v1, response_loan_send),
+                      &ovf_com_transport_v1::response_loan_send);
+}
+
 auto MapStatus(ovf_com_status_v1 status) -> CommunicationError {
   switch (status) {
   case OVF_COM_STATUS_NOT_FOUND:
@@ -405,6 +434,68 @@ auto ProviderClientBinding::invoke(ElementDescriptor const& element,
   return state;
 }
 
+auto ProviderClientBinding::invoke_loaned(ElementDescriptor const& element, std::size_t size,
+                                          std::function<bool(std::span<std::byte>)> encode,
+                                          CallOptions options) -> std::shared_ptr<RawOperation> {
+  const bool extension_available = HasRequestLoans(*provider_);
+  if (!extension_available) {
+    std::vector<std::byte> payload(size);
+    if (!encode(payload)) {
+      auto state = std::make_shared<OperationState>(*provider_, OVF_COM_INVALID_HANDLE_V1);
+      state->fail(OVF_COM_STATUS_TRANSPORT_ERROR);
+      return state;
+    }
+    return invoke(element, payload, options);
+  }
+  auto descriptor = Descriptor(route_, element, OVF_COM_ENDPOINT_METHOD_CLIENT);
+  ovf_com_handle_v1 endpoint{};
+  auto status = provider_->endpoint_create(provider_, &descriptor, &endpoint);
+  auto state = std::make_shared<OperationState>(*provider_, endpoint);
+  if (status != OVF_COM_STATUS_OK) {
+    state->fail(status);
+    return state;
+  }
+  ovf_com_loan_v1 loan{sizeof(loan), OVF_COM_INVALID_HANDLE_V1, {nullptr, 0}};
+  status = provider_->request_loan_acquire(provider_, endpoint, size, DeadlineNs(options.deadline),
+                                           &loan);
+  if (status == OVF_COM_STATUS_UNSUPPORTED) {
+    std::vector<std::byte> payload(size);
+    if (!encode(payload)) {
+      state->fail(OVF_COM_STATUS_TRANSPORT_ERROR);
+      return state;
+    }
+    state->retain();
+    ovf_com_handle_v1 operation{};
+    status = provider_->request(
+        provider_, endpoint,
+        {reinterpret_cast<std::uint8_t const*>(payload.data()), payload.size()},
+        DeadlineNs(options.deadline), &OperationState::Complete, state.get(), &operation);
+    if (status == OVF_COM_STATUS_OK)
+      state->accepted(operation);
+    else
+      state->fail(status);
+    return state;
+  }
+  if (status != OVF_COM_STATUS_OK) {
+    state->fail(status);
+    return state;
+  }
+  if (!encode(std::span(reinterpret_cast<std::byte*>(loan.bytes.data), loan.bytes.size))) {
+    (void)provider_->loan_release(provider_, loan.handle);
+    state->fail(OVF_COM_STATUS_TRANSPORT_ERROR);
+    return state;
+  }
+  state->retain();
+  ovf_com_handle_v1 operation{};
+  status = provider_->request_loan_send(provider_, endpoint, loan.handle, size,
+                                        &OperationState::Complete, state.get(), &operation);
+  if (status == OVF_COM_STATUS_OK)
+    state->accepted(operation);
+  else
+    state->fail(status);
+  return state;
+}
+
 auto ProviderClientBinding::subscribe(ElementDescriptor const& element)
     -> std::shared_ptr<RawSubscription> {
   auto descriptor = Descriptor(route_, element, OVF_COM_ENDPOINT_EVENT_SUBSCRIBER);
@@ -495,11 +586,39 @@ struct ProviderServerBinding::Impl {
           {reinterpret_cast<std::byte const*>(payload.data), payload.size},
           std::chrono::steady_clock::time_point(std::chrono::nanoseconds(deadline_ns)));
     } catch (...) {
-      result = {CommunicationError::provider_failure, true, false, {}};
+      result = {CommunicationError::provider_failure, true, false, {}, 0, {}};
     }
     auto status = result.application_error ? OVF_COM_STATUS_APPLICATION_ERROR
                   : result.has_error       ? AbiStatus(result.error)
                                            : OVF_COM_STATUS_OK;
+    if (result.encode_payload && HasResponseLoans(*method.owner->provider)) {
+      ovf_com_loan_v1 loan{sizeof(loan), OVF_COM_INVALID_HANDLE_V1, {nullptr, 0}};
+      auto loan_status = method.owner->provider->response_loan_acquire(
+          method.owner->provider, request, result.encoded_payload_size, status, &loan);
+      if (loan_status == OVF_COM_STATUS_OK) {
+        auto destination =
+            std::span(reinterpret_cast<std::byte*>(loan.bytes.data), loan.bytes.size);
+        if (result.encode_payload(destination)) {
+          (void)method.owner->provider->response_loan_send(
+              method.owner->provider, request, loan.handle, result.encoded_payload_size);
+          return;
+        }
+        (void)method.owner->provider->loan_release(method.owner->provider, loan.handle);
+        return;
+      }
+    }
+    if (result.encode_payload) {
+      try {
+        result.payload.resize(result.encoded_payload_size);
+      } catch (...) {
+        status = OVF_COM_STATUS_RESOURCE_EXHAUSTED;
+        result.payload.clear();
+      }
+      if (status != OVF_COM_STATUS_RESOURCE_EXHAUSTED && !result.encode_payload(result.payload)) {
+        status = OVF_COM_STATUS_TRANSPORT_ERROR;
+        result.payload.clear();
+      }
+    }
     (void)method.owner->provider->respond(
         method.owner->provider, request, status,
         {reinterpret_cast<std::uint8_t const*>(result.payload.data()), result.payload.size()});
@@ -598,9 +717,9 @@ auto ProviderServerBinding::publish(ElementDescriptor const& element,
                                      : std::optional<CommunicationError>{MapStatus(status)};
 }
 
-auto ProviderServerBinding::publish_loaned(
-    ElementDescriptor const& element, std::size_t size,
-    std::function<bool(std::span<std::byte>)> encode) -> std::optional<CommunicationError> {
+auto ProviderServerBinding::publish_loaned(ElementDescriptor const& element, std::size_t size,
+                                           std::function<bool(std::span<std::byte>)> encode)
+    -> std::optional<CommunicationError> {
   if (!impl_)
     return CommunicationError::shutting_down;
   ovf_com_handle_v1 endpoint{};

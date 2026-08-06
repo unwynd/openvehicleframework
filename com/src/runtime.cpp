@@ -318,7 +318,7 @@ RuntimeError Runtime::AddTransport(const ovf_com_transport_factory_v1& factory,
   if (result != OVF_COM_STATUS_OK) {
     return ToRuntimeError(result);
   }
-  if (instance == nullptr || instance->struct_size < sizeof(ovf_com_transport_v1) ||
+  if (instance == nullptr || instance->struct_size < OVF_COM_TRANSPORT_V1_BASE_SIZE ||
       instance->abi_version != OVF_COM_TRANSPORT_ABI_VERSION_1 || instance->start == nullptr ||
       instance->stop == nullptr || instance->get_capabilities == nullptr ||
       instance->watch_start == nullptr || instance->watch_stop == nullptr ||

@@ -135,9 +135,8 @@ auto ParseMapping(std::string_view text, Mapping& out, std::string& error) -> bo
     seen |= bit;
   }
   constexpr std::uint32_t common = (1U << 0) | (1U << 1) | (1U << 4) | (1U << 9);
-  constexpr std::uint32_t pubsub =
-      common | (1U << 2) | (1U << 3) | (1U << 5) | (1U << 6) | (1U << 7) | (1U << 8) |
-      (1U << 18) | (1U << 19);
+  constexpr std::uint32_t pubsub = common | (1U << 2) | (1U << 3) | (1U << 5) | (1U << 6) |
+                                   (1U << 7) | (1U << 8) | (1U << 18) | (1U << 19);
   constexpr std::uint32_t request_response = common | (1U << 10) | (1U << 11) | (1U << 12) |
                                              (1U << 13) | (1U << 14) | (1U << 15) | (1U << 16) |
                                              (1U << 17) | (1U << 20) | (1U << 21) | (1U << 22);

@@ -10,10 +10,12 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -157,6 +159,7 @@ public:
     return true;
   }
   auto empty() const noexcept -> bool { return bytes_.empty(); }
+  auto remaining() const noexcept -> std::size_t { return bytes_.size(); }
 
 private:
   std::span<const std::byte> bytes_;
@@ -253,6 +256,75 @@ template <class T, std::size_t N> struct Codec<BoundedVector<T, N>> {
     return true;
   }
 };
+template <class T, std::size_t N> struct Codec<std::array<T, N>> {
+  static auto encode(Encoder& out, std::array<T, N> const& value) -> bool {
+    for (auto const& item : value)
+      if (!Codec<T>::encode(out, item))
+        return false;
+    return true;
+  }
+  static auto decode(Decoder& in, std::array<T, N>& value) -> bool {
+    for (auto& item : value)
+      if (!Codec<T>::decode(in, item))
+        return false;
+    return true;
+  }
+};
+template <> struct Codec<std::string> {
+  static auto encode(Encoder& out, std::string const& value) -> bool {
+    if (value.size() > std::numeric_limits<std::uint32_t>::max())
+      return false;
+    Codec<std::uint32_t>::encode(out, static_cast<std::uint32_t>(value.size()));
+    out.raw(std::as_bytes(std::span(value.data(), value.size())));
+    return true;
+  }
+  static auto decode(Decoder& in, std::string& value) -> bool {
+    std::uint32_t size{};
+    std::span<const std::byte> bytes;
+    if (!Codec<std::uint32_t>::decode(in, size) || size > in.remaining() || !in.raw(size, bytes))
+      return false;
+    value.assign(reinterpret_cast<char const*>(bytes.data()), bytes.size());
+    return true;
+  }
+};
+template <class T> struct Codec<std::vector<T>> {
+  static auto encode(Encoder& out, std::vector<T> const& value) -> bool {
+    if (value.size() > std::numeric_limits<std::uint32_t>::max())
+      return false;
+    Codec<std::uint32_t>::encode(out, static_cast<std::uint32_t>(value.size()));
+    for (auto const& item : value)
+      if (!Codec<T>::encode(out, item))
+        return false;
+    return true;
+  }
+  static auto decode(Decoder& in, std::vector<T>& value) -> bool {
+    std::uint32_t size{};
+    if (!Codec<std::uint32_t>::decode(in, size) || size > in.remaining())
+      return false;
+    value.clear();
+    value.reserve(size);
+    for (std::uint32_t index = 0; index < size; ++index) {
+      T item{};
+      if (!Codec<T>::decode(in, item))
+        return false;
+      value.push_back(std::move(item));
+    }
+    return true;
+  }
+};
+template <> struct Codec<std::span<const std::byte>> {
+  static auto encode(Encoder& out, std::span<const std::byte> value) -> bool {
+    if (value.size() > std::numeric_limits<std::uint32_t>::max())
+      return false;
+    Codec<std::uint32_t>::encode(out, static_cast<std::uint32_t>(value.size()));
+    out.raw(value);
+    return true;
+  }
+  static auto decode(Decoder& in, std::span<const std::byte>& value) -> bool {
+    std::uint32_t size{};
+    return Codec<std::uint32_t>::decode(in, size) && size <= in.remaining() && in.raw(size, value);
+  }
+};
 template <class T> struct Codec<std::optional<T>> {
   static auto encode(Encoder& out, std::optional<T> const& value) -> bool {
     Codec<std::uint8_t>::encode(out, value ? 1U : 0U);
@@ -286,7 +358,8 @@ template <class T> auto encoded_size(T const& value) -> std::size_t {
 }
 template <class T> auto encode_into(T const& value, std::span<std::byte> destination) -> bool {
   Encoder encoder(destination);
-  return Codec<T>::encode(encoder, value) && encoder.valid() && encoder.size() == destination.size();
+  return Codec<T>::encode(encoder, value) && encoder.valid() &&
+         encoder.size() == destination.size();
 }
 template <class T> auto decode(std::span<const std::byte> bytes, T& value) -> bool {
   Decoder decoder(bytes);
@@ -318,6 +391,9 @@ public:
   virtual ~ClientBinding() = default;
   virtual auto invoke(ElementDescriptor const&, std::span<const std::byte>, CallOptions)
       -> std::shared_ptr<RawOperation> = 0;
+  virtual auto invoke_loaned(ElementDescriptor const&, std::size_t,
+                             std::function<bool(std::span<std::byte>)>, CallOptions)
+      -> std::shared_ptr<RawOperation> = 0;
   virtual auto subscribe(ElementDescriptor const&) -> std::shared_ptr<RawSubscription> = 0;
 };
 
@@ -326,7 +402,29 @@ struct RawServerResult {
   bool has_error{};
   bool application_error{};
   std::vector<std::byte> payload;
+  std::size_t encoded_payload_size{};
+  std::function<bool(std::span<std::byte>)> encode_payload;
 };
+
+template <class T> auto make_raw_result(T value) -> RawServerResult {
+  auto stored = std::make_shared<T>(std::move(value));
+  auto size = encoded_size(*stored);
+  return {{}, false, false, {}, size, [stored = std::move(stored)](std::span<std::byte> output) {
+            return encode_into(*stored, output);
+          }};
+}
+template <class T>
+auto make_application_raw_result(std::uint8_t index, T value) -> RawServerResult {
+  auto stored = std::make_shared<T>(std::move(value));
+  auto size = encoded_size(*stored) + 1;
+  return {
+      {}, false, true, {}, size, [index, stored = std::move(stored)](std::span<std::byte> output) {
+        if (output.empty())
+          return false;
+        output.front() = static_cast<std::byte>(index);
+        return encode_into(*stored, output.subspan(1));
+      }};
+}
 
 class ServerBinding {
 public:

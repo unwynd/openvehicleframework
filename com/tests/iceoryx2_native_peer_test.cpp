@@ -38,6 +38,7 @@ struct Context {
   bool delivered{};
   bool native_loan{};
   bool discovered{};
+  bool withdrawn{};
   bool completed{};
   ovf_com_status_v1 completion_status{OVF_COM_STATUS_TRANSPORT_ERROR};
   std::vector<std::uint8_t> response;
@@ -72,7 +73,10 @@ void Discovery(void* user, ovf_com_discovery_entry_v1 const* entry) {
   auto& context = *static_cast<Context*>(user);
   {
     std::lock_guard lock(context.mutex);
-    context.discovered = entry && entry->available;
+    if (entry && entry->available)
+      context.discovered = true;
+    else if (entry && context.discovered)
+      context.withdrawn = true;
   }
   context.changed.notify_all();
 }
@@ -93,8 +97,13 @@ void Method(void* user, ovf_com_handle_v1 request, ovf_com_bytes_view_v1 payload
   assert(deadline != 0);
   std::vector<std::uint8_t> response(payload.data, payload.data + payload.size);
   std::reverse(response.begin(), response.end());
-  assert(context.transport->respond(context.transport, request, OVF_COM_STATUS_OK,
-                                    {response.data(), response.size()}) == OVF_COM_STATUS_OK);
+  ovf_com_loan_v1 loan{};
+  loan.struct_size = sizeof(loan);
+  assert(context.transport->response_loan_acquire(context.transport, request, response.size(),
+                                                  OVF_COM_STATUS_OK, &loan) == OVF_COM_STATUS_OK);
+  std::memcpy(loan.bytes.data, response.data(), response.size());
+  assert(context.transport->response_loan_send(context.transport, request, loan.handle,
+                                               response.size()) == OVF_COM_STATUS_OK);
   {
     std::lock_guard lock(context.mutex);
     context.completed = true;
@@ -171,7 +180,7 @@ auto PublishPattern() -> int {
   factory->destroy(transport);
   return 0;
 }
-auto ServeMethod() -> int {
+auto ServeMethod(bool crash_after_response) -> int {
   auto factory = ovf_com_iceoryx2_transport_query_v1();
   ovf_com_host_api_v1 host{sizeof(host), nullptr, Log, Dispatch, Clock};
   constexpr char instance[] = "method-server";
@@ -194,6 +203,8 @@ auto ServeMethod() -> int {
                                   [&context] { return context.completed; }))
       return 10;
   }
+  if (crash_after_response)
+    _Exit(0);
   if (transport->endpoint_destroy(transport, server) != OVF_COM_STATUS_OK ||
       transport->stop(transport) != OVF_COM_STATUS_OK)
     return 11;
@@ -210,7 +221,9 @@ int main(int argc, char** argv) {
   if (argc == 2 && std::string_view(argv[1]) == "--publish-pattern")
     return PublishPattern();
   if (argc == 2 && std::string_view(argv[1]) == "--serve-method")
-    return ServeMethod();
+    return ServeMethod(false);
+  if (argc == 2 && std::string_view(argv[1]) == "--serve-method-crash")
+    return ServeMethod(true);
   pid_t child{};
   char mode[] = "--crash-with-loan";
   char* child_argv[]{argv[0], mode, nullptr};
@@ -237,12 +250,26 @@ int main(int argc, char** argv) {
   assert(transport->subscribe(transport, subscriber, Sample, &context, &subscription) ==
          OVF_COM_STATUS_OK);
 
+  auto publisher_descriptor = Descriptor(OVF_COM_ENDPOINT_EVENT_PUBLISHER);
+  ovf_com_handle_v1 bounded_publisher{};
+  assert(transport->endpoint_create(transport, &publisher_descriptor, &bounded_publisher) ==
+         OVF_COM_STATUS_OK);
+  ovf_com_loan_v1 first{sizeof(first), OVF_COM_INVALID_HANDLE_V1, {nullptr, 0}};
+  ovf_com_loan_v1 second{sizeof(second), OVF_COM_INVALID_HANDLE_V1, {nullptr, 0}};
+  ovf_com_loan_v1 exhausted{sizeof(exhausted), OVF_COM_INVALID_HANDLE_V1, {nullptr, 0}};
+  assert(transport->loan_acquire(transport, bounded_publisher, 64, &first) == OVF_COM_STATUS_OK);
+  assert(transport->loan_acquire(transport, bounded_publisher, 64, &second) == OVF_COM_STATUS_OK);
+  assert(transport->loan_acquire(transport, bounded_publisher, 64, &exhausted) ==
+         OVF_COM_STATUS_RESOURCE_EXHAUSTED);
+  assert(transport->loan_release(transport, first.handle) == OVF_COM_STATUS_OK);
+  assert(transport->loan_release(transport, second.handle) == OVF_COM_STATUS_OK);
+  assert(transport->endpoint_destroy(transport, bounded_publisher) == OVF_COM_STATUS_OK);
+
   char publish_mode[] = "--publish-pattern";
   char* publisher_argv[]{argv[0], publish_mode, nullptr};
   assert(posix_spawn(&child, argv[0], nullptr, nullptr, publisher_argv, environ) == 0);
   assert(waitpid(child, &child_status, 0) == child);
   assert(WIFEXITED(child_status) && WEXITSTATUS(child_status) == 0);
-
   {
     std::unique_lock lock(context.mutex);
     assert(context.changed.wait_for(lock, std::chrono::seconds(3),
@@ -260,7 +287,11 @@ int main(int argc, char** argv) {
   ovf_com_handle_v1 watch{};
   assert(transport->watch_start(transport, &filter, Discovery, &context, &watch) ==
          OVF_COM_STATUS_OK);
+#if defined(__APPLE__)
   char method_mode[] = "--serve-method";
+#else
+  char method_mode[] = "--serve-method-crash";
+#endif
   char* method_argv[]{argv[0], method_mode, nullptr};
   assert(posix_spawn(&child, argv[0], nullptr, nullptr, method_argv, environ) == 0);
   {
@@ -273,8 +304,13 @@ int main(int argc, char** argv) {
   assert(transport->endpoint_create(transport, &client_descriptor, &client) == OVF_COM_STATUS_OK);
   std::array<std::uint8_t, 5> request{1, 2, 3, 4, 5};
   auto deadline = Clock(nullptr) + 2'000'000'000ULL;
-  assert(transport->request(transport, client, {request.data(), request.size()}, deadline,
-                            Completion, &context, &operation) == OVF_COM_STATUS_OK);
+  ovf_com_loan_v1 request_loan{};
+  request_loan.struct_size = sizeof(request_loan);
+  assert(transport->request_loan_acquire(transport, client, request.size(), deadline,
+                                         &request_loan) == OVF_COM_STATUS_OK);
+  std::memcpy(request_loan.bytes.data, request.data(), request.size());
+  assert(transport->request_loan_send(transport, client, request_loan.handle, request.size(),
+                                      Completion, &context, &operation) == OVF_COM_STATUS_OK);
   {
     std::unique_lock lock(context.mutex);
     assert(context.changed.wait_for(lock, std::chrono::seconds(3),
@@ -284,6 +320,11 @@ int main(int argc, char** argv) {
   }
   assert(waitpid(child, &child_status, 0) == child);
   assert(WIFEXITED(child_status) && WEXITSTATUS(child_status) == 0);
+  {
+    std::unique_lock lock(context.mutex);
+    assert(context.changed.wait_for(lock, std::chrono::seconds(3),
+                                    [&context] { return context.withdrawn; }));
+  }
   {
     std::lock_guard lock(context.mutex);
     context.completed = false;

@@ -61,7 +61,9 @@ enum {
   OVF_COM_CAP_RELIABLE = UINT64_C(1) << 5,
   OVF_COM_CAP_ORDERED = UINT64_C(1) << 6,
   OVF_COM_CAP_DEADLINES = UINT64_C(1) << 7,
-  OVF_COM_CAP_CANCELLATION = UINT64_C(1) << 8
+  OVF_COM_CAP_CANCELLATION = UINT64_C(1) << 8,
+  OVF_COM_CAP_REQUEST_LOANS = UINT64_C(1) << 9,
+  OVF_COM_CAP_RESPONSE_LOANS = UINT64_C(1) << 10
 };
 
 typedef struct ovf_com_string_view_v1 {
@@ -208,7 +210,20 @@ struct ovf_com_transport_v1 {
                                            ovf_com_request_callback_v1, void*);
   ovf_com_status_v1 (*respond)(ovf_com_transport_v1*, ovf_com_handle_v1, ovf_com_status_v1,
                                ovf_com_bytes_view_v1);
+  /* Optional append-only v1 extensions. Presence is determined from struct_size and capability
+     bits, preserving compatibility with providers built against the original v1 layout. */
+  ovf_com_status_v1 (*request_loan_acquire)(ovf_com_transport_v1*, ovf_com_handle_v1, size_t,
+                                            uint64_t, ovf_com_loan_v1*);
+  ovf_com_status_v1 (*request_loan_send)(ovf_com_transport_v1*, ovf_com_handle_v1,
+                                         ovf_com_handle_v1, size_t, ovf_com_completion_callback_v1,
+                                         void*, ovf_com_handle_v1*);
+  ovf_com_status_v1 (*response_loan_acquire)(ovf_com_transport_v1*, ovf_com_handle_v1, size_t,
+                                             ovf_com_status_v1, ovf_com_loan_v1*);
+  ovf_com_status_v1 (*response_loan_send)(ovf_com_transport_v1*, ovf_com_handle_v1,
+                                          ovf_com_handle_v1, size_t);
 };
+
+#define OVF_COM_TRANSPORT_V1_BASE_SIZE offsetof(ovf_com_transport_v1, request_loan_acquire)
 
 typedef struct ovf_com_transport_factory_v1 {
   uint32_t struct_size;
