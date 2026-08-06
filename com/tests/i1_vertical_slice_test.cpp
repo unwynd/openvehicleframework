@@ -130,8 +130,9 @@ int main() {
   int field_updates{};
   VehicleState notified{};
   auto field_subscription = proxy.subscribeVehicleStateField();
-  field_subscription.on_sample([&](VehicleState const& value) {
-    notified = value;
+  field_subscription.on_sample_view([&](auto const& view) {
+    assert(!view.bytes().empty());
+    assert(view.decode(notified));
     ++field_updates;
   });
   implementation.state.speedMetersPerSecond = 21.0F;

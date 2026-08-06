@@ -535,6 +535,18 @@ private:
 template <class T> class EventSubscription {
 public:
   using Callback = std::function<void(T const&)>;
+  class SampleView final {
+  public:
+    explicit SampleView(std::span<const std::byte> bytes) noexcept : bytes_(bytes) {}
+    SampleView(SampleView const&) = delete;
+    SampleView& operator=(SampleView const&) = delete;
+    [[nodiscard]] auto bytes() const noexcept -> std::span<const std::byte> { return bytes_; }
+    [[nodiscard]] auto decode(T& value) const -> bool { return ovf::com::decode(bytes_, value); }
+
+  private:
+    std::span<const std::byte> bytes_;
+  };
+  using ViewCallback = std::function<void(SampleView const&)>;
   using StateCallback = RawSubscription::StateCallback;
   using Decode = bool (*)(std::span<const std::byte>, T&);
   EventSubscription(std::shared_ptr<RawSubscription> state, Decode decode)
@@ -550,6 +562,14 @@ public:
       T value{};
       if (decode(bytes, value))
         callback(value);
+    });
+  }
+  auto on_sample_view(ViewCallback callback) -> void {
+    if (!state_)
+      return;
+    state_->set_callback([callback = std::move(callback)](auto bytes) {
+      SampleView view(bytes);
+      callback(view);
     });
   }
   auto on_state(StateCallback callback) -> void {

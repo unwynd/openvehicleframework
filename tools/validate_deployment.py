@@ -35,7 +35,7 @@ def _wire_id(value: str, lower: int, upper: int) -> int:
 
 def _route_features(role: str, profile: str) -> list[str]:
     common = ["events", "methods", "reliable", "ordered", "deadlines", "cancellation",
-              "subscriptionState"]
+              "subscriptionState", "health", "diagnostics"]
     if role == "consumer":
         common.insert(0, "discovery")
     if profile == "iceoryx2":
@@ -255,7 +255,8 @@ def resolve_deployment(contract: dict, model: dict) -> dict:
 def structural_errors(value: object) -> list[str]:
     errors: list[str] = []
     allowed_features = {"discovery", "events", "methods", "loans", "scatterGather",
-        "reliable", "ordered", "deadlines", "cancellation", "subscriptionState"}
+        "reliable", "ordered", "deadlines", "cancellation", "subscriptionState", "health",
+        "diagnostics"}
     limits = {"maxPayloadSize", "maxHistoryDepth", "maxOutstandingOperations", "maxEndpoints"}
     if not isinstance(value, dict): return ["deployment root must be an object"]
     required_root = {"deploymentVersion", "contractFingerprint", "providers", "instances"}
@@ -314,7 +315,7 @@ def profile_errors(profile: object, expected_name: str) -> list[str]:
     if set(profile) != keys: errors.append("missing or unknown profile properties")
     if profile.get("profileVersion") != 1 or profile.get("name") != expected_name: errors.append("invalid profile identity")
     if profile.get("isolation") not in ("independent", "sharedEngine", "processSingleton"): errors.append("invalid isolation")
-    allowed_features = {"discovery", "events", "methods", "loans", "scatterGather", "reliable", "ordered", "deadlines", "cancellation", "subscriptionState"}
+    allowed_features = {"discovery", "events", "methods", "loans", "scatterGather", "reliable", "ordered", "deadlines", "cancellation", "subscriptionState", "health", "diagnostics"}
     features = profile.get("features")
     if not isinstance(features, list) or any(item not in allowed_features for item in features) or len(features) != len(set(features)): errors.append("invalid profile features")
     required_limits = {"maxPayloadSize", "maxHistoryDepth", "maxOutstandingOperations", "maxEndpoints"}

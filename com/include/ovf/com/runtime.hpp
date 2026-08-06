@@ -21,6 +21,8 @@ class RuntimeAccess;
 enum class LogLevel { debug, info, warning, error };
 
 using Logger = std::function<void(LogLevel, std::string_view)>;
+/* A custom dispatcher follows docs/com-executor-contract.md. In particular it is bounded, FIFO,
+   and serializes callbacks submitted for the same provider handle. */
 using Dispatcher = std::function<bool(std::function<void()>)>;
 
 struct RuntimeConfig {

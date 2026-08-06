@@ -50,6 +50,7 @@ struct InprocTransport {
   ovf_com_transport_v1 api{};
   const ovf_com_host_api_v1* host{};
   std::mutex mutex;
+  std::mutex diagnostic_mutex;
   bool running{false};
   ovf_com_handle_v1 next_handle{1};
   std::uint64_t sequence{};
@@ -88,8 +89,27 @@ template <class Task> ovf_com_status_v1 Dispatch(InprocTransport& self, Task tas
   auto run = [](void* value) { (*static_cast<Task*>(value))(); };
   auto release = [](void* value) { delete static_cast<Task*>(value); };
   auto result = self.host->dispatch(self.host->user_data, run, release, stored);
-  if (result != OVF_COM_STATUS_OK)
+  if (result != OVF_COM_STATUS_OK) {
     release(stored);
+    ovf_com_diagnostic_callback_v1 callback{};
+    void* user{};
+    {
+      std::lock_guard lock(self.diagnostic_mutex);
+      callback = self.diagnostic_callback;
+      user = self.diagnostic_user;
+    }
+    if (callback) {
+      constexpr char message[] = "host executor rejected callback";
+      ovf_com_diagnostic_v1 diagnostic{sizeof(diagnostic),
+                                       result,
+                                       OVF_COM_DIAGNOSTIC_PROVIDER,
+                                       0,
+                                       0,
+                                       0,
+                                       {message, sizeof(message) - 1U}};
+      callback(user, &diagnostic);
+    }
+  }
   return result;
 }
 
@@ -136,7 +156,7 @@ ovf_com_status_v1 Start(ovf_com_transport_v1* api) {
 ovf_com_status_v1 Stop(ovf_com_transport_v1* api) {
   auto& self = Self(api);
   std::vector<std::pair<ovf_com_handle_v1, Pending>> pending;
-  std::vector<std::shared_ptr<Subscription>> subscriptions;
+  std::vector<std::pair<ovf_com_handle_v1, std::shared_ptr<Subscription>>> subscriptions;
   std::vector<std::shared_ptr<Watch>> watches;
   std::vector<std::shared_ptr<Server>> servers;
   ovf_com_health_callback_v1 callback{};
@@ -151,8 +171,8 @@ ovf_com_status_v1 Stop(ovf_com_transport_v1* api) {
       pending.push_back(item);
     self.pending.clear();
     self.loans.clear();
-    for (auto const& [_, subscription] : self.subscriptions)
-      subscriptions.push_back(subscription);
+    for (auto const& [handle, subscription] : self.subscriptions)
+      subscriptions.emplace_back(handle, subscription);
     for (auto const& [_, watch] : self.watches)
       watches.push_back(watch);
     for (auto const& [_, server] : self.servers)
@@ -175,11 +195,11 @@ ovf_com_status_v1 Stop(ovf_com_transport_v1* api) {
     callback = self.health_callback;
     user = self.health_user;
   }
-  for (auto const& subscription : subscriptions) {
+  for (auto const& [handle, subscription] : subscriptions) {
     std::lock_guard callback_lock(subscription->callback_gate);
     if (subscription->active && subscription->state_callback)
-      subscription->state_callback(subscription->state_user, OVF_COM_INVALID_HANDLE_V1,
-                                   OVF_COM_SUBSCRIPTION_WITHDRAWN, OVF_COM_STATUS_SHUTTING_DOWN);
+      subscription->state_callback(subscription->state_user, handle, OVF_COM_SUBSCRIPTION_WITHDRAWN,
+                                   OVF_COM_STATUS_SHUTTING_DOWN);
     subscription->active = false;
   }
   for (auto const& watch : watches) {
@@ -246,7 +266,7 @@ ovf_com_status_v1 SetHealthHandler(ovf_com_transport_v1* api, ovf_com_health_cal
 ovf_com_status_v1 SetDiagnosticHandler(ovf_com_transport_v1* api,
                                        ovf_com_diagnostic_callback_v1 callback, void* user) {
   auto& self = Self(api);
-  std::lock_guard lock(self.mutex);
+  std::lock_guard lock(self.diagnostic_mutex);
   self.diagnostic_callback = callback;
   self.diagnostic_user = user;
   return OVF_COM_STATUS_OK;
@@ -510,7 +530,7 @@ ovf_com_status_v1 Deliver(InprocTransport& self, ovf_com_handle_v1 publisher,
     epoch = source->second.descriptor.route_epoch;
   }
   for (auto const& target : targets) {
-    (void)Dispatch(self, [target, payload, sequence, epoch] {
+    auto status = Dispatch(self, [target, payload, sequence, epoch] {
       ovf_com_sample_v1 sample{sizeof(sample),
                                {payload->data(), payload->size()},
                                OVF_COM_INVALID_HANDLE_V1,
@@ -520,6 +540,8 @@ ovf_com_status_v1 Deliver(InprocTransport& self, ovf_com_handle_v1 publisher,
       if (target->active)
         target->callback(target->user, &sample);
     });
+    if (status != OVF_COM_STATUS_OK)
+      return status;
   }
   return OVF_COM_STATUS_OK;
 }

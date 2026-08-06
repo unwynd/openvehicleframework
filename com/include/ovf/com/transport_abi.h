@@ -121,6 +121,9 @@ typedef void (*ovf_com_log_fn_v1)(void*, ovf_com_log_level_v1, ovf_com_string_vi
 typedef ovf_com_status_v1 (*ovf_com_dispatch_fn_v1)(void* host_user_data, ovf_com_task_fn_v1 task,
                                                     ovf_com_task_release_fn_v1 release,
                                                     void* task_user_data);
+/* A successful dispatch transfers task ownership to the host. The host invokes task exactly once,
+   then release exactly once. A failed dispatch invokes neither; the provider calls release. Host
+   executors must use bounded queues and must document callback ordering and concurrency. */
 typedef uint64_t (*ovf_com_monotonic_time_fn_v1)(void* host_user_data);
 
 typedef struct ovf_com_host_api_v1 {

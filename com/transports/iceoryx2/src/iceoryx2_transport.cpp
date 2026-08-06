@@ -165,6 +165,7 @@ struct Transport final {
   int control_read{-1};
   int control_write{-1};
   std::mutex mutex;
+  std::mutex diagnostic_mutex;
   ovf_com_handle_v1 next_handle{1};
   std::uint64_t sequence{};
   std::uint32_t max_endpoints{128};
@@ -196,6 +197,8 @@ void SetHealth(Transport& self, ovf_com_health_state_v1 state, ovf_com_status_v1
   ovf_com_health_callback_v1 callback{};
   void* user{};
   ovf_com_health_v1 health{};
+  ovf_com_diagnostic_callback_v1 diagnostic_callback{};
+  void* diagnostic_user{};
   {
     std::lock_guard lock(self.mutex);
     self.health = state;
@@ -212,8 +215,15 @@ void SetHealth(Transport& self, ovf_com_health_state_v1 state, ovf_com_status_v1
     callback = self.health_callback;
     user = self.health_user;
   }
+  {
+    std::lock_guard lock(self.diagnostic_mutex);
+    diagnostic_callback = self.diagnostic_callback;
+    diagnostic_user = self.diagnostic_user;
+  }
   if (callback)
     callback(user, &health);
+  if (diagnostic_callback && status != OVF_COM_STATUS_OK)
+    diagnostic_callback(diagnostic_user, &health.diagnostic);
 }
 auto View(ovf_com_string_view_v1 value) -> std::string_view {
   return {value.data ? value.data : "", value.data ? value.size : 0};
@@ -287,8 +297,27 @@ void Notify(Endpoint const& endpoint, std::size_t event_id) noexcept {
 auto Dispatch(Transport& self, ovf_com_task_fn_v1 task, ovf_com_task_release_fn_v1 release,
               void* data) -> ovf_com_status_v1 {
   auto status = self.host->dispatch(self.host->user_data, task, release, data);
-  if (status != OVF_COM_STATUS_OK)
+  if (status != OVF_COM_STATUS_OK) {
     release(data);
+    ovf_com_diagnostic_callback_v1 callback{};
+    void* user{};
+    {
+      std::lock_guard lock(self.diagnostic_mutex);
+      callback = self.diagnostic_callback;
+      user = self.diagnostic_user;
+    }
+    if (callback) {
+      constexpr char message[] = "host executor rejected callback";
+      ovf_com_diagnostic_v1 diagnostic{sizeof(diagnostic),
+                                       status,
+                                       OVF_COM_DIAGNOSTIC_PROVIDER,
+                                       0,
+                                       0,
+                                       0,
+                                       {message, sizeof(message) - 1U}};
+      callback(user, &diagnostic);
+    }
+  }
   return status;
 }
 struct SampleTask {
@@ -717,7 +746,7 @@ auto Stop(ovf_com_transport_v1* api) -> ovf_com_status_v1 {
     self.receiver.join();
   std::vector<std::pair<ovf_com_handle_v1, Pending>> pending;
   std::vector<std::shared_ptr<Watch>> watches;
-  std::vector<std::shared_ptr<Subscription>> subscriptions;
+  std::vector<std::pair<ovf_com_handle_v1, std::shared_ptr<Subscription>>> subscriptions;
   std::vector<std::shared_ptr<Endpoint>> endpoints;
   {
     std::lock_guard lock(self.mutex);
@@ -754,8 +783,8 @@ auto Stop(ovf_com_transport_v1* api) -> ovf_com_status_v1 {
       watches.push_back(watch);
     self.watches.clear();
     self.announcements.clear();
-    for (auto& [_, subscription] : self.subscriptions)
-      subscriptions.push_back(subscription);
+    for (auto& [handle, subscription] : self.subscriptions)
+      subscriptions.emplace_back(handle, subscription);
     self.subscriptions.clear();
     for (auto& [_, endpoint] : self.endpoints)
       endpoints.push_back(endpoint);
@@ -769,11 +798,11 @@ auto Stop(ovf_com_transport_v1* api) -> ovf_com_status_v1 {
     std::lock_guard callback_lock(watch->callback_gate);
     watch->active.store(false, std::memory_order_release);
   }
-  for (auto const& subscription : subscriptions) {
+  for (auto const& [handle, subscription] : subscriptions) {
     std::lock_guard callback_lock(subscription->callback_gate);
     if (subscription->active.load(std::memory_order_acquire) && subscription->state_callback)
-      subscription->state_callback(subscription->state_user, OVF_COM_INVALID_HANDLE_V1,
-                                   OVF_COM_SUBSCRIPTION_WITHDRAWN, OVF_COM_STATUS_SHUTTING_DOWN);
+      subscription->state_callback(subscription->state_user, handle, OVF_COM_SUBSCRIPTION_WITHDRAWN,
+                                   OVF_COM_STATUS_SHUTTING_DOWN);
     subscription->active.store(false, std::memory_order_release);
   }
   for (auto const& endpoint : endpoints) {
@@ -839,7 +868,7 @@ auto SetHealthHandler(ovf_com_transport_v1* api, ovf_com_health_callback_v1 call
 auto SetDiagnosticHandler(ovf_com_transport_v1* api, ovf_com_diagnostic_callback_v1 callback,
                           void* user) -> ovf_com_status_v1 {
   auto& self = Self(api);
-  std::lock_guard lock(self.mutex);
+  std::lock_guard lock(self.diagnostic_mutex);
   self.diagnostic_callback = callback;
   self.diagnostic_user = user;
   return OVF_COM_STATUS_OK;
@@ -1017,7 +1046,7 @@ auto EndpointCreate(ovf_com_transport_v1* api, ovf_com_endpoint_descriptor_v1 co
 }
 auto EndpointDestroy(ovf_com_transport_v1* api, ovf_com_handle_v1 handle) -> ovf_com_status_v1 {
   auto& self = Self(api);
-  std::lock_guard lock(self.mutex);
+  std::unique_lock lock(self.mutex);
   for (auto const& [_, subscription] : self.subscriptions)
     if (subscription->endpoint == handle)
       return OVF_COM_STATUS_INVALID_STATE;
@@ -1039,11 +1068,16 @@ auto EndpointDestroy(ovf_com_transport_v1* api, ovf_com_handle_v1 handle) -> ovf
   auto found = self.endpoints.find(handle);
   if (found == self.endpoints.end())
     return OVF_COM_STATUS_NOT_FOUND;
+  auto endpoint = found->second;
   auto announcement = found->second->announcement;
   self.endpoints.erase(found);
   if (!announcement.empty())
     ReleaseAnnouncement(self, announcement);
   Wake(self);
+  lock.unlock();
+  std::lock_guard callback_lock(endpoint->request_callback_gate);
+  endpoint->request_callback = nullptr;
+  endpoint->request_user = nullptr;
   return OVF_COM_STATUS_OK;
 }
 auto Subscribe(ovf_com_transport_v1* api, ovf_com_handle_v1 endpoint_handle,

@@ -18,6 +18,7 @@ struct DeferredTask {
   void* user{};
 };
 bool defer_dispatch{};
+bool reject_dispatch{};
 std::vector<DeferredTask> deferred_tasks;
 ovf_com_status_v1 Dispatch(void*, ovf_com_task_fn_v1 task, ovf_com_task_release_fn_v1 release,
                            void* user) {
@@ -25,6 +26,8 @@ ovf_com_status_v1 Dispatch(void*, ovf_com_task_fn_v1 task, ovf_com_task_release_
     deferred_tasks.push_back({task, release, user});
     return OVF_COM_STATUS_OK;
   }
+  if (reject_dispatch)
+    return OVF_COM_STATUS_RESOURCE_EXHAUSTED;
   task(user);
   release(user);
   return OVF_COM_STATUS_OK;
@@ -59,10 +62,16 @@ struct State {
   int cancellations{};
   int shutdowns{};
   int subscription_active{};
+  int diagnostics{};
   std::array<std::uint8_t, 8> last{};
   std::size_t last_size{};
   ovf_com_transport_v1* transport{};
 };
+void Diagnostic(void* user, ovf_com_diagnostic_v1 const* diagnostic) {
+  auto& state = *static_cast<State*>(user);
+  assert(diagnostic && diagnostic->status == OVF_COM_STATUS_RESOURCE_EXHAUSTED);
+  ++state.diagnostics;
+}
 void SubscriptionState(void* user, ovf_com_handle_v1, ovf_com_subscription_state_v1 state,
                        ovf_com_status_v1 reason) {
   auto& context = *static_cast<State*>(user);
@@ -137,6 +146,7 @@ int main() {
 
   State state{};
   state.transport = transport;
+  assert(transport->set_diagnostic_handler(transport, &Diagnostic, &state) == OVF_COM_STATUS_OK);
   ovf_com_discovery_filter_v1 filter{sizeof(filter), Id(1), {nullptr, 0}};
   ovf_com_handle_v1 watch{};
   assert(transport->watch_start(transport, &filter, &Discovery, &state, &watch) ==
@@ -170,6 +180,11 @@ int main() {
   assert(transport->loan_publish(transport, publisher, loan.handle, 2) == OVF_COM_STATUS_OK);
   assert(state.samples == 3 && state.last_size == 2 && state.last[1] == 5);
   assert(transport->loan_release(transport, loan.handle) == OVF_COM_STATUS_NOT_FOUND);
+  reject_dispatch = true;
+  assert(transport->publish(transport, publisher, {first, sizeof(first)}) ==
+         OVF_COM_STATUS_RESOURCE_EXHAUSTED);
+  reject_dispatch = false;
+  assert(state.diagnostics == 1 && state.samples == 3);
 
   auto server_desc = Endpoint(OVF_COM_ENDPOINT_METHOD_SERVER);
   auto client_desc = Endpoint(OVF_COM_ENDPOINT_METHOD_CLIENT);

@@ -2,7 +2,7 @@
   "profileVersion": 1,
   "name": "iceoryx2",
   "isolation": "independent",
-  "features": ["discovery", "events", "methods", "loans", "scatterGather", "reliable", "ordered", "deadlines", "cancellation", "subscriptionState"],
+  "features": ["discovery", "events", "methods", "loans", "scatterGather", "reliable", "ordered", "deadlines", "cancellation", "subscriptionState", "health", "diagnostics"],
   "limits": {
     "maxPayloadSize": 16777216,
     "maxHistoryDepth": 1024,
