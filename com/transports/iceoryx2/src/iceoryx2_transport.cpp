@@ -1104,6 +1104,7 @@ auto Subscribe(ovf_com_transport_v1* api, ovf_com_handle_v1 endpoint_handle,
   subscription->user = user;
   self.subscriptions.emplace(handle, std::move(subscription));
   *out = handle;
+  Wake(self);
   return OVF_COM_STATUS_OK;
 }
 auto Unsubscribe(ovf_com_transport_v1* api, ovf_com_handle_v1 handle) -> ovf_com_status_v1 {

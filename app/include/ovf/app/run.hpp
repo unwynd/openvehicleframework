@@ -25,6 +25,7 @@
 //     });
 //   }
 
+#include "ovf/app/facilities.hpp"
 #include "ovf/com/runtime.hpp"
 #include "ovf/exec/application.hpp"
 #include "ovf/log/log.hpp"
@@ -43,8 +44,10 @@ namespace ovf::app {
 // ovf_cc_application deployment emits definitions in this same namespace; the
 // forward declarations here let the template body compile without depending
 // on the generated headers being seen first.
-ovf::com::ApplicationRuntime CreateRuntime(std::string instance_name);
+ovf::com::ApplicationRuntimeResult CreateRuntime(std::string instance_name);
 std::unique_ptr<ovf::log::Runtime> CreateLogRuntime() noexcept;
+PersistenceRuntimeStartup CreatePersistenceRuntime() noexcept;
+CryptoRuntimeStartup CreateCryptoRuntime() noexcept;
 
 enum class ExitCode : int {
   ok = 0,
@@ -52,6 +55,7 @@ enum class ExitCode : int {
   communication_init_failed = 11,
   logging_init_failed = 12,
   persistence_init_failed = 13,
+  crypto_init_failed = 14,
   service_offer_failed = 20,
   discovery_timeout = 21,
   subscription_failed = 22,
@@ -65,14 +69,20 @@ enum class TickAction { continue_loop, stop };
 class Context final {
 public:
   Context(ovf::exec::Application& execution, ovf::com::Runtime& communication,
-          ovf::log::Runtime& logging, ovf::log::Logger&& logger) noexcept
+          ovf::log::Runtime& logging, ovf::log::Logger&& logger,
+          PersistenceRuntimeHandle persistence, CryptoRuntimeHandle crypto) noexcept
       : execution_(&execution), communication_(&communication), logging_(&logging),
-        logger_(std::move(logger)) {}
+        logger_(std::move(logger)), persistence_(std::move(persistence)),
+        crypto_(std::move(crypto)) {}
 
   [[nodiscard]] ovf::exec::Application& exec() noexcept { return *execution_; }
   [[nodiscard]] ovf::com::Runtime& com() noexcept { return *communication_; }
   [[nodiscard]] ovf::log::Runtime& log() noexcept { return *logging_; }
   [[nodiscard]] ovf::log::Logger& logger() noexcept { return logger_; }
+  [[nodiscard]] ovf::per::Runtime* per() noexcept { return persistence_.get(); }
+  [[nodiscard]] const ovf::per::Runtime* per() const noexcept { return persistence_.get(); }
+  [[nodiscard]] ovf::crypto::Runtime* crypto() noexcept { return crypto_.get(); }
+  [[nodiscard]] const ovf::crypto::Runtime* crypto() const noexcept { return crypto_.get(); }
 
   // ReportReady wraps Application::ReportReady with a consistent diagnostic.
   [[nodiscard]] ExitCode ReportReady() noexcept {
@@ -115,6 +125,8 @@ private:
   ovf::com::Runtime* communication_;
   ovf::log::Runtime* logging_;
   ovf::log::Logger logger_;
+  PersistenceRuntimeHandle persistence_;
+  CryptoRuntimeHandle crypto_;
 };
 
 // Run performs the standard exec + com + log initialization and hands the
@@ -130,7 +142,8 @@ int Run(std::string_view instance_name, std::string_view logger_name, Body body)
   }
   auto communication = CreateRuntime(std::string(instance_name));
   if (!communication) {
-    std::fprintf(stderr, "ovf::app: com runtime init failed\n");
+    std::fprintf(stderr, "ovf::app: com runtime init failed: %s\n",
+                 communication.error().message.c_str());
     return static_cast<int>(ExitCode::communication_init_failed);
   }
   auto logging = CreateLogRuntime();
@@ -139,7 +152,26 @@ int Run(std::string_view instance_name, std::string_view logger_name, Body body)
     return static_cast<int>(ExitCode::logging_init_failed);
   }
   auto logger = logging->CreateLogger(logger_name);
-  Context ctx(execution.value(), communication.get(), *logging, std::move(logger));
+  PersistenceRuntimeHandle persistence;
+  if (auto startup = CreatePersistenceRuntime()) {
+    if (!*startup) {
+      std::fprintf(stderr, "ovf::app: persistence runtime init failed: %s\n",
+                   startup->error().message.c_str());
+      return static_cast<int>(ExitCode::persistence_init_failed);
+    }
+    persistence = std::move(*startup).value();
+  }
+  CryptoRuntimeHandle crypto;
+  if (auto startup = CreateCryptoRuntime()) {
+    if (!*startup) {
+      std::fprintf(stderr, "ovf::app: crypto runtime init failed: %s\n",
+                   startup->error().message.c_str());
+      return static_cast<int>(ExitCode::crypto_init_failed);
+    }
+    crypto = std::move(*startup).value();
+  }
+  Context ctx(execution.value(), communication.value().get(), *logging, std::move(logger),
+              std::move(persistence), std::move(crypto));
   return static_cast<int>(body(ctx));
 }
 

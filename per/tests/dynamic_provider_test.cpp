@@ -37,3 +37,24 @@ TEST(PerDynamicProviderTest, LoadsInstalledAbiProviderFromExplicitDirectory) {
   ASSERT_TRUE(capabilities);
   EXPECT_TRUE(capabilities.value().persistent);
 }
+
+TEST(PerDynamicProviderTest, EnvironmentPathOverridesDeployedDirectory) {
+  ASSERT_EQ(::testing::internal::GetArgvs().size(), 2U);
+  const char* test_root = std::getenv("TEST_TMPDIR");
+  ASSERT_NE(test_root, nullptr);
+  std::string plugin = ::testing::internal::GetArgvs()[1];
+  if (plugin.empty() || plugin.front() != '/') {
+    const char* source_root = std::getenv("TEST_SRCDIR");
+    const char* workspace = std::getenv("TEST_WORKSPACE");
+    ASSERT_NE(source_root, nullptr);
+    ASSERT_NE(workspace, nullptr);
+    plugin = std::string(source_root) + "/" + workspace + "/" + plugin;
+  }
+  ASSERT_EQ(setenv("OVF_PER_PROVIDER_PATH", Directory(plugin).c_str(), 1), 0);
+  auto runtime = ovf::per::Runtime::LoadFrom(
+      "sqlite", "/deployed/provider/path",
+      {.configuration = "{\"root\":\"" + std::string(test_root) +
+                        "/dynamic-override\",\"journal_mode\":\"wal\"}"});
+  ASSERT_EQ(unsetenv("OVF_PER_PROVIDER_PATH"), 0);
+  ASSERT_TRUE(runtime) << runtime.error().message;
+}

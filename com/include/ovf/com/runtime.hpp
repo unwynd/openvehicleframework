@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "ovf/com/transport_abi.h"
+#include "ovf/core/result.hpp"
 
 namespace ovf::com {
 
@@ -126,21 +127,36 @@ private:
   std::unique_ptr<Impl> impl_;
 };
 
+struct ApplicationRuntimeError final {
+  Error code{Error::none};
+  std::string message;
+};
+
 class ApplicationRuntime final {
 public:
-  ApplicationRuntime(RuntimeConfig config, std::vector<TransportRegistration> transports);
-  ApplicationRuntime(RuntimeConfig config, DeploymentConfig deployment);
   ~ApplicationRuntime() = default;
   ApplicationRuntime(ApplicationRuntime const&) = delete;
   ApplicationRuntime& operator=(ApplicationRuntime const&) = delete;
+  ApplicationRuntime(ApplicationRuntime&&) noexcept = default;
+  ApplicationRuntime& operator=(ApplicationRuntime&&) noexcept = default;
 
-  [[nodiscard]] explicit operator bool() const noexcept { return error_ == Error::none; }
-  [[nodiscard]] auto error() const noexcept -> Error { return error_; }
   [[nodiscard]] auto get() noexcept -> Runtime& { return runtime_; }
 
 private:
+  friend ovf::core::Result<ApplicationRuntime, ApplicationRuntimeError>
+      CreateApplicationRuntime(RuntimeConfig, std::vector<TransportRegistration>) noexcept;
+  friend ovf::core::Result<ApplicationRuntime, ApplicationRuntimeError>
+      CreateApplicationRuntime(RuntimeConfig, DeploymentConfig) noexcept;
+  explicit ApplicationRuntime(Runtime runtime) noexcept : runtime_(std::move(runtime)) {}
   Runtime runtime_;
-  Error error_{Error::none};
 };
+
+using ApplicationRuntimeResult = ovf::core::Result<ApplicationRuntime, ApplicationRuntimeError>;
+
+[[nodiscard]] ApplicationRuntimeResult
+CreateApplicationRuntime(RuntimeConfig config,
+                         std::vector<TransportRegistration> transports) noexcept;
+[[nodiscard]] ApplicationRuntimeResult
+CreateApplicationRuntime(RuntimeConfig config, DeploymentConfig deployment) noexcept;
 
 } // namespace ovf::com

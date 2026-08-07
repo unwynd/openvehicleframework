@@ -2,8 +2,20 @@
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
+load("//bazel:application.bzl", "ovf_cc_application")
 
 package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "facilities",
+    hdrs = ["include/ovf/app/facilities.hpp"],
+    copts = ["-std=c++20"],
+    includes = ["include"],
+    deps = [
+        "//crypto:public_headers",
+        "//per:public_headers",
+    ],
+)
 
 cc_library(
     name = "app",
@@ -11,9 +23,10 @@ cc_library(
     copts = ["-std=c++20"],
     includes = ["include"],
     deps = [
-        "//com:runtime",
-        "//exec:application",
-        "//log:runtime",
+        ":facilities",
+        "//com:api",
+        "//exec:application_api",
+        "//log:api",
     ],
 )
 
@@ -22,4 +35,13 @@ cc_test(
     srcs = ["tests/run_compile_test.cpp"],
     copts = ["-std=c++20"],
     deps = [":app"],
+)
+
+ovf_cc_application(
+    name = "crypto_facility_compile",
+    srcs = ["tests/crypto_facility_compile.cpp"],
+    crypto = True,
+    deployment = "tests/crypto_deployment.cue",
+    interfaces = ["//examples/radar/interface:radar"],
+    tags = ["manual"],
 )

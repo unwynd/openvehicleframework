@@ -190,6 +190,20 @@ def compile_application_model(args: argparse.Namespace) -> int:
         if exported.returncode != 0:
             raise ValueError(exported.stderr.strip())
     application = json.loads(exported.stdout)
+    persistence_enabled = args.persistence_enabled == "true"
+    crypto_enabled = args.crypto_enabled == "true"
+    if ("persistence" in application) != persistence_enabled:
+        raise ValueError(
+            "application persistence deployment and persistent_schemas must be declared together"
+        )
+    if ("crypto" in application) != crypto_enabled:
+        raise ValueError(
+            "application crypto deployment and ovf_cc_application(crypto=...) must be declared together"
+        )
+    if crypto_enabled and application["crypto"] != {}:
+        raise ValueError(
+            "application crypto intent must not contain provider-specific deployment"
+        )
     contracts = []
     for specification in args.interface:
         name, separator, path = specification.partition("=")
@@ -230,6 +244,10 @@ def compile_application_model(args: argparse.Namespace) -> int:
         "applicationModelVersion": 1,
         "name": application["name"],
         "interfaces": sorted(contracts, key=lambda item: item["name"]),
+        "facilities": {
+            "persistence": persistence_enabled,
+            "crypto": crypto_enabled,
+        },
     }
     write_if_changed(args.output, json.dumps(model, sort_keys=True, indent=2) + "\n")
     return 0
@@ -1187,6 +1205,8 @@ def parser() -> argparse.ArgumentParser:
     application_model.add_argument("--cue", required=True, type=Path)
     application_model.add_argument("--deployment", required=True, type=Path)
     application_model.add_argument("--interface", required=True, action="append")
+    application_model.add_argument("--persistence-enabled", choices=("true", "false"), required=True)
+    application_model.add_argument("--crypto-enabled", choices=("true", "false"), required=True)
     application_model.add_argument("--output", required=True, type=Path)
     application_model.set_defaults(run=compile_application_model)
     logging = commands.add_parser("log-deployment")

@@ -4,6 +4,7 @@
 #pragma once
 
 #include "ovf/per/per.hpp"
+#include "ovf/app/facilities.hpp"
 
 #include <memory>
 #include <utility>
@@ -62,3 +63,19 @@ namespace {{ deployment.namespace }} {
 
 {% endfor %}
 } // namespace {{ deployment.namespace }}
+
+namespace ovf::app {
+
+[[nodiscard]] inline auto CreatePersistenceRuntime() noexcept
+    -> PersistenceRuntimeStartup {
+  auto created = {{ deployment.namespace }}::CreateRuntime();
+  if (!created)
+    return PersistenceRuntimeStartup{
+        ovf::per::Result<PersistenceRuntimeHandle>{created.error()}};
+  return PersistenceRuntimeStartup{ovf::per::Result<PersistenceRuntimeHandle>{
+      PersistenceRuntimeHandle{
+          std::move(created).value().release(),
+          +[](ovf::per::Runtime* runtime) noexcept { delete runtime; }}}};
+}
+
+} // namespace ovf::app

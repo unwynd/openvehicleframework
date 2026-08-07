@@ -5,6 +5,7 @@
 
 #include "ovf/com/provider_binding.hpp"
 #include "ovf/com/runtime.hpp"
+#include "ovf/app/facilities.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -12,12 +13,41 @@
 
 namespace ovf::app {
 
+{% if not application.facilities.persistence %}
+inline auto CreatePersistenceRuntime() noexcept -> PersistenceRuntimeStartup {
+    return std::nullopt;
+}
+{% endif %}
+
+{% if application.facilities.crypto %}
+inline auto CreateCryptoRuntime() noexcept -> CryptoRuntimeStartup {
+    auto const* provider = std::getenv("OVF_CRYPTO_PROVIDER");
+    if (provider == nullptr || *provider == '\0') {
+        return CryptoRuntimeStartup{ovf::crypto::Result<CryptoRuntimeHandle>{
+            ovf::crypto::Error{ovf::crypto::ErrorCode::invalid_argument,
+                               "OVF_CRYPTO_PROVIDER is unset"}}};
+    }
+    auto created = ovf::crypto::Runtime::Load(provider);
+    if (!created)
+        return CryptoRuntimeStartup{
+            ovf::crypto::Result<CryptoRuntimeHandle>{created.error()}};
+    return CryptoRuntimeStartup{ovf::crypto::Result<CryptoRuntimeHandle>{
+        CryptoRuntimeHandle{
+            std::move(created).value().release(),
+            +[](ovf::crypto::Runtime* runtime) noexcept { delete runtime; }}}};
+}
+{% else %}
+inline auto CreateCryptoRuntime() noexcept -> CryptoRuntimeStartup {
+    return std::nullopt;
+}
+{% endif %}
+
 // CreateRuntime reads the deployment path from OVF_COM_DEPLOYMENT. The env
 // var is populated by generated dinit service files at deploy time; when it
 // is absent (typically during interactive development), report the missing
 // precondition explicitly instead of silently returning an unconfigured
 // runtime.
-inline auto CreateRuntime(std::string instance_name) -> ovf::com::ApplicationRuntime {
+inline auto CreateRuntime(std::string instance_name) -> ovf::com::ApplicationRuntimeResult {
     auto const* deployment = std::getenv("OVF_COM_DEPLOYMENT");
     if (deployment == nullptr) {
         std::fprintf(stderr,
@@ -25,7 +55,7 @@ inline auto CreateRuntime(std::string instance_name) -> ovf::com::ApplicationRun
                      "cannot configure the com runtime for instance '%s'\n",
                      instance_name.c_str());
     }
-    return ovf::com::ApplicationRuntime(
+    return ovf::com::CreateApplicationRuntime(
         {.instance_name = std::move(instance_name),
          .logger =
              [](ovf::com::LogLevel level, std::string_view message) {

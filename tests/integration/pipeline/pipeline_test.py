@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 
 
@@ -89,6 +90,16 @@ def start_until(
                 if os.read(ready_read, 1) != b"\x01":
                     raise RuntimeError(f"{executable.name} sent an invalid readiness notification")
                 os.close(ready_read)
+
+                def drain_output() -> None:
+                    for output in process.stdout:
+                        log.write(output)
+                        log.flush()
+
+                threading.Thread(
+                    target=drain_output,
+                    daemon=True,
+                ).start()
                 return process, log
     os.close(ready_read)
     remainder = process.stdout.read()
@@ -117,6 +128,8 @@ def main() -> int:
         providers.mkdir()
         with tarfile.open(runfile("com/vsomeip_platform_bundle.tar")) as archive:
             archive.extractall(platform, filter="data")
+        with tarfile.open(runfile("per/sqlite_platform_bundle.tar")) as archive:
+            archive.extractall(platform, filter="data")
         for plugin in (
             runfile("com/transports/iceoryx2/libovf_com_provider_iceoryx2.so"),
             platform / "usr/lib/ovf/providers/libovf_com_provider_vsomeip.so",
@@ -127,6 +140,10 @@ def main() -> int:
         environment.pop("VSOMEIP_CONFIGURATION", None)
         environment["LD_LIBRARY_PATH"] = str(platform / "usr/lib")
         environment["OVF_COM_PROVIDER_PATH"] = str(providers)
+        environment["OVF_PER_PROVIDER_PATH"] = str(platform / "usr/lib/ovf/providers")
+        persistence_root = root / "persistence"
+        persistence_root.mkdir()
+        environment["OVF_PER_STORAGE_ROOT"] = str(persistence_root)
         dlt_ipc = root / "run" / "dlt"
         dlt_ipc.mkdir(parents=True)
         environment["DLT_PIPE_DIR"] = str(dlt_ipc)
@@ -189,6 +206,11 @@ def main() -> int:
             processes.append(policy)
             open_logs.append(policy_log)
             return 0
+        except Exception:
+            for log_path in sorted(logs.glob("*.log")):
+                print(f"===== {log_path.name} =====", file=sys.stderr)
+                print(log_path.read_text(encoding="utf-8"), file=sys.stderr)
+            raise
         finally:
             for process in reversed(processes):
                 stop(process)

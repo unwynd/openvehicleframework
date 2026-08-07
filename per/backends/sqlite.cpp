@@ -8,6 +8,7 @@
 #include <cerrno>
 #include <climits>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <memory>
@@ -177,6 +178,9 @@ bool ParseConfiguration(ovf_per_string_view_v1 configuration, SqliteBackend& bac
     return false;
   }
   backend.root = document["root"].asString();
+  if (const char* override_root = std::getenv("OVF_PER_STORAGE_ROOT"); override_root != nullptr) {
+    backend.root = override_root;
+  }
   if (backend.root.empty() || backend.root.front() != '/') {
     SetError(backend, "SQLite provider root must be an absolute path");
     return false;

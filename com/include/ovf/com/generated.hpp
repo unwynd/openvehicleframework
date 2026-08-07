@@ -329,6 +329,22 @@ template <class T>
 auto encode_optional_field(Encoder& out, std::uint32_t tag, std::optional<T> const& value) -> bool {
   return !value || encode_field(out, tag, *value);
 }
+template <class T> auto encode_sequence_element(Encoder& out, T const& value) -> bool {
+  Encoder counter(Encoder::CountOnly{});
+  if (!Codec<T>::encode(counter, value) || !counter.valid() ||
+      counter.size() > std::numeric_limits<std::uint32_t>::max())
+    return false;
+  Codec<std::uint32_t>::encode(out, static_cast<std::uint32_t>(counter.size()));
+  return Codec<T>::encode(out, value);
+}
+template <class T> auto decode_sequence_element(Decoder& in, T& value) -> bool {
+  std::uint32_t size{};
+  std::span<const std::byte> bytes;
+  if (!Codec<std::uint32_t>::decode(in, size) || !in.raw(size, bytes))
+    return false;
+  Decoder element(bytes);
+  return Codec<T>::decode(element, value) && element.empty();
+}
 template <std::size_t N> struct Codec<BoundedString<N>> {
   static auto encode(Encoder& out, BoundedString<N> const& value) -> bool {
     Codec<std::uint32_t>::encode(out, static_cast<std::uint32_t>(value.size()));
@@ -351,7 +367,7 @@ template <class T, std::size_t N> struct Codec<BoundedVector<T, N>> {
   static auto encode(Encoder& out, BoundedVector<T, N> const& value) -> bool {
     Codec<std::uint32_t>::encode(out, static_cast<std::uint32_t>(value.size()));
     for (auto const& item : value.values())
-      if (!Codec<T>::encode(out, item))
+      if (!encode_sequence_element(out, item))
         return false;
     return true;
   }
@@ -359,39 +375,43 @@ template <class T, std::size_t N> struct Codec<BoundedVector<T, N>> {
     std::uint32_t size{};
     if (!Codec<std::uint32_t>::decode(in, size) || size > N)
       return false;
+    BoundedVector<T, N> decoded;
     for (std::uint32_t index = 0; index < size; ++index) {
       T item{};
-      if (!Codec<T>::decode(in, item) || !value.push_back(std::move(item)))
+      if (!decode_sequence_element(in, item) || !decoded.push_back(std::move(item)))
         return false;
     }
+    value = std::move(decoded);
     return true;
   }
 };
 template <class T, std::size_t N> struct MaximumEncodedSize<BoundedVector<T, N>> {
   static constexpr std::optional<std::size_t> value = [] {
     if constexpr (MaximumEncodedSize<T>::value.has_value())
-      return std::optional<std::size_t>{4U + N * *MaximumEncodedSize<T>::value};
+      return std::optional<std::size_t>{4U + N * (4U + *MaximumEncodedSize<T>::value)};
     return std::optional<std::size_t>{};
   }();
 };
 template <class T, std::size_t N> struct Codec<std::array<T, N>> {
   static auto encode(Encoder& out, std::array<T, N> const& value) -> bool {
     for (auto const& item : value)
-      if (!Codec<T>::encode(out, item))
+      if (!encode_sequence_element(out, item))
         return false;
     return true;
   }
   static auto decode(Decoder& in, std::array<T, N>& value) -> bool {
-    for (auto& item : value)
-      if (!Codec<T>::decode(in, item))
+    std::array<T, N> decoded{};
+    for (auto& item : decoded)
+      if (!decode_sequence_element(in, item))
         return false;
+    value = std::move(decoded);
     return true;
   }
 };
 template <class T, std::size_t N> struct MaximumEncodedSize<std::array<T, N>> {
   static constexpr std::optional<std::size_t> value = [] {
     if constexpr (MaximumEncodedSize<T>::value.has_value())
-      return std::optional<std::size_t>{N * *MaximumEncodedSize<T>::value};
+      return std::optional<std::size_t>{N * (4U + *MaximumEncodedSize<T>::value)};
     return std::optional<std::size_t>{};
   }();
 };
@@ -421,7 +441,7 @@ template <class T> struct Codec<std::vector<T>> {
       return false;
     Codec<std::uint32_t>::encode(out, static_cast<std::uint32_t>(value.size()));
     for (auto const& item : value)
-      if (!Codec<T>::encode(out, item))
+      if (!encode_sequence_element(out, item))
         return false;
     return true;
   }
@@ -429,14 +449,15 @@ template <class T> struct Codec<std::vector<T>> {
     std::uint32_t size{};
     if (!Codec<std::uint32_t>::decode(in, size) || size > in.remaining())
       return false;
-    value.clear();
-    value.reserve(size);
+    std::vector<T> decoded;
+    decoded.reserve(size);
     for (std::uint32_t index = 0; index < size; ++index) {
       T item{};
-      if (!Codec<T>::decode(in, item))
+      if (!decode_sequence_element(in, item))
         return false;
-      value.push_back(std::move(item));
+      decoded.push_back(std::move(item));
     }
+    value = std::move(decoded);
     return true;
   }
 };

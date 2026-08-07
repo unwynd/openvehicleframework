@@ -29,12 +29,12 @@ int main() {
       "ovf-driving-policy", "driving_policy.environment", [](ovf::app::Context& ctx) {
         auto& logger = ctx.logger();
 
-        auto persistence = ovf::deployment::driving_policy::CreateRuntime();
-        if (!persistence) {
-          ReportPersistenceFailure("failed to start persistence runtime", persistence.error());
+        auto* persistence = ctx.per();
+        if (persistence == nullptr) {
+          std::cerr << "persistence runtime is not available\n";
           return ovf::app::ExitCode::persistence_init_failed;
         }
-        auto policy_store = ovf::deployment::driving_policy::OpenPolicyState(*persistence.value());
+        auto policy_store = ovf::deployment::driving_policy::OpenPolicyState(*persistence);
         if (!policy_store) {
           ReportPersistenceFailure("failed to open policy state", policy_store.error());
           return ovf::app::ExitCode::persistence_init_failed;

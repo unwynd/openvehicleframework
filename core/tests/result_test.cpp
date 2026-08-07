@@ -53,6 +53,19 @@ TEST(CoreResult, MapPreservesError) {
   EXPECT_EQ(mapped.error().code, 3);
 }
 
+TEST(CoreResult, MapTransformsValueToVoid) {
+  IntResult result{5};
+  auto mapped = std::move(result).map([](int) {});
+  EXPECT_TRUE(mapped.has_value());
+}
+
+TEST(CoreResult, MapToVoidPreservesError) {
+  IntResult result{TestError{3, "bad"}};
+  auto mapped = std::move(result).map([](int) {});
+  EXPECT_FALSE(mapped.has_value());
+  EXPECT_EQ(mapped.error().code, 3);
+}
+
 TEST(CoreResult, AndThenChains) {
   IntResult result{5};
   auto next = std::move(result).and_then(

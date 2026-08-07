@@ -45,6 +45,24 @@ TEST(GeneratedCodec, RejectsImpossibleUnboundedSequenceLength) {
   EXPECT_TRUE(decoded.empty());
 }
 
+TEST(GeneratedCodec, FramesTaggedStructuresInsideSequences) {
+  ovf::com::BoundedVector<example::radar::RadarObject, 4> objects;
+  ASSERT_TRUE(objects.push_back({7, 12.5F, -1.25F, 93}));
+  ASSERT_TRUE(objects.push_back({8, 18.0F, 2.5F, 81}));
+
+  auto encoded = ovf::com::encode(objects);
+  decltype(objects) decoded;
+  ASSERT_TRUE(ovf::com::decode(encoded, decoded));
+  ASSERT_EQ(decoded.size(), 2U);
+  EXPECT_EQ(decoded.values()[0].id, 7U);
+  EXPECT_EQ(decoded.values()[1].id, 8U);
+
+  ASSERT_FALSE(encoded.empty());
+  encoded.pop_back();
+  EXPECT_FALSE(ovf::com::decode(encoded, decoded));
+  EXPECT_EQ(decoded.size(), 2U);
+}
+
 TEST(GeneratedCodec, TaggedStructuresSkipUnknownOptionalFieldsAndRejectDuplicates) {
   example::radar::RadarObject object{7, 12.5F, -1.25F, 93};
   auto encoded = ovf::com::encode(object);

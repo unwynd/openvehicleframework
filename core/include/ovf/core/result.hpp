@@ -59,7 +59,12 @@ public:
   template <typename Fn> auto map(Fn&& fn) && {
     using Mapped = std::invoke_result_t<Fn, T&&>;
     if (has_value()) {
-      return Result<Mapped, E>{std::forward<Fn>(fn)(std::move(*this).value())};
+      if constexpr (std::is_void_v<Mapped>) {
+        std::forward<Fn>(fn)(std::move(*this).value());
+        return Result<void, E>{};
+      } else {
+        return Result<Mapped, E>{std::forward<Fn>(fn)(std::move(*this).value())};
+      }
     }
     return Result<Mapped, E>{std::move(*this).error()};
   }

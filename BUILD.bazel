@@ -22,11 +22,15 @@ alias(
 test_suite(
     name = "all_tests",
     tests = [
+        "//app:run_compile_test",
         "//codegen:rustfmt_test",
         "//com/tests:all_tests",
+        "//core:result_test",
+        "//core:uuid_test",
         "//crypto/tests:all_tests",
         "//exec/tests:all_tests",
         "//log/tests:all_tests",
         "//per/tests:all_tests",
+        "//tools:smithy_types_test",
     ],
 )

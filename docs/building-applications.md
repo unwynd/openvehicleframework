@@ -46,8 +46,12 @@ Application code includes generated contract types and one application facade:
 #include "ovf_application.hpp"
 
 auto application = ovf::app::CreateRuntime("radar-app");
+if (!application) {
+    // application.error() carries the communication error and diagnostic.
+    return 1;
+}
 auto proxy = RadarServiceProxy::Find(
-    application.get(), ovf::app::radar(), std::chrono::seconds(10));
+    application.value().get(), ovf::app::radar(), std::chrono::seconds(10));
 ```
 
 The application facade loads its system-installed runtime deployment, owns
@@ -70,6 +74,14 @@ For an application named `radar_app`, the macro creates:
 The build fails before C++ compilation when the contract is invalid, and fails
 before packaging when application intent cannot be matched to its contracts.
 Provider capability and mapping validation occurs in system integration.
+
+`ovf::app::Run` performs the same checked communication startup and also owns
+optional facilities declared by the application deployment. Inside its body,
+`ctx.per()` and `ctx.crypto()` return pointers when the respective facility is
+declared and initialized, or `nullptr` when it is not declared. Failure to
+initialize a declared facility prevents the application body from running.
+Applications declare only the need for crypto (`crypto: {}`); the platform
+selects the provider through `OVF_CRYPTO_PROVIDER` and its provider path.
 
 ## Shipping boundary
 

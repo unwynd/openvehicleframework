@@ -43,3 +43,20 @@ TEST(RuntimeTest, OwnsAndOrdersTransportLifecycle) {
   ASSERT_TRUE(messages ==
               std::vector<std::string>({"inproc transport started", "inproc transport stopped"}));
 }
+
+TEST(ApplicationRuntimeTest, FactoryReturnsOnlyStartedInstances) {
+  auto created = ovf::com::CreateApplicationRuntime(
+      {.instance_name = "application-runtime-test", .logger = {}, .dispatcher = {}},
+      std::vector<ovf::com::TransportRegistration>{});
+  ASSERT_TRUE(created);
+  EXPECT_TRUE(created.value().get().IsRunning());
+}
+
+TEST(ApplicationRuntimeTest, FactoryReturnsInitializationDiagnostics) {
+  auto created = ovf::com::CreateApplicationRuntime(
+      {.instance_name = "application-runtime-test", .logger = {}, .dispatcher = {}},
+      ovf::com::DeploymentConfig{"/does/not/exist.json"});
+  ASSERT_FALSE(created);
+  EXPECT_EQ(created.error().code, ovf::com::Error::not_found);
+  EXPECT_NE(created.error().message.find("/does/not/exist.json"), std::string::npos);
+}

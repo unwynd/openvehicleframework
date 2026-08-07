@@ -5,8 +5,11 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <string>
+#include <vector>
 
 #if defined(__unix__) || defined(__APPLE__)
 #include <dlfcn.h>
@@ -710,9 +713,31 @@ Result<std::unique_ptr<Runtime>> Runtime::LoadFrom(std::string_view provider,
   if (!provider_directory.empty() && provider_directory.front() != '/') {
     return Error{ErrorCode::invalid_argument, "provider directory must be absolute"};
   }
-  const std::string library_name =
-      provider_directory.empty() ? filename : std::string(provider_directory) + "/" + filename;
-  void* library = ::dlopen(library_name.c_str(), RTLD_NOW | RTLD_LOCAL);
+  std::vector<std::string> candidates;
+  if (const char* search = std::getenv("OVF_PER_PROVIDER_PATH"); search != nullptr) {
+    std::string paths(search);
+    std::size_t offset{};
+    while (offset <= paths.size()) {
+      const auto end = paths.find(':', offset);
+      const auto directory = paths.substr(offset, end - offset);
+      candidates.push_back(directory.empty() ? filename : directory + "/" + filename);
+      if (end == std::string::npos) {
+        break;
+      }
+      offset = end + 1;
+    }
+  }
+  if (!provider_directory.empty()) {
+    candidates.push_back(std::string(provider_directory) + "/" + filename);
+  }
+  candidates.push_back(filename);
+  void* library{};
+  for (const auto& candidate : candidates) {
+    library = ::dlopen(candidate.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (library != nullptr) {
+      break;
+    }
+  }
   if (library == nullptr) {
     return Error{ErrorCode::not_found, "cannot load persistency provider"};
   }

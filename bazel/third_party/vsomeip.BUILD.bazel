@@ -13,7 +13,7 @@ cmake(
     name = "vsomeip",
     cache_entries = {
         "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_CXX_FLAGS": "-Wno-error=unused-command-line-argument",
+        "CMAKE_CXX_FLAGS": "-U_FORTIFY_SOURCE -Wno-error=unused-command-line-argument",
         "DISABLE_DLT": "ON",
         "ENABLE_SIGNAL_HANDLING": "OFF",
         "VSOMEIP_DISABLE_ENV_VARS": "ON",

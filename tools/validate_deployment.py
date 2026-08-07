@@ -43,20 +43,20 @@ def _route_features(role: str, profile: str) -> list[str]:
     return common
 
 
-def _route_limits(profile: str) -> dict:
+def _route_limits(profile: str, required_payload_size: int) -> dict:
     return {
-        "maxPayloadSize": 4096 if profile == "iceoryx2" else 65536,
+        "maxPayloadSize": max(4096, required_payload_size) if profile == "iceoryx2" else 65536,
         "maxHistoryDepth": 1 if profile in {"iceoryx2", "vsomeip"} else 8,
         "maxOutstandingOperations": 16,
         "maxEndpoints": 8,
     }
 
 
-def _iceoryx2_event(element: dict) -> dict:
+def _iceoryx2_event(element: dict, payload_size: int) -> dict:
     return {
         "name": element["name"],
         "type": element.get("payload", element.get("value")),
-        "payloadSize": 4096,
+        "payloadSize": payload_size,
         "alignment": 8,
         "history": 1,
         "subscriberBuffer": 8,
@@ -68,13 +68,15 @@ def _iceoryx2_event(element: dict) -> dict:
     }
 
 
-def _iceoryx2_method(name: str, request_type: str, response_type: str) -> dict:
+def _iceoryx2_method(
+    name: str, request_type: str, response_type: str, payload_size: int
+) -> dict:
     return {
         "name": name,
         "requestType": request_type,
         "responseType": response_type,
-        "requestPayloadSize": 4096,
-        "responsePayloadSize": 4096,
+        "requestPayloadSize": payload_size,
+        "responsePayloadSize": payload_size,
         "alignment": 8,
         "requestBuffer": 16,
         "responseBuffer": 8,
@@ -87,7 +89,9 @@ def _iceoryx2_method(name: str, request_type: str, response_type: str) -> dict:
     }
 
 
-def _generated_mappings(service: dict, instance_name: str, profile: str) -> dict:
+def _generated_mappings(
+    service: dict, instance_name: str, profile: str, payload_size: int
+) -> dict:
     if profile in {"inproc", "cyclonedds"}:
         elements = {
             element["id"]: element["name"]
@@ -97,11 +101,12 @@ def _generated_mappings(service: dict, instance_name: str, profile: str) -> dict
         return {"service": service["name"], "instance": instance_name, "elements": elements}
     if profile == "iceoryx2":
         elements = {
-            element["id"]: _iceoryx2_event(element) for element in service["events"]
+            element["id"]: _iceoryx2_event(element, payload_size)
+            for element in service["events"]
         }
         elements.update({
             element["id"]: _iceoryx2_method(
-                element["name"], element["input"], element["output"]
+                element["name"], element["input"], element["output"], payload_size
             )
             for element in service["methods"]
         })
@@ -109,14 +114,14 @@ def _generated_mappings(service: dict, instance_name: str, profile: str) -> dict
             operations = {}
             if field["readable"]:
                 operations["get"] = _iceoryx2_method(
-                    f"{field['name']}-get", "Empty", field["value"]
+                    f"{field['name']}-get", "Empty", field["value"], payload_size
                 )
             if field["writable"]:
                 operations["set"] = _iceoryx2_method(
-                    f"{field['name']}-set", field["value"], "Empty"
+                    f"{field['name']}-set", field["value"], "Empty", payload_size
                 )
             if field["notifiable"]:
-                operations["notify"] = _iceoryx2_event(field)
+                operations["notify"] = _iceoryx2_event(field, payload_size)
             elements[field["id"]] = operations
         return {
             "service": service["name"],
@@ -188,6 +193,7 @@ def resolve_deployment(contract: dict, model: dict) -> dict:
     services = {
         f"{namespace}#{service['name']}": service for service in contract["services"]
     }
+    encoded_sizes = maximum_encoded_sizes(contract)
     instances = []
     used_bindings = {}
     for instance in intent["instances"]:
@@ -205,7 +211,10 @@ def resolve_deployment(contract: dict, model: dict) -> dict:
         features = requirements.get(
             "features", _route_features(instance["role"], binding["profile"])
         )
-        limits = _route_limits(binding["profile"])
+        required_payload_size = service_maximum_payload(service, encoded_sizes)
+        if required_payload_size is None:
+            raise ValueError(f"service {service_name} has no bounded maximum payload size")
+        limits = _route_limits(binding["profile"], required_payload_size)
         limits.update(requirements.get("limits", {}))
         route = {
             "provider": binding["provider"],
@@ -214,7 +223,7 @@ def resolve_deployment(contract: dict, model: dict) -> dict:
             "requiredFeatures": features,
             "limits": limits,
             "mappings": _generated_mappings(
-                service, instance["instance"], binding["profile"]
+                service, instance["instance"], binding["profile"], required_payload_size
             ),
         }
         if instance["role"] == "consumer":

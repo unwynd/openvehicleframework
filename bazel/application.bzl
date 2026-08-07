@@ -491,6 +491,8 @@ def _application_model_impl(ctx):
     arguments.add("application-model")
     arguments.add("--cue", ctx.file._cue)
     arguments.add("--deployment", ctx.file.deployment)
+    arguments.add("--persistence-enabled", str(ctx.attr.persistence_enabled).lower())
+    arguments.add("--crypto-enabled", str(ctx.attr.crypto_enabled).lower())
     for name, target in zip(ctx.attr.interface_names, ctx.attr.contracts):
         arguments.add("--interface", name + "=" + target[OvfContractInfo].ir.path)
     arguments.add("--output", model)
@@ -525,6 +527,8 @@ ovf_application_model = rule(
         "deployment": attr.label(mandatory = True, allow_single_file = [".cue"]),
         "contracts": attr.label_list(mandatory = True, providers = [OvfContractInfo]),
         "interface_names": attr.string_list(mandatory = True),
+        "persistence_enabled": attr.bool(),
+        "crypto_enabled": attr.bool(),
         "_builder": attr.label(default = Label("//tools:ovf_build"), executable = True, cfg = "exec"),
         "_codegen": attr.label(default = Label("//codegen:ovf_codegen"), executable = True, cfg = "exec"),
         "_cue": attr.label(default = Label("//bazel/host_tools:cue"), allow_single_file = True, cfg = "exec"),
@@ -545,6 +549,7 @@ def _ovf_cc_application_impl(
         deps = [],
         generated_artifacts = [],
         persistent_schemas = [],
+        crypto = False,
         copts = [],
         defines = [],
         data = [],
@@ -564,6 +569,7 @@ def _ovf_cc_application_impl(
       deps: Additional C++ dependencies.
       generated_artifacts: Cluster artifacts generated for this application.
       persistent_schemas: Persistent schemas packaged with the application.
+      crypto: Whether this application declares and links the crypto facility.
       copts: Additional compiler options.
       defines: Additional preprocessor definitions.
       data: Runtime data files.
@@ -578,6 +584,8 @@ def _ovf_cc_application_impl(
         deployment = deployment,
         contracts = interfaces,
         interface_names = interface_names,
+        persistence_enabled = bool(persistent_schemas),
+        crypto_enabled = crypto,
         visibility = ["//visibility:private"],
     )
     artifacts = interfaces + generated_artifacts + [":" + facade_rule]
@@ -585,7 +593,10 @@ def _ovf_cc_application_impl(
         name = name + "_application_api",
         hdrs = [":" + facade_rule],
         includes = ["generated/" + facade_rule],
-        deps = [Label("//com:api")],
+        deps = [
+            Label("//app:facilities"),
+            Label("//com:api"),
+        ],
         visibility = ["//visibility:private"],
     )
     cc_binary(
@@ -630,6 +641,7 @@ def ovf_cc_application(
         interfaces,
         deployment,
         persistent_schemas = [],
+        crypto = False,
         logging = False,
         application_name = None,
         hdrs = [],
@@ -654,6 +666,7 @@ def ovf_cc_application(
       interfaces: Public OVF interface targets consumed by the application.
       deployment: The application's single CUE deployment model.
       persistent_schemas: Reusable persistent-schema targets used by the application.
+      crypto: Whether the deployment declares the crypto facility.
       logging: Whether to generate the logging deployment facade.
       hdrs: Application-owned headers.
       deps: Additional C++ dependencies.
@@ -694,6 +707,8 @@ def ovf_cc_application(
         )
         generated_deps.extend([":" + persistence_target] + persistent_schemas)
         generated_artifacts.append(":" + persistence_target)
+    if crypto:
+        generated_deps.append(Label("//crypto:api"))
     _ovf_cc_application_impl(
         name = name,
         srcs = srcs,
@@ -706,6 +721,7 @@ def ovf_cc_application(
         deps = generated_deps + deps,
         generated_artifacts = generated_artifacts + persistent_schemas,
         persistent_schemas = persistent_schemas,
+        crypto = crypto,
         copts = copts,
         defines = defines,
         data = data,

@@ -193,5 +193,8 @@ def ovf_internal_persistence_facade(name, deployment, cpp_namespace, schemas = [
         include_prefix = "",
         strip_include_prefix = "generated/" + model,
         visibility = visibility,
-        deps = ["//per:api"],
+        deps = [
+            "//app:facilities",
+            "//per:api",
+        ],
     )

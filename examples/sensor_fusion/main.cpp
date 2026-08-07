@@ -101,6 +101,7 @@ int main() {
     std::cout << "SENSOR_FUSION_READY" << std::endl;
     return ctx.Tick(100ms, [&](ovf::log::Logger& log) {
       if (communication_failed.load()) {
+        std::cerr << "failed to publish fused environment model\n";
         log.Error("failed to publish fused environment model");
         return ovf::app::TickAction::stop;
       }

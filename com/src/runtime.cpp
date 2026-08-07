@@ -357,26 +357,47 @@ Runtime::~Runtime() { Stop(); }
 Runtime::Runtime(Runtime&&) noexcept = default;
 Runtime& Runtime::operator=(Runtime&&) noexcept = default;
 
-ApplicationRuntime::ApplicationRuntime(RuntimeConfig config,
-                                       std::vector<TransportRegistration> transports)
-    : runtime_(std::move(config)) {
-  std::vector<std::string> loaded;
-  for (auto& transport : transports) {
-    if (std::find(loaded.begin(), loaded.end(), transport.provider) != loaded.end())
-      continue;
-    error_ = runtime_.LoadTransport(transport.provider, std::move(transport.config));
-    if (error_ != Error::none)
-      return;
-    loaded.push_back(std::move(transport.provider));
+ApplicationRuntimeResult
+CreateApplicationRuntime(RuntimeConfig config,
+                         std::vector<TransportRegistration> transports) noexcept {
+  try {
+    Runtime runtime(std::move(config));
+    std::vector<std::string> loaded;
+    for (auto& transport : transports) {
+      if (std::find(loaded.begin(), loaded.end(), transport.provider) != loaded.end())
+        continue;
+      auto error = runtime.LoadTransport(transport.provider, std::move(transport.config));
+      if (error != Error::none)
+        return ApplicationRuntimeError{error, "failed to load communication provider '" +
+                                                  transport.provider + "'"};
+      loaded.push_back(std::move(transport.provider));
+    }
+    auto error = runtime.Start();
+    if (error != Error::none)
+      return ApplicationRuntimeError{error, "failed to start communication runtime"};
+    return ApplicationRuntime(std::move(runtime));
+  } catch (...) {
+    return ApplicationRuntimeError{Error::resource_exhausted,
+                                   "cannot allocate communication runtime"};
   }
-  error_ = runtime_.Start();
 }
 
-ApplicationRuntime::ApplicationRuntime(RuntimeConfig config, DeploymentConfig deployment)
-    : runtime_(std::move(config)) {
-  error_ = runtime_.ConfigureDeployment(deployment);
-  if (error_ == Error::none)
-    error_ = runtime_.Start();
+ApplicationRuntimeResult CreateApplicationRuntime(RuntimeConfig config,
+                                                  DeploymentConfig deployment) noexcept {
+  try {
+    Runtime runtime(std::move(config));
+    auto error = runtime.ConfigureDeployment(deployment);
+    if (error != Error::none)
+      return ApplicationRuntimeError{error, "failed to configure communication deployment '" +
+                                                deployment.path + "'"};
+    error = runtime.Start();
+    if (error != Error::none)
+      return ApplicationRuntimeError{error, "failed to start communication runtime"};
+    return ApplicationRuntime(std::move(runtime));
+  } catch (...) {
+    return ApplicationRuntimeError{Error::resource_exhausted,
+                                   "cannot allocate communication runtime"};
+  }
 }
 
 Error Runtime::ConfigureDeployment(DeploymentConfig const& deployment) {

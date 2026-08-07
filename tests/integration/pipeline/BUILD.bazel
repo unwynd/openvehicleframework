@@ -97,6 +97,7 @@ py_test(
         "//examples/driving_policy",
         "//examples/radar:radar_iceoryx2_service",
         "//examples/sensor_fusion",
+        "//per:sqlite_platform_bundle",
         "@dlt_daemon_source//:dlt_runtime",
     ],
     tags = [

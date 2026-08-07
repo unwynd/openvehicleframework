@@ -6,7 +6,7 @@ communication, application execution, deployment generation, and structured
 logging. It is not a finished vehicle software platform.
 
 > [!WARNING]
-> Version 0.0.4 is experimental. It is not production-ready, safety-qualified,
+> Version 0.0.5 is experimental. It is not production-ready, safety-qualified,
 > or intended for use in a vehicle. APIs, generated artifacts, deployment
 > formats, and binary interfaces may change without compatibility guarantees.
 
