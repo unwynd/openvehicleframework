@@ -55,13 +55,13 @@ int main() {
     logger.Error("failed to subscribe to RadarService events");
     return 5;
   }
-  radar_subscription.on_sample([&](RadarFrame const& value) {
+  radar_subscription.OnSample([&](RadarFrame const& value) {
     std::lock_guard lock(mutex);
     radar = value;
     radar_received = true;
     condition.notify_all();
   });
-  field_subscription.on_sample([&](VehicleState const& value) {
+  field_subscription.OnSample([&](VehicleState const& value) {
     std::lock_guard lock(mutex);
     state = value;
     field_received = true;

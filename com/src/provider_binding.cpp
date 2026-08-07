@@ -195,15 +195,15 @@ public:
       if (status != OVF_COM_STATUS_OK)
         return status;
     } else {
-      on_state(OVF_COM_SUBSCRIPTION_ACTIVE, OVF_COM_STATUS_OK);
+      OnState(OVF_COM_SUBSCRIPTION_ACTIVE, OVF_COM_STATUS_OK);
     }
     return OVF_COM_STATUS_OK;
   }
-  auto set_callback(Callback callback) -> void override {
+  auto SetCallback(Callback callback) -> void override {
     std::lock_guard lock(mutex_);
     callback_ = std::move(callback);
   }
-  auto set_state_callback(StateCallback callback) -> void override {
+  auto SetStateCallback(StateCallback callback) -> void override {
     std::optional<std::pair<ovf_com_subscription_state_v1, ovf_com_status_v1>> state;
     {
       std::lock_guard lock(mutex_);
@@ -241,11 +241,11 @@ public:
 
 private:
   static void OnSample(void* user, ovf_com_sample_v1 const* sample) {
-    static_cast<ProviderSubscriptionState*>(user)->on_sample(sample);
+    static_cast<ProviderSubscriptionState*>(user)->OnSample(sample);
   }
   static void OnState(void* user, ovf_com_handle_v1, ovf_com_subscription_state_v1 state,
                       ovf_com_status_v1 reason) {
-    static_cast<ProviderSubscriptionState*>(user)->on_state(state, reason);
+    static_cast<ProviderSubscriptionState*>(user)->OnState(state, reason);
   }
   static auto ToState(ovf_com_subscription_state_v1 state) -> ovf::com::SubscriptionState {
     switch (state) {
@@ -262,7 +262,7 @@ private:
     }
     return ovf::com::SubscriptionState::rejected;
   }
-  auto on_state(ovf_com_subscription_state_v1 state, ovf_com_status_v1 reason) -> void {
+  auto OnState(ovf_com_subscription_state_v1 state, ovf_com_status_v1 reason) -> void {
     StateCallback callback;
     {
       std::lock_guard lock(mutex_);
@@ -277,7 +277,7 @@ private:
                                                            : MapStatus(reason));
     finish_dispatch();
   }
-  auto on_sample(ovf_com_sample_v1 const* sample) -> void {
+  auto OnSample(ovf_com_sample_v1 const* sample) -> void {
     Callback callback;
     {
       std::lock_guard lock(mutex_);
@@ -443,23 +443,23 @@ struct DiscoveryWatch::Impl {
 };
 
 DiscoveryWatch::DiscoveryWatch(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
-DiscoveryWatch::~DiscoveryWatch() { close(); }
+DiscoveryWatch::~DiscoveryWatch() { Close(); }
 
-auto DiscoveryWatch::routes() const -> std::vector<ServiceRoute> {
+auto DiscoveryWatch::Routes() const -> std::vector<ServiceRoute> {
   if (!impl_)
     return {};
   std::lock_guard lock(impl_->mutex);
   return impl_->routes_locked();
 }
 
-auto DiscoveryWatch::select() const -> std::optional<ServiceRoute> {
-  auto available = routes();
+auto DiscoveryWatch::Select() const -> std::optional<ServiceRoute> {
+  auto available = Routes();
   if (available.empty())
     return std::nullopt;
   return available.front();
 }
 
-auto DiscoveryWatch::on_change(Callback callback) -> void {
+auto DiscoveryWatch::OnChange(Callback callback) -> void {
   if (!impl_)
     return;
   Callback notify;
@@ -477,7 +477,7 @@ auto DiscoveryWatch::on_change(Callback callback) -> void {
     notify(snapshot);
 }
 
-auto DiscoveryWatch::close() noexcept -> void {
+auto DiscoveryWatch::Close() noexcept -> void {
   if (!impl_)
     return;
   std::vector<Impl::Registration> registrations;
@@ -554,7 +554,7 @@ auto ProviderClientBinding::invoke(ElementDescriptor const& element,
   return state;
 }
 
-auto ProviderClientBinding::invoke_loaned(ElementDescriptor const& element, std::size_t size,
+auto ProviderClientBinding::InvokeLoaned(ElementDescriptor const& element, std::size_t size,
                                           std::function<bool(std::span<std::byte>)> encode,
                                           CallOptions options) -> std::shared_ptr<RawOperation> {
   const bool extension_available = HasRequestLoans(*provider_);
@@ -643,7 +643,7 @@ auto FindService(Runtime& runtime, RouteBinding candidate,
     return {};
   std::mutex mutex;
   std::condition_variable condition;
-  discovery->on_change([&](std::span<ServiceRoute const> routes) {
+  discovery->OnChange([&](std::span<ServiceRoute const> routes) {
     if (!routes.empty())
       condition.notify_all();
   });
@@ -651,11 +651,11 @@ auto FindService(Runtime& runtime, RouteBinding candidate,
   {
     std::unique_lock lock(mutex);
     condition.wait_for(lock, timeout, [&] {
-      selected = discovery->select();
+      selected = discovery->Select();
       return selected.has_value();
     });
   }
-  discovery->close();
+  discovery->Close();
   return selected ? Connect(runtime, std::move(*selected)) : nullptr;
 }
 
@@ -667,7 +667,7 @@ auto FindService(Runtime& runtime, RouteSelector selector,
     return {};
   std::mutex mutex;
   std::condition_variable condition;
-  discovery->on_change([&](std::span<ServiceRoute const> routes) {
+  discovery->OnChange([&](std::span<ServiceRoute const> routes) {
     if (!routes.empty())
       condition.notify_all();
   });
@@ -675,11 +675,11 @@ auto FindService(Runtime& runtime, RouteSelector selector,
   {
     std::unique_lock lock(mutex);
     condition.wait_for(lock, timeout, [&] {
-      selected = discovery->select();
+      selected = discovery->Select();
       return selected.has_value();
     });
   }
-  discovery->close();
+  discovery->Close();
   return selected ? Connect(runtime, std::move(*selected)) : nullptr;
 }
 
@@ -774,7 +774,7 @@ ProviderServerBinding::ProviderServerBinding(ovf_com_transport_v1& provider,
 }
 ProviderServerBinding::~ProviderServerBinding() { close(); }
 
-auto ProviderServerBinding::add_method(ElementDescriptor const& element, MethodHandler handler)
+auto ProviderServerBinding::AddMethod(ElementDescriptor const& element, MethodHandler handler)
     -> bool {
   if (!impl_ || !handler)
     return false;
@@ -800,7 +800,7 @@ auto ProviderServerBinding::add_method(ElementDescriptor const& element, MethodH
   return true;
 }
 
-auto ProviderServerBinding::add_event(ElementDescriptor const& element) -> bool {
+auto ProviderServerBinding::AddEvent(ElementDescriptor const& element) -> bool {
   if (!impl_)
     return false;
   auto descriptor = Descriptor(impl_->route, element, OVF_COM_ENDPOINT_EVENT_PUBLISHER);
@@ -837,7 +837,7 @@ auto ProviderServerBinding::publish(ElementDescriptor const& element,
                                      : std::optional<Error>{MapStatus(status)};
 }
 
-auto ProviderServerBinding::publish_loaned(ElementDescriptor const& element, std::size_t size,
+auto ProviderServerBinding::PublishLoaned(ElementDescriptor const& element, std::size_t size,
                                            std::function<bool(std::span<std::byte>)> encode)
     -> std::optional<Error> {
   if (!impl_)

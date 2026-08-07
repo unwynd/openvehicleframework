@@ -71,7 +71,7 @@ TEST(SubscriptionClose, QuiescesInFlightCallbacks) {
   std::atomic<bool> ran_after_close{false};
   std::atomic<bool> subscription_closed{false};
   auto subscription = proxy.subscribeRadarObjectsChanged();
-  subscription.on_sample([&](RadarFrame const&) {
+  subscription.OnSample([&](RadarFrame const&) {
     if (subscription_closed.load(std::memory_order_acquire)) {
       ran_after_close.store(true, std::memory_order_release);
     }

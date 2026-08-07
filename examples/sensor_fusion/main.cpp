@@ -97,7 +97,7 @@ int main() {
     }
     return !output.publishEnvironmentModelChanged(model).has_value();
   };
-  camera_subscription.on_sample([&](example::camera::CameraFrame const& frame) {
+  camera_subscription.OnSample([&](example::camera::CameraFrame const& frame) {
     std::lock_guard lock(mutex);
     latest_camera = frame;
     have_camera = true;
@@ -105,7 +105,7 @@ int main() {
       communication_failed.store(true);
     }
   });
-  radar_subscription.on_sample([&](example::radar::RadarFrame const& frame) {
+  radar_subscription.OnSample([&](example::radar::RadarFrame const& frame) {
     std::lock_guard lock(mutex);
     latest_radar = frame;
     have_radar = true;

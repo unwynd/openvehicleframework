@@ -136,7 +136,7 @@ public:
     auto {{ method.name }}({{ method.input|cpp_type }} request, ovf::com::CallOptions options)
         -> ovf::com::Operation<ovf::com::MethodOutcome<{{ method.output|cpp_type }}, {{ method.application_error }}>> {
         auto size = ovf::com::encoded_size(request);
-        auto state = binding_->invoke_loaned(
+        auto state = binding_->InvokeLoaned(
             {{ service.name }}Contract::{{ method.name }}Descriptor, size,
             [request = std::move(request)](std::span<std::byte> output) {
                 return ovf::com::encode_into(request, output);
@@ -186,7 +186,7 @@ public:
     auto set{{ field.name }}({{ field.value|cpp_type }} value, ovf::com::CallOptions options)
         -> ovf::com::Operation<std::optional<ovf::com::Error>> {
         auto size = ovf::com::encoded_size(value);
-        auto state = binding_->invoke_loaned(
+        auto state = binding_->InvokeLoaned(
             {{ service.name }}Contract::{{ field.name }}SetDescriptor, size,
             [value = std::move(value)](std::span<std::byte> output) {
                 return ovf::com::encode_into(value, output);
@@ -244,13 +244,13 @@ public:
         : binding_(std::move(binding)), implementation_(&implementation) {
         valid_ = binding_ != nullptr;
 {% for event in service.events|sort(attribute="tag") %}
-        valid_ = valid_ && binding_->add_event({{ service.name }}Contract::{{ event.name }}Descriptor);
+        valid_ = valid_ && binding_->AddEvent({{ service.name }}Contract::{{ event.name }}Descriptor);
 {% endfor %}
 {% for field in service.fields|sort(attribute="tag") if field.notifiable %}
-        valid_ = valid_ && binding_->add_event({{ service.name }}Contract::{{ field.name }}NotifyDescriptor);
+        valid_ = valid_ && binding_->AddEvent({{ service.name }}Contract::{{ field.name }}NotifyDescriptor);
 {% endfor %}
 {% for method in service.methods|sort(attribute="tag") %}
-        valid_ = valid_ && binding_->add_method({{ service.name }}Contract::{{ method.name }}Descriptor,
+        valid_ = valid_ && binding_->AddMethod({{ service.name }}Contract::{{ method.name }}Descriptor,
             [this](std::span<const std::byte> bytes, std::chrono::steady_clock::time_point) {
                 {{ method.input|cpp_type }} request{};
                 if (!ovf::com::decode(bytes, request)) return ovf::com::RawServerResult{};
@@ -273,7 +273,7 @@ public:
             });
 {% endfor %}
 {% for field in service.fields|sort(attribute="tag") if field.readable %}
-        valid_ = valid_ && binding_->add_method({{ service.name }}Contract::{{ field.name }}GetDescriptor,
+        valid_ = valid_ && binding_->AddMethod({{ service.name }}Contract::{{ field.name }}GetDescriptor,
             [this](std::span<const std::byte> bytes, std::chrono::steady_clock::time_point) {
                 if (!bytes.empty()) return ovf::com::RawServerResult{};
                 auto result = implementation_->get{{ field.name }}();
@@ -284,7 +284,7 @@ public:
             });
 {% endfor %}
 {% for field in service.fields|sort(attribute="tag") if field.writable %}
-        valid_ = valid_ && binding_->add_method({{ service.name }}Contract::{{ field.name }}SetDescriptor,
+        valid_ = valid_ && binding_->AddMethod({{ service.name }}Contract::{{ field.name }}SetDescriptor,
             [this](std::span<const std::byte> bytes, std::chrono::steady_clock::time_point) {
                 {{ field.value|cpp_type }} value{};
                 if (!ovf::com::decode(bytes, value)) return ovf::com::RawServerResult{};
@@ -324,7 +324,7 @@ private:
         -> std::optional<ovf::com::Error> {
         if (!valid_) return ovf::com::Error::unavailable;
         auto size = ovf::com::encoded_size(value);
-        return binding_->publish_loaned(element, size, [&value](std::span<std::byte> destination) {
+        return binding_->PublishLoaned(element, size, [&value](std::span<std::byte> destination) {
             return ovf::com::encode_into(value, destination);
         });
     }

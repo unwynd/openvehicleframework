@@ -84,7 +84,7 @@ int main() {
   }
   bool received{};
   bool persistence_failed{};
-  subscription.on_sample([&](EnvironmentModel const& model) {
+  subscription.OnSample([&](EnvironmentModel const& model) {
     std::lock_guard lock(mutex);
     if (model.objects.empty()) {
       return;

@@ -56,10 +56,10 @@ public:
   DiscoveryWatch(DiscoveryWatch const&) = delete;
   DiscoveryWatch& operator=(DiscoveryWatch const&) = delete;
 
-  [[nodiscard]] auto routes() const -> std::vector<ServiceRoute>;
-  [[nodiscard]] auto select() const -> std::optional<ServiceRoute>;
-  auto on_change(Callback callback) -> void;
-  auto close() noexcept -> void;
+  [[nodiscard]] auto Routes() const -> std::vector<ServiceRoute>;
+  [[nodiscard]] auto Select() const -> std::optional<ServiceRoute>;
+  auto OnChange(Callback callback) -> void;
+  auto Close() noexcept -> void;
 
 private:
   struct Impl;
@@ -80,7 +80,7 @@ public:
 
   auto invoke(ElementDescriptor const&, std::span<const std::byte>, CallOptions)
       -> std::shared_ptr<RawOperation> override;
-  auto invoke_loaned(ElementDescriptor const&, std::size_t,
+  auto InvokeLoaned(ElementDescriptor const&, std::size_t,
                      std::function<bool(std::span<std::byte>)>, CallOptions)
       -> std::shared_ptr<RawOperation> override;
   auto subscribe(ElementDescriptor const&) -> std::shared_ptr<RawSubscription> override;
@@ -106,11 +106,11 @@ public:
   ProviderServerBinding(ProviderServerBinding const&) = delete;
   ProviderServerBinding& operator=(ProviderServerBinding const&) = delete;
 
-  auto add_method(ElementDescriptor const&, MethodHandler) -> bool override;
-  auto add_event(ElementDescriptor const&) -> bool override;
+  auto AddMethod(ElementDescriptor const&, MethodHandler) -> bool override;
+  auto AddEvent(ElementDescriptor const&) -> bool override;
   auto publish(ElementDescriptor const&, std::span<const std::byte>)
       -> std::optional<Error> override;
-  auto publish_loaned(ElementDescriptor const&, std::size_t,
+  auto PublishLoaned(ElementDescriptor const&, std::size_t,
                       std::function<bool(std::span<std::byte>)>)
       -> std::optional<Error> override;
   auto close() noexcept -> void override;

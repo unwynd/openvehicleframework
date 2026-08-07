@@ -75,9 +75,9 @@ int main() {
   auto fallback_route = Route(0x6a, 10);
   auto preferred_route = Route(0x6b, 1);
   auto discovery = ovf::com::Discover(runtime, {fallback_route, preferred_route});
-  assert(discovery && discovery->routes().empty());
+  assert(discovery && discovery->Routes().empty());
   int discovery_changes{};
-  discovery->on_change([&](std::span<ovf::com::ServiceRoute const>) { ++discovery_changes; });
+  discovery->OnChange([&](std::span<ovf::com::ServiceRoute const>) { ++discovery_changes; });
 
   RadarImplementation fallback_implementation;
   auto fallback_binding = ovf::com::Offer(runtime, fallback_route);
@@ -90,7 +90,7 @@ int main() {
   RadarServiceOffer offer(server_binding, implementation);
   assert(offer.valid());
   assert(discovery_changes >= 2);
-  auto selected = discovery->select();
+  auto selected = discovery->Select();
   assert(selected && selected->provider() == "inproc");
   assert(selected->instance_id().bytes.back() == 0x6b);
   assert(selected->route_epoch() == 1);
@@ -103,13 +103,13 @@ int main() {
   RadarFrame received{};
   auto radar_subscription = proxy.subscribeRadarObjectsChanged();
   bool radar_subscription_active{};
-  radar_subscription.on_state(
+  radar_subscription.OnState(
       [&](ovf::com::SubscriptionState state, std::optional<ovf::com::Error> reason) {
         assert(!reason);
         radar_subscription_active = state == ovf::com::SubscriptionState::active;
       });
   assert(radar_subscription_active);
-  radar_subscription.on_sample([&](RadarFrame const& frame) {
+  radar_subscription.OnSample([&](RadarFrame const& frame) {
     received = frame;
     ++radar_samples;
   });
@@ -151,7 +151,7 @@ int main() {
   int field_updates{};
   VehicleState notified{};
   auto field_subscription = proxy.subscribeVehicleStateField();
-  field_subscription.on_sample_view([&](auto const& view) {
+  field_subscription.OnSampleView([&](auto const& view) {
     assert(!view.bytes().empty());
     assert(view.decode(notified));
     ++field_updates;
@@ -166,16 +166,16 @@ int main() {
   assert(expired_result.com_error() == ovf::com::Error::deadline_exceeded);
 
   offer.close();
-  assert(discovery->routes().size() == 1);
-  assert(discovery->select()->instance_id().bytes.back() == 0x6a);
+  assert(discovery->Routes().size() == 1);
+  assert(discovery->Select()->instance_id().bytes.back() == 0x6a);
   auto unavailable_operation = proxy.Calibrate({2.0F}, deadline);
   auto unavailable = unavailable_operation.get();
   assert(unavailable.com_error() == ovf::com::Error::unavailable);
   fallback_offer.close();
-  assert(discovery->routes().empty());
+  assert(discovery->Routes().empty());
 
   field_subscription.close();
   radar_subscription.close();
-  discovery->close();
+  discovery->Close();
   runtime.Stop();
 }

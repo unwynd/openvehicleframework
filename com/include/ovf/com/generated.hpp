@@ -530,8 +530,8 @@ public:
   using Callback = std::function<void(std::span<const std::byte>)>;
   using StateCallback = std::function<void(SubscriptionState, std::optional<Error>)>;
   virtual ~RawSubscription() = default;
-  virtual auto set_callback(Callback) -> void = 0;
-  virtual auto set_state_callback(StateCallback) -> void = 0;
+  virtual auto SetCallback(Callback) -> void = 0;
+  virtual auto SetStateCallback(StateCallback) -> void = 0;
   // close() is a quiescence boundary: after it returns, no further sample or
   // state callback will run for this subscription. Implementations block on
   // any in-flight callback dispatch before returning.
@@ -542,7 +542,7 @@ public:
   virtual ~ClientBinding() = default;
   virtual auto invoke(ElementDescriptor const&, std::span<const std::byte>, CallOptions)
       -> std::shared_ptr<RawOperation> = 0;
-  virtual auto invoke_loaned(ElementDescriptor const&, std::size_t,
+  virtual auto InvokeLoaned(ElementDescriptor const&, std::size_t,
                              std::function<bool(std::span<std::byte>)>, CallOptions)
       -> std::shared_ptr<RawOperation> = 0;
   virtual auto subscribe(ElementDescriptor const&) -> std::shared_ptr<RawSubscription> = 0;
@@ -589,11 +589,11 @@ public:
   using MethodHandler = std::function<RawServerResult(std::span<const std::byte>,
                                                       std::chrono::steady_clock::time_point)>;
   virtual ~ServerBinding() = default;
-  virtual auto add_method(ElementDescriptor const&, MethodHandler) -> bool = 0;
-  virtual auto add_event(ElementDescriptor const&) -> bool = 0;
+  virtual auto AddMethod(ElementDescriptor const&, MethodHandler) -> bool = 0;
+  virtual auto AddEvent(ElementDescriptor const&) -> bool = 0;
   virtual auto publish(ElementDescriptor const&, std::span<const std::byte>)
       -> std::optional<Error> = 0;
-  virtual auto publish_loaned(ElementDescriptor const&, std::size_t,
+  virtual auto PublishLoaned(ElementDescriptor const&, std::size_t,
                               std::function<bool(std::span<std::byte>)>)
       -> std::optional<Error> = 0;
   virtual auto close() noexcept -> void = 0;
@@ -643,27 +643,27 @@ public:
   EventSubscription(EventSubscription&&) noexcept = default;
   EventSubscription(EventSubscription const&) = delete;
   [[nodiscard]] auto valid() const noexcept -> bool { return static_cast<bool>(state_); }
-  auto on_sample(Callback callback) -> void {
+  auto OnSample(Callback callback) -> void {
     if (!state_)
       return;
     auto decode = decode_;
-    state_->set_callback([decode, callback = std::move(callback)](auto bytes) {
+    state_->SetCallback([decode, callback = std::move(callback)](auto bytes) {
       T value{};
       if (decode(bytes, value))
         callback(value);
     });
   }
-  auto on_sample_view(ViewCallback callback) -> void {
+  auto OnSampleView(ViewCallback callback) -> void {
     if (!state_)
       return;
-    state_->set_callback([callback = std::move(callback)](auto bytes) {
+    state_->SetCallback([callback = std::move(callback)](auto bytes) {
       SampleView view(bytes);
       callback(view);
     });
   }
-  auto on_state(StateCallback callback) -> void {
+  auto OnState(StateCallback callback) -> void {
     if (state_)
-      state_->set_state_callback(std::move(callback));
+      state_->SetStateCallback(std::move(callback));
   }
   // close() is a quiescence boundary: after it returns, no further sample or
   // state callback will run for this subscription. The destructor calls
