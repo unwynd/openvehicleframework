@@ -231,8 +231,22 @@ struct RuntimeConfig final {
   std::uint32_t max_contexts{64};
 };
 
+// Options for the unified Runtime::Open entry point. Set factory to construct
+// with a linked-in provider; set provider (and optionally provider_directory)
+// to dynamically load one. Exactly one of the two must be provided.
+struct OpenOptions final {
+  RuntimeConfig config{};
+  const ovf_crypto_backend_factory_v1* factory{nullptr};
+  std::string_view provider{};
+  std::string_view provider_directory{};
+};
+
 class Runtime final {
 public:
+  // Open is the preferred factory entry point; the older Create/Load below
+  // are retained as thin wrappers so existing call sites keep compiling.
+  static Result<std::unique_ptr<Runtime>> Open(OpenOptions options) noexcept;
+
   static Result<std::unique_ptr<Runtime>> Create(const ovf_crypto_backend_factory_v1& factory,
                                                  RuntimeConfig config = {}) noexcept;
   static Result<std::unique_ptr<Runtime>> Load(std::string_view provider,

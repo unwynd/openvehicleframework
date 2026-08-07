@@ -386,6 +386,20 @@ Runtime::~Runtime() {
   library_ = nullptr;
 }
 
+Result<std::unique_ptr<Runtime>> Runtime::Open(OpenOptions options) noexcept {
+  if (options.factory != nullptr) {
+    return Create(*options.factory, std::move(options.config));
+  }
+  if (!options.provider.empty()) {
+    // provider_directory selects the search path (currently ignored by Load,
+    // which uses the OVF_CRYPTO_PROVIDER_PATH env var). Kept in Options so the
+    // signature can accept both without callers switching entry points.
+    return Load(options.provider, std::move(options.config));
+  }
+  return Error{ErrorCode::invalid_argument,
+               "Runtime::Open requires either a factory or a provider name"};
+}
+
 Result<std::unique_ptr<Runtime>> Runtime::Create(const ovf_crypto_backend_factory_v1& factory,
                                                  RuntimeConfig config) noexcept {
   ovf_crypto_backend_v1* backend{};

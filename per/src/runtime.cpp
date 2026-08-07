@@ -617,6 +617,20 @@ void Store::Close() noexcept {
 Runtime::Runtime(std::shared_ptr<detail::RuntimeState> state) noexcept : state_(std::move(state)) {}
 Runtime::~Runtime() { Stop(); }
 
+Result<std::unique_ptr<Runtime>> Runtime::Open(OpenOptions options) noexcept {
+  if (options.factory != nullptr) {
+    return Create(*options.factory, std::move(options.config));
+  }
+  if (!options.provider.empty()) {
+    if (!options.provider_directory.empty()) {
+      return LoadFrom(options.provider, options.provider_directory, std::move(options.config));
+    }
+    return Load(options.provider, std::move(options.config));
+  }
+  return Error{ErrorCode::invalid_argument,
+               "Runtime::Open requires either a factory or a provider name"};
+}
+
 Result<std::unique_ptr<Runtime>> Runtime::Create(const ovf_per_backend_factory_v1& factory,
                                                  RuntimeConfig config) noexcept {
   ovf_per_backend_v1* backend{};

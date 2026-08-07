@@ -36,6 +36,17 @@ ovf::per::StoreOptions Options(std::uint64_t capacity = 128) {
           .max_value_size = 32};
 }
 
+TEST(PerRuntimeOpen, RejectsMissingFactoryAndProvider) {
+  auto missing = ovf::per::Runtime::Open({});
+  ASSERT_FALSE(missing);
+  EXPECT_EQ(missing.error().code, ovf::per::ErrorCode::invalid_argument);
+}
+
+TEST(PerRuntimeOpen, AcceptsInlineFactoryThroughOptions) {
+  auto runtime_result = ovf::per::Runtime::Open({.factory = ovf_per_backend_query_v1()});
+  ASSERT_TRUE(runtime_result) << runtime_result.error().message;
+}
+
 TEST(PerMemoryProviderTest, CommitsAtomicallyAndKeepsReadSnapshotsStable) {
   auto runtime_result = ovf::per::Runtime::Create(*ovf_per_backend_query_v1());
   ASSERT_TRUE(runtime_result) << runtime_result.error().message;
