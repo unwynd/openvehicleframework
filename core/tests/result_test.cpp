@@ -55,27 +55,23 @@ TEST(CoreResult, MapPreservesError) {
 
 TEST(CoreResult, AndThenChains) {
   IntResult result{5};
-  auto next = std::move(result).and_then([](int value) -> StringResult {
-    return std::to_string(value * 3);
-  });
+  auto next = std::move(result).and_then(
+      [](int value) -> StringResult { return std::to_string(value * 3); });
   EXPECT_TRUE(next.has_value());
   EXPECT_EQ(next.value(), "15");
 }
 
 TEST(CoreResult, AndThenPropagatesError) {
   IntResult result{TestError{4, "propagate"}};
-  auto next = std::move(result).and_then([](int) -> StringResult {
-    return std::string{"never"};
-  });
+  auto next = std::move(result).and_then([](int) -> StringResult { return std::string{"never"}; });
   EXPECT_FALSE(next.has_value());
   EXPECT_EQ(next.error().code, 4);
 }
 
 TEST(CoreResult, OrElseRecovers) {
   IntResult result{TestError{1, "recover"}};
-  auto recovered = std::move(result).or_else([](TestError err) -> IntResult {
-    return err.code * 10;
-  });
+  auto recovered =
+      std::move(result).or_else([](TestError err) -> IntResult { return err.code * 10; });
   EXPECT_TRUE(recovered.has_value());
   EXPECT_EQ(recovered.value(), 10);
 }

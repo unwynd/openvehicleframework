@@ -273,8 +273,8 @@ private:
       ++in_flight_;
     }
     if (callback)
-      callback(ToState(state), reason == OVF_COM_STATUS_OK ? std::optional<Error>{}
-                                                           : MapStatus(reason));
+      callback(ToState(state),
+               reason == OVF_COM_STATUS_OK ? std::optional<Error>{} : MapStatus(reason));
     finish_dispatch();
   }
   auto OnSample(ovf_com_sample_v1 const* sample) -> void {
@@ -555,8 +555,8 @@ auto ProviderClientBinding::invoke(ElementDescriptor const& element,
 }
 
 auto ProviderClientBinding::InvokeLoaned(ElementDescriptor const& element, std::size_t size,
-                                          std::function<bool(std::span<std::byte>)> encode,
-                                          CallOptions options) -> std::shared_ptr<RawOperation> {
+                                         std::function<bool(std::span<std::byte>)> encode,
+                                         CallOptions options) -> std::shared_ptr<RawOperation> {
   const bool extension_available = HasRequestLoans(*provider_);
   if (!extension_available) {
     std::vector<std::byte> payload(size);
@@ -818,8 +818,7 @@ auto ProviderServerBinding::AddEvent(ElementDescriptor const& element) -> bool {
 }
 
 auto ProviderServerBinding::publish(ElementDescriptor const& element,
-                                    std::span<const std::byte> payload)
-    -> std::optional<Error> {
+                                    std::span<const std::byte> payload) -> std::optional<Error> {
   if (!impl_)
     return Error::shutting_down;
   ovf_com_handle_v1 endpoint{};
@@ -838,7 +837,7 @@ auto ProviderServerBinding::publish(ElementDescriptor const& element,
 }
 
 auto ProviderServerBinding::PublishLoaned(ElementDescriptor const& element, std::size_t size,
-                                           std::function<bool(std::span<std::byte>)> encode)
+                                          std::function<bool(std::span<std::byte>)> encode)
     -> std::optional<Error> {
   if (!impl_)
     return Error::shutting_down;

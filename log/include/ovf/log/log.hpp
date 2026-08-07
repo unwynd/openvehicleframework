@@ -89,9 +89,7 @@ namespace literals {
 struct FieldName final {
   std::string_view name;
 
-  [[nodiscard]] Field operator=(bool value) const noexcept {
-    return Field::Boolean(name, value);
-  }
+  [[nodiscard]] Field operator=(bool value) const noexcept { return Field::Boolean(name, value); }
   [[nodiscard]] Field operator=(std::string_view value) const noexcept {
     return Field::Text(name, value);
   }

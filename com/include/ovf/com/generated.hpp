@@ -46,8 +46,7 @@ public:
   // Construct from a span. Returns nullopt when the input exceeds Capacity,
   // so callers can write `auto v = BoundedVector<T, N>::from(values)` and
   // check once instead of testing push_back on every element.
-  static constexpr auto from(std::span<const T> values) noexcept
-      -> std::optional<BoundedVector> {
+  static constexpr auto from(std::span<const T> values) noexcept -> std::optional<BoundedVector> {
     if (values.size() > Capacity)
       return std::nullopt;
     BoundedVector result;
@@ -79,8 +78,7 @@ public:
   // Return a populated BoundedString if the input fits, otherwise nullopt.
   // Preferred over `default-construct then .assign(...)` because it lets
   // struct initialization stay in one expression.
-  static constexpr auto from(std::string_view value) noexcept
-      -> std::optional<BoundedString> {
+  static constexpr auto from(std::string_view value) noexcept -> std::optional<BoundedString> {
     BoundedString result;
     if (!result.assign(value))
       return std::nullopt;
@@ -118,12 +116,8 @@ public:
 
   [[nodiscard]] Value const& value() const& { return std::get<0>(inner_); }
   [[nodiscard]] Value&& value() && { return std::get<0>(std::move(inner_)); }
-  [[nodiscard]] ApplicationError const& application_error() const& {
-    return std::get<1>(inner_);
-  }
-  [[nodiscard]] ApplicationError&& application_error() && {
-    return std::get<1>(std::move(inner_));
-  }
+  [[nodiscard]] ApplicationError const& application_error() const& { return std::get<1>(inner_); }
+  [[nodiscard]] ApplicationError&& application_error() && { return std::get<1>(std::move(inner_)); }
   [[nodiscard]] Error com_error() const noexcept { return std::get<2>(inner_); }
 
   // is<T>() checks whether the outcome carries the requested alternative.
@@ -134,8 +128,7 @@ public:
     } else if constexpr (std::is_same_v<T, Value>) {
       return ok();
     } else {
-      return has_application_error() &&
-             std::holds_alternative<T>(std::get<1>(inner_));
+      return has_application_error() && std::holds_alternative<T>(std::get<1>(inner_));
     }
   }
   // as<T>() reads the requested alternative. Non-application-error alternatives
@@ -543,7 +536,7 @@ public:
   virtual auto invoke(ElementDescriptor const&, std::span<const std::byte>, CallOptions)
       -> std::shared_ptr<RawOperation> = 0;
   virtual auto InvokeLoaned(ElementDescriptor const&, std::size_t,
-                             std::function<bool(std::span<std::byte>)>, CallOptions)
+                            std::function<bool(std::span<std::byte>)>, CallOptions)
       -> std::shared_ptr<RawOperation> = 0;
   virtual auto subscribe(ElementDescriptor const&) -> std::shared_ptr<RawSubscription> = 0;
 };
@@ -594,8 +587,7 @@ public:
   virtual auto publish(ElementDescriptor const&, std::span<const std::byte>)
       -> std::optional<Error> = 0;
   virtual auto PublishLoaned(ElementDescriptor const&, std::size_t,
-                              std::function<bool(std::span<std::byte>)>)
-      -> std::optional<Error> = 0;
+                             std::function<bool(std::span<std::byte>)>) -> std::optional<Error> = 0;
   virtual auto close() noexcept -> void = 0;
 };
 

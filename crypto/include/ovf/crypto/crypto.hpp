@@ -282,8 +282,8 @@ public:
   explicit HashFacade(Runtime* rt) noexcept : runtime_(rt) {}
   [[nodiscard]] Result<std::vector<std::byte>>
   Compute(Algorithm algorithm, std::span<const std::byte> input) const noexcept;
-  [[nodiscard]] Result<std::vector<std::byte>>
-  Mac(Algorithm algorithm, const Key& key, std::span<const std::byte> input) const noexcept;
+  [[nodiscard]] Result<std::vector<std::byte>> Mac(Algorithm algorithm, const Key& key,
+                                                   std::span<const std::byte> input) const noexcept;
 
 private:
   Runtime* runtime_;
@@ -453,8 +453,9 @@ inline Result<std::vector<std::byte>>
 HashFacade::Compute(Algorithm algorithm, std::span<const std::byte> input) const noexcept {
   return runtime_->Hash(algorithm, input);
 }
-inline Result<std::vector<std::byte>> HashFacade::Mac(Algorithm algorithm, const Key& key,
-                                                      std::span<const std::byte> input) const noexcept {
+inline Result<std::vector<std::byte>>
+HashFacade::Mac(Algorithm algorithm, const Key& key,
+                std::span<const std::byte> input) const noexcept {
   return runtime_->Mac(algorithm, key, input);
 }
 inline Result<std::vector<std::byte>>

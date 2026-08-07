@@ -396,8 +396,7 @@ Error Runtime::ConfigureDeployment(DeploymentConfig const& deployment) {
   return Error::none;
 }
 
-Error Runtime::AddTransport(const ovf_com_transport_factory_v1& factory,
-                                   TransportConfig config) {
+Error Runtime::AddTransport(const ovf_com_transport_factory_v1& factory, TransportConfig config) {
   if (impl_->running) {
     return Error::invalid_state;
   }

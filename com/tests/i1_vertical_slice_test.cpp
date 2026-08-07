@@ -31,8 +31,7 @@ public:
     return state;
   }
 
-  auto setVehicleStateField(VehicleState const& value)
-      -> std::optional<ovf::com::Error> override {
+  auto setVehicleStateField(VehicleState const& value) -> std::optional<ovf::com::Error> override {
     state = value;
     return std::nullopt;
   }

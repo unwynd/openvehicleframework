@@ -15,8 +15,7 @@ TEST(RuntimeTest, OwnsAndOrdersTransportLifecycle) {
        {}});
 
   EXPECT_EQ(runtime.LoadTransport("../invalid"), ovf::com::Error::invalid_argument);
-  EXPECT_EQ(runtime.LoadTransport("provider-that-does-not-exist"),
-            ovf::com::Error::not_found);
+  EXPECT_EQ(runtime.LoadTransport("provider-that-does-not-exist"), ovf::com::Error::not_found);
 
   const auto* factory = ovf_com_inproc_transport_query_v1();
   ASSERT_TRUE(factory != nullptr);

@@ -33,29 +33,32 @@ public:
   auto getVehicleStateField() -> ovf::com::MethodResult<VehicleState, std::monostate> override {
     return VehicleState{};
   }
-  auto setVehicleStateField(VehicleState const&)
-      -> std::optional<ovf::com::Error> override {
+  auto setVehicleStateField(VehicleState const&) -> std::optional<ovf::com::Error> override {
     return std::nullopt;
   }
-  auto Delay(DelayInput const&)
-      -> ovf::com::MethodResult<DelayOutput, std::monostate> override {
+  auto Delay(DelayInput const&) -> ovf::com::MethodResult<DelayOutput, std::monostate> override {
     return DelayOutput{};
   }
 };
 
 TEST(SubscriptionClose, QuiescesInFlightCallbacks) {
   ovf::com::Runtime runtime({.instance_name = "test", .logger = {}, .dispatcher = {}});
-  ASSERT_EQ(runtime.AddTransport(*ovf_com_inproc_transport_query_v1(),
-                                 {.configuration = "", .max_endpoints = 32,
-                                  .max_outstanding_operations = 16}),
+  ASSERT_EQ(runtime.AddTransport(
+                *ovf_com_inproc_transport_query_v1(),
+                {.configuration = "", .max_endpoints = 32, .max_outstanding_operations = 16}),
             ovf::com::Error::none);
   ASSERT_EQ(runtime.Start(), ovf::com::Error::none);
 
-  ovf::com::RouteBinding route{
-      RadarServiceContract::id,
-      ovf::com::Uuid{{0xc1, 0x81, 0x3c, 0x19, 0x1f, 0x06, 0x49, 0x14, 0xbb, 0x0d, 0xc6, 0x08,
-                      0x0f, 0x1a, 0x84, 0x77}},
-      1, 65536, 8, {}, "inproc", "radar", 0};
+  ovf::com::RouteBinding route{RadarServiceContract::id,
+                               ovf::com::Uuid{{0xc1, 0x81, 0x3c, 0x19, 0x1f, 0x06, 0x49, 0x14, 0xbb,
+                                               0x0d, 0xc6, 0x08, 0x0f, 0x1a, 0x84, 0x77}},
+                               1,
+                               65536,
+                               8,
+                               {},
+                               "inproc",
+                               "radar",
+                               0};
 
   RadarService service;
   auto server_binding = ovf::com::Offer(runtime, route);

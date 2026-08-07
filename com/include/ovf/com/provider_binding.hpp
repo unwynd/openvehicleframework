@@ -81,7 +81,7 @@ public:
   auto invoke(ElementDescriptor const&, std::span<const std::byte>, CallOptions)
       -> std::shared_ptr<RawOperation> override;
   auto InvokeLoaned(ElementDescriptor const&, std::size_t,
-                     std::function<bool(std::span<std::byte>)>, CallOptions)
+                    std::function<bool(std::span<std::byte>)>, CallOptions)
       -> std::shared_ptr<RawOperation> override;
   auto subscribe(ElementDescriptor const&) -> std::shared_ptr<RawSubscription> override;
 
@@ -111,8 +111,7 @@ public:
   auto publish(ElementDescriptor const&, std::span<const std::byte>)
       -> std::optional<Error> override;
   auto PublishLoaned(ElementDescriptor const&, std::size_t,
-                      std::function<bool(std::span<std::byte>)>)
-      -> std::optional<Error> override;
+                     std::function<bool(std::span<std::byte>)>) -> std::optional<Error> override;
   auto close() noexcept -> void override;
 
 private:
