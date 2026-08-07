@@ -42,6 +42,17 @@ cc_test(
 )
 
 cc_test(
+    name = "subscription_close_test",
+    srcs = ["subscription_close_test.cpp"],
+    deps = [
+        ":radar_contract",
+        "//com:inproc_transport",
+        "//com:runtime",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "c_abi_test",
     srcs = ["c_abi_test.c"],
     deps = ["//com:provider_abi"],

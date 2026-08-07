@@ -532,6 +532,9 @@ public:
   virtual ~RawSubscription() = default;
   virtual auto set_callback(Callback) -> void = 0;
   virtual auto set_state_callback(StateCallback) -> void = 0;
+  // close() is a quiescence boundary: after it returns, no further sample or
+  // state callback will run for this subscription. Implementations block on
+  // any in-flight callback dispatch before returning.
   virtual auto close() noexcept -> void = 0;
 };
 class ClientBinding {
@@ -662,6 +665,9 @@ public:
     if (state_)
       state_->set_state_callback(std::move(callback));
   }
+  // close() is a quiescence boundary: after it returns, no further sample or
+  // state callback will run for this subscription. The destructor calls
+  // close() implicitly via the underlying RawSubscription.
   auto close() noexcept -> void {
     if (state_)
       state_->close();

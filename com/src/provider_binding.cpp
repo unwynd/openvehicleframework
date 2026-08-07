@@ -215,16 +215,21 @@ public:
                                           ? std::optional<Error>{}
                                           : MapStatus(state->second));
   }
+  // close() is a quiescence boundary: no sample or state callback runs on
+  // this subscription after close() returns. Any callback already dispatched
+  // by the provider before we ask it to unsubscribe is drained here.
   auto close() noexcept -> void override {
     ovf_com_handle_v1 subscription{}, endpoint{};
     StateCallback state_callback;
     {
-      std::lock_guard lock(mutex_);
+      std::unique_lock lock(mutex_);
       subscription = std::exchange(subscription_, OVF_COM_INVALID_HANDLE_V1);
       endpoint = std::exchange(endpoint_, OVF_COM_INVALID_HANDLE_V1);
       callback_ = {};
       state_callback = std::move(state_callback_);
       state_callback_ = {};
+      closed_ = true;
+      quiescent_.wait(lock, [this] { return in_flight_ == 0; });
     }
     if (subscription && state_callback)
       state_callback(ovf::com::SubscriptionState::withdrawn, {});
@@ -262,31 +267,53 @@ private:
     {
       std::lock_guard lock(mutex_);
       state_ = std::pair{state, reason};
+      if (closed_)
+        return;
       callback = state_callback_;
+      ++in_flight_;
     }
     if (callback)
       callback(ToState(state), reason == OVF_COM_STATUS_OK ? std::optional<Error>{}
                                                            : MapStatus(reason));
+    finish_dispatch();
   }
   auto on_sample(ovf_com_sample_v1 const* sample) -> void {
     Callback callback;
     {
       std::lock_guard lock(mutex_);
+      if (closed_) {
+        // Drop this sample; close() has removed the callback slot and is
+        // (or will be) waiting for in-flight dispatch to complete.
+        if (sample && sample->provider_loan != OVF_COM_INVALID_HANDLE_V1)
+          (void)provider_->loan_release(provider_, sample->provider_loan);
+        return;
+      }
       callback = callback_;
+      ++in_flight_;
     }
     if (callback && sample)
       callback({reinterpret_cast<std::byte const*>(sample->payload.data), sample->payload.size});
     if (sample && sample->provider_loan != OVF_COM_INVALID_HANDLE_V1) {
       (void)provider_->loan_release(provider_, sample->provider_loan);
     }
+    finish_dispatch();
   }
+  auto finish_dispatch() -> void {
+    std::lock_guard lock(mutex_);
+    if (--in_flight_ == 0 && closed_)
+      quiescent_.notify_all();
+  }
+
   ovf_com_transport_v1* provider_;
   ovf_com_handle_v1 endpoint_{};
   ovf_com_handle_v1 subscription_{};
   std::mutex mutex_;
+  std::condition_variable quiescent_;
   Callback callback_;
   StateCallback state_callback_;
   std::optional<std::pair<ovf_com_subscription_state_v1, ovf_com_status_v1>> state_;
+  std::size_t in_flight_{};
+  bool closed_{};
 };
 
 auto Descriptor(RouteBinding const& route, ElementDescriptor const& element,
