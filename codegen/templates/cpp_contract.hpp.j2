@@ -155,12 +155,12 @@ public:
                     }
                 }
 {% endfor %}
-                return ovf::com::CommunicationError::provider_failure;
+                return ovf::com::Error::provider_failure;
             }
 {% endif %}
             {{ method.output|cpp_type }} value{};
             if (!ovf::com::decode(raw.payload, value))
-                return ovf::com::CommunicationError::provider_failure;
+                return ovf::com::Error::provider_failure;
             return value;
         }};
     }
@@ -175,14 +175,14 @@ public:
             if (raw.has_error) return raw.error;
             {{ field.value|cpp_type }} value{};
             if (!ovf::com::decode(raw.payload, value))
-                return ovf::com::CommunicationError::provider_failure;
+                return ovf::com::Error::provider_failure;
             return value;
         }};
     }
 {% endif %}
 {% if field.writable %}
     auto set{{ field.name }}({{ field.value|cpp_type }} value, ovf::com::CallOptions options)
-        -> ovf::com::Operation<std::optional<ovf::com::CommunicationError>> {
+        -> ovf::com::Operation<std::optional<ovf::com::Error>> {
         auto size = ovf::com::encoded_size(value);
         auto state = binding_->invoke_loaned(
             {{ service.name }}Contract::{{ field.name }}SetDescriptor, size,
@@ -190,10 +190,10 @@ public:
                 return ovf::com::encode_into(value, output);
             }, options);
         return {std::move(state), +[](ovf::com::RawResult const& raw)
-            -> std::optional<ovf::com::CommunicationError> {
+            -> std::optional<ovf::com::Error> {
             if (raw.has_error) return raw.error;
             if (raw.application_error || !raw.payload.empty())
-                return ovf::com::CommunicationError::provider_failure;
+                return ovf::com::Error::provider_failure;
             return std::nullopt;
         }};
     }
@@ -228,7 +228,7 @@ public:
 {% endfor %}
 {% for field in service.fields|sort(attribute="tag") if field.writable %}
     virtual auto set{{ field.name }}({{ field.value|cpp_type }} const& value)
-        -> std::optional<ovf::com::CommunicationError> = 0;
+        -> std::optional<ovf::com::Error> = 0;
 {% endfor %}
 };
 
@@ -267,7 +267,7 @@ public:
                     return ovf::com::RawServerResult{};
                 }
 {% endif %}
-                return ovf::com::make_raw_error(std::get<ovf::com::CommunicationError>(result));
+                return ovf::com::make_raw_error(std::get<ovf::com::Error>(result));
             });
 {% endfor %}
 {% for field in service.fields|sort(attribute="tag") if field.readable %}
@@ -278,7 +278,7 @@ public:
                 if (result.index() == 0)
                     return ovf::com::make_raw_result(std::move(std::get<0>(result)));
                 if (result.index() == 1) return ovf::com::RawServerResult{};
-                return ovf::com::make_raw_error(std::get<ovf::com::CommunicationError>(result));
+                return ovf::com::make_raw_error(std::get<ovf::com::Error>(result));
             });
 {% endfor %}
 {% for field in service.fields|sort(attribute="tag") if field.writable %}
@@ -302,13 +302,13 @@ public:
     [[nodiscard]] auto valid() const noexcept -> bool { return valid_; }
 {% for event in service.events|sort(attribute="tag") %}
     auto publish{{ event.name }}({{ event.payload|cpp_type }} const& value)
-        -> std::optional<ovf::com::CommunicationError> {
+        -> std::optional<ovf::com::Error> {
         return publish({{ service.name }}Contract::{{ event.name }}Descriptor, value);
     }
 {% endfor %}
 {% for field in service.fields|sort(attribute="tag") if field.notifiable %}
     auto publish{{ field.name }}({{ field.value|cpp_type }} const& value)
-        -> std::optional<ovf::com::CommunicationError> {
+        -> std::optional<ovf::com::Error> {
         return publish({{ service.name }}Contract::{{ field.name }}NotifyDescriptor, value);
     }
 {% endfor %}
@@ -319,8 +319,8 @@ public:
 private:
     template<class Value>
     auto publish(ovf::com::ElementDescriptor const& element, Value const& value)
-        -> std::optional<ovf::com::CommunicationError> {
-        if (!valid_) return ovf::com::CommunicationError::unavailable;
+        -> std::optional<ovf::com::Error> {
+        if (!valid_) return ovf::com::Error::unavailable;
         auto size = ovf::com::encoded_size(value);
         return binding_->publish_loaned(element, size, [&value](std::span<std::byte> destination) {
             return ovf::com::encode_into(value, destination);

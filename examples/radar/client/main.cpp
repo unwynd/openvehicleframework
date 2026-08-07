@@ -124,9 +124,9 @@ int main() {
 
   options.deadline = std::chrono::steady_clock::now() + 50ms;
   auto delayed = proxy->Delay({300}, options).get(options);
-  if (!std::holds_alternative<ovf::com::CommunicationError>(delayed) ||
-      std::get<ovf::com::CommunicationError>(delayed) !=
-          ovf::com::CommunicationError::deadline_exceeded) {
+  if (!std::holds_alternative<ovf::com::Error>(delayed) ||
+      std::get<ovf::com::Error>(delayed) !=
+          ovf::com::Error::deadline_exceeded) {
     std::cerr << "Delay did not expire at its deadline\n";
     return 12;
   }
@@ -136,9 +136,9 @@ int main() {
   auto cancelled = proxy->Delay({300}, options);
   cancelled.cancel();
   auto cancelled_result = cancelled.get(options);
-  if (!std::holds_alternative<ovf::com::CommunicationError>(cancelled_result) ||
-      std::get<ovf::com::CommunicationError>(cancelled_result) !=
-          ovf::com::CommunicationError::cancelled) {
+  if (!std::holds_alternative<ovf::com::Error>(cancelled_result) ||
+      std::get<ovf::com::Error>(cancelled_result) !=
+          ovf::com::Error::cancelled) {
     std::cerr << "Delay did not complete as cancelled\n";
     return 13;
   }

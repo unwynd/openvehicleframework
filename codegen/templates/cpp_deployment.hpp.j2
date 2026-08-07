@@ -16,7 +16,7 @@ inline auto Transport() -> ovf::com::TransportRegistration {
          .max_outstanding_operations = {{ deployment.max_operations }}}};
 }
 
-inline auto Configure(ovf::com::Runtime& runtime) -> ovf::com::RuntimeError {
+inline auto Configure(ovf::com::Runtime& runtime) -> ovf::com::Error {
     auto const transport = Transport();
     return runtime.LoadTransport(
         transport.provider, transport.config);

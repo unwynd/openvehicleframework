@@ -19,35 +19,35 @@
 namespace ovf::com {
 namespace {
 
-RuntimeError ToRuntimeError(ovf_com_status_v1 status) {
+Error ToRuntimeError(ovf_com_status_v1 status) {
   switch (status) {
   case OVF_COM_STATUS_OK:
-    return RuntimeError::none;
+    return Error::none;
   case OVF_COM_STATUS_INVALID_ARGUMENT:
-    return RuntimeError::invalid_argument;
+    return Error::invalid_argument;
   case OVF_COM_STATUS_INCOMPATIBLE_ABI:
-    return RuntimeError::incompatible_abi;
+    return Error::incompatible_abi;
   case OVF_COM_STATUS_ALREADY_EXISTS:
-    return RuntimeError::duplicate_transport;
+    return Error::duplicate_transport;
   case OVF_COM_STATUS_INVALID_STATE:
-    return RuntimeError::invalid_state;
+    return Error::invalid_state;
   case OVF_COM_STATUS_UNSUPPORTED:
-    return RuntimeError::unsupported;
+    return Error::unsupported;
   case OVF_COM_STATUS_RESOURCE_EXHAUSTED:
-    return RuntimeError::resource_exhausted;
+    return Error::resource_exhausted;
   case OVF_COM_STATUS_NOT_FOUND:
-    return RuntimeError::not_found;
+    return Error::not_found;
   case OVF_COM_STATUS_CANCELLED:
-    return RuntimeError::cancelled;
+    return Error::cancelled;
   case OVF_COM_STATUS_DEADLINE_EXCEEDED:
-    return RuntimeError::deadline_exceeded;
+    return Error::deadline_exceeded;
   case OVF_COM_STATUS_SHUTTING_DOWN:
-    return RuntimeError::shutting_down;
+    return Error::shutting_down;
   case OVF_COM_STATUS_APPLICATION_ERROR:
-    return RuntimeError::transport_error;
+    return Error::provider_failure;
   case OVF_COM_STATUS_TRANSPORT_ERROR:
   default:
-    return RuntimeError::transport_error;
+    return Error::provider_failure;
   }
 }
 
@@ -146,10 +146,10 @@ struct ConfiguredRoute {
 };
 
 auto ParseDeployment(std::string const& path, std::vector<TransportRegistration>& transports,
-                     std::vector<ConfiguredRoute>& routes) -> RuntimeError {
+                     std::vector<ConfiguredRoute>& routes) -> Error {
   std::ifstream input(path, std::ios::binary);
   if (!input)
-    return RuntimeError::not_found;
+    return Error::not_found;
   Json::CharReaderBuilder builder;
   builder["allowComments"] = false;
   builder["allowTrailingCommas"] = false;
@@ -160,14 +160,14 @@ auto ParseDeployment(std::string const& path, std::vector<TransportRegistration>
   if (!Json::parseFromStream(builder, input, &root, &errors) || !root.isObject() ||
       root["runtimeDeploymentVersion"].asUInt64() != 1U || !root["transports"].isArray() ||
       !root["routes"].isArray())
-    return RuntimeError::invalid_argument;
+    return Error::invalid_argument;
   for (auto const& transport : root["transports"]) {
     if (!transport.isObject() || !transport["provider"].isString() ||
         !transport["configuration"].isString() || !transport["maxEndpoints"].isUInt() ||
         !transport["maxOutstandingOperations"].isUInt() ||
         !transport["startTimeoutMs"].isUInt64() || !transport["stopTimeoutMs"].isUInt64() ||
         transport["startTimeoutMs"].asUInt64() == 0U || transport["stopTimeoutMs"].asUInt64() == 0U)
-      return RuntimeError::invalid_argument;
+      return Error::invalid_argument;
     transports.push_back(
         {transport["provider"].asString(),
          {transport["configuration"].asString(), transport["maxEndpoints"].asUInt(),
@@ -182,7 +182,7 @@ auto ParseDeployment(std::string const& path, std::vector<TransportRegistration>
         !route["provider"].isString() || !route["nativeService"].isString() ||
         !route["elements"].isArray() || !route["maxPayloadSize"].isUInt64() ||
         !route["historyDepth"].isUInt() || !route["priority"].isInt())
-      return RuntimeError::invalid_argument;
+      return Error::invalid_argument;
     RouteBinding binding{*service,
                          *instance,
                          1U,
@@ -198,14 +198,14 @@ auto ParseDeployment(std::string const& path, std::vector<TransportRegistration>
           !element["method"].isString() ||
           (!element["get"].isNull() && !element["get"].isString()) ||
           (!element["set"].isNull() && !element["set"].isString()))
-        return RuntimeError::invalid_argument;
+        return Error::invalid_argument;
       binding.native_elements.push_back({*id, element["event"].asString(),
                                          element["method"].asString(), element["get"].asString(),
                                          element["set"].asString()});
     }
     routes.push_back({route["instance"].asString(), std::move(binding)});
   }
-  return RuntimeError::none;
+  return Error::none;
 }
 
 } // namespace
@@ -365,7 +365,7 @@ ApplicationRuntime::ApplicationRuntime(RuntimeConfig config,
     if (std::find(loaded.begin(), loaded.end(), transport.provider) != loaded.end())
       continue;
     error_ = runtime_.LoadTransport(transport.provider, std::move(transport.config));
-    if (error_ != RuntimeError::none)
+    if (error_ != Error::none)
       return;
     loaded.push_back(std::move(transport.provider));
   }
@@ -375,36 +375,36 @@ ApplicationRuntime::ApplicationRuntime(RuntimeConfig config,
 ApplicationRuntime::ApplicationRuntime(RuntimeConfig config, DeploymentConfig deployment)
     : runtime_(std::move(config)) {
   error_ = runtime_.ConfigureDeployment(deployment);
-  if (error_ == RuntimeError::none)
+  if (error_ == Error::none)
     error_ = runtime_.Start();
 }
 
-RuntimeError Runtime::ConfigureDeployment(DeploymentConfig const& deployment) {
+Error Runtime::ConfigureDeployment(DeploymentConfig const& deployment) {
   if (impl_->running || deployment.path.empty())
-    return RuntimeError::invalid_state;
+    return Error::invalid_state;
   std::vector<TransportRegistration> transports;
   std::vector<ConfiguredRoute> routes;
   auto parsed = ParseDeployment(deployment.path, transports, routes);
-  if (parsed != RuntimeError::none)
+  if (parsed != Error::none)
     return parsed;
   for (auto& transport : transports) {
     auto loaded = LoadTransport(transport.provider, std::move(transport.config));
-    if (loaded != RuntimeError::none)
+    if (loaded != Error::none)
       return loaded;
   }
   impl_->routes = std::move(routes);
-  return RuntimeError::none;
+  return Error::none;
 }
 
-RuntimeError Runtime::AddTransport(const ovf_com_transport_factory_v1& factory,
+Error Runtime::AddTransport(const ovf_com_transport_factory_v1& factory,
                                    TransportConfig config) {
   if (impl_->running) {
-    return RuntimeError::invalid_state;
+    return Error::invalid_state;
   }
   if (factory.struct_size < sizeof(ovf_com_transport_factory_v1) ||
       factory.abi_version != OVF_COM_TRANSPORT_ABI_VERSION_1 || factory.create == nullptr ||
       factory.destroy == nullptr || factory.name.data == nullptr || factory.name.size == 0U) {
-    return RuntimeError::incompatible_abi;
+    return Error::incompatible_abi;
   }
 
   const auto name = AsStringView(factory.name);
@@ -413,7 +413,7 @@ RuntimeError Runtime::AddTransport(const ovf_com_transport_factory_v1& factory,
         return AsStringView(transport.factory->name) == name;
       });
   if (duplicate) {
-    return RuntimeError::duplicate_transport;
+    return Error::duplicate_transport;
   }
 
   const ovf_com_transport_config_v1 abi_config{
@@ -445,7 +445,7 @@ RuntimeError Runtime::AddTransport(const ovf_com_transport_factory_v1& factory,
     if (instance != nullptr) {
       factory.destroy(instance);
     }
-    return RuntimeError::incompatible_abi;
+    return Error::incompatible_abi;
   }
 
   ovf_com_capabilities_v1 capabilities{};
@@ -455,7 +455,7 @@ RuntimeError Runtime::AddTransport(const ovf_com_transport_factory_v1& factory,
       capabilities.max_endpoints < config.max_endpoints ||
       capabilities.max_outstanding_operations < config.max_outstanding_operations) {
     factory.destroy(instance);
-    return capability_result == OVF_COM_STATUS_OK ? RuntimeError::resource_exhausted
+    return capability_result == OVF_COM_STATUS_OK ? Error::resource_exhausted
                                                   : ToRuntimeError(capability_result);
   }
   const auto has_health =
@@ -488,14 +488,14 @@ RuntimeError Runtime::AddTransport(const ovf_com_transport_factory_v1& factory,
     }
   }
   impl_->transports.emplace_back(&factory, instance, config, std::move(health), has_health);
-  return RuntimeError{};
+  return Error{};
 }
 
-RuntimeError Runtime::LoadTransport(std::string_view provider, TransportConfig config) {
+Error Runtime::LoadTransport(std::string_view provider, TransportConfig config) {
   if (provider.empty() || provider.find_first_not_of(
                               "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") !=
                               std::string_view::npos) {
-    return RuntimeError::invalid_argument;
+    return Error::invalid_argument;
   }
 #if defined(__unix__) || defined(__APPLE__)
 #if defined(__APPLE__)
@@ -528,35 +528,35 @@ RuntimeError Runtime::LoadTransport(std::string_view provider, TransportConfig c
     }
   }
   if (library == nullptr) {
-    return RuntimeError::not_found;
+    return Error::not_found;
   }
   using Query = const ovf_com_transport_factory_v1* (*)();
   const auto query = reinterpret_cast<Query>(dlsym(library, "ovf_com_transport_query_v1"));
   if (query == nullptr) {
     dlclose(library);
-    return RuntimeError::incompatible_abi;
+    return Error::incompatible_abi;
   }
   const auto* factory = query();
   if (factory == nullptr) {
     dlclose(library);
-    return RuntimeError::incompatible_abi;
+    return Error::incompatible_abi;
   }
   const auto result = AddTransport(*factory, std::move(config));
-  if (result != RuntimeError::none) {
+  if (result != Error::none) {
     dlclose(library);
     return result;
   }
   impl_->libraries.push_back(library);
-  return RuntimeError::none;
+  return Error::none;
 #else
   static_cast<void>(config);
-  return RuntimeError::unsupported;
+  return Error::unsupported;
 #endif
 }
 
-RuntimeError Runtime::Start() {
+Error Runtime::Start() {
   if (impl_->running) {
-    return RuntimeError::invalid_state;
+    return Error::invalid_state;
   }
 
   std::size_t started = 0;
@@ -583,13 +583,13 @@ RuntimeError Runtime::Start() {
           --started;
           (void)impl_->transports[started].instance->stop(impl_->transports[started].instance);
         }
-        return ready ? RuntimeError::transport_error : RuntimeError::deadline_exceeded;
+        return ready ? Error::provider_failure : Error::deadline_exceeded;
       }
     }
     ++started;
   }
   impl_->running = true;
-  return RuntimeError{};
+  return Error{};
 }
 
 void Runtime::Stop() noexcept {

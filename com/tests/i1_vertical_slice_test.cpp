@@ -32,7 +32,7 @@ public:
   }
 
   auto setVehicleStateField(VehicleState const& value)
-      -> std::optional<ovf::com::CommunicationError> override {
+      -> std::optional<ovf::com::Error> override {
     state = value;
     return std::nullopt;
   }
@@ -69,8 +69,8 @@ int main() {
   assert(
       runtime.AddTransport(
           *factory, {.configuration = "", .max_endpoints = 32, .max_outstanding_operations = 16}) ==
-      ovf::com::RuntimeError::none);
-  assert(runtime.Start() == ovf::com::RuntimeError::none);
+      ovf::com::Error::none);
+  assert(runtime.Start() == ovf::com::Error::none);
 
   auto fallback_route = Route(0x6a, 10);
   auto preferred_route = Route(0x6b, 1);
@@ -104,7 +104,7 @@ int main() {
   auto radar_subscription = proxy.subscribeRadarObjectsChanged();
   bool radar_subscription_active{};
   radar_subscription.on_state(
-      [&](ovf::com::SubscriptionState state, std::optional<ovf::com::CommunicationError> reason) {
+      [&](ovf::com::SubscriptionState state, std::optional<ovf::com::Error> reason) {
         assert(!reason);
         radar_subscription_active = state == ovf::com::SubscriptionState::active;
       });
@@ -165,16 +165,16 @@ int main() {
   auto expired = ovf::com::CallOptions{std::chrono::steady_clock::now() - 1ms};
   auto expired_operation = proxy.Calibrate({2.0F}, expired);
   auto expired_result = expired_operation.get(expired);
-  assert(std::get<ovf::com::CommunicationError>(expired_result) ==
-         ovf::com::CommunicationError::deadline_exceeded);
+  assert(std::get<ovf::com::Error>(expired_result) ==
+         ovf::com::Error::deadline_exceeded);
 
   offer.close();
   assert(discovery->routes().size() == 1);
   assert(discovery->select()->instance_id().bytes.back() == 0x6a);
   auto unavailable_operation = proxy.Calibrate({2.0F}, deadline);
   auto unavailable = unavailable_operation.get(deadline);
-  assert(std::get<ovf::com::CommunicationError>(unavailable) ==
-         ovf::com::CommunicationError::unavailable);
+  assert(std::get<ovf::com::Error>(unavailable) ==
+         ovf::com::Error::unavailable);
   fallback_offer.close();
   assert(discovery->routes().empty());
 

@@ -21,7 +21,7 @@ public:
     if (request.targetDistanceMeters < 0.0F) {
       InvalidTarget error{};
       if (!error.reason.assign("target distance must be non-negative")) {
-        return ovf::com::CommunicationError::provider_failure;
+        return ovf::com::Error::provider_failure;
       }
       return std::variant<InvalidTarget>{std::move(error)};
     }
@@ -34,7 +34,7 @@ public:
   }
 
   auto setVehicleStateField(VehicleState const& value)
-      -> std::optional<ovf::com::CommunicationError> override {
+      -> std::optional<ovf::com::Error> override {
     std::lock_guard lock(mutex_);
     state_ = value;
     externally_set_ = true;

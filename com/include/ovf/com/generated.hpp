@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include "ovf/com/runtime.hpp"
+
 #include <array>
 #include <bit>
 #include <chrono>
@@ -66,15 +68,6 @@ private:
   std::size_t size_{};
 };
 
-enum class CommunicationError : std::uint8_t {
-  unavailable,
-  incompatible,
-  resource_exhausted,
-  deadline_exceeded,
-  cancelled,
-  shutting_down,
-  provider_failure
-};
 enum class SubscriptionState : std::uint8_t {
   requested,
   active,
@@ -84,7 +77,7 @@ enum class SubscriptionState : std::uint8_t {
 };
 
 template <class Value, class ApplicationError>
-using MethodResult = std::variant<Value, ApplicationError, CommunicationError>;
+using MethodResult = std::variant<Value, ApplicationError, Error>;
 
 struct ElementDescriptor {
   enum class Operation : std::uint8_t { event, method, field_get, field_set, field_notify };
@@ -443,7 +436,7 @@ template <class T> auto decode(std::span<const std::byte> bytes, T& value) -> bo
 }
 
 struct RawResult {
-  CommunicationError error;
+  Error error;
   bool has_error;
   bool application_error;
   std::vector<std::byte> payload;
@@ -458,7 +451,7 @@ public:
 class RawSubscription {
 public:
   using Callback = std::function<void(std::span<const std::byte>)>;
-  using StateCallback = std::function<void(SubscriptionState, std::optional<CommunicationError>)>;
+  using StateCallback = std::function<void(SubscriptionState, std::optional<Error>)>;
   virtual ~RawSubscription() = default;
   virtual auto set_callback(Callback) -> void = 0;
   virtual auto set_state_callback(StateCallback) -> void = 0;
@@ -476,7 +469,7 @@ public:
 };
 
 struct RawServerResult {
-  CommunicationError error{CommunicationError::provider_failure};
+  Error error{Error::provider_failure};
   bool has_error{};
   bool application_error{};
   std::vector<std::byte> payload;
@@ -484,7 +477,7 @@ struct RawServerResult {
   std::function<bool(std::span<std::byte>)> encode_payload;
 };
 
-inline auto make_raw_error(CommunicationError error) -> RawServerResult {
+inline auto make_raw_error(Error error) -> RawServerResult {
   RawServerResult result{};
   result.error = error;
   result.has_error = true;
@@ -519,10 +512,10 @@ public:
   virtual auto add_method(ElementDescriptor const&, MethodHandler) -> bool = 0;
   virtual auto add_event(ElementDescriptor const&) -> bool = 0;
   virtual auto publish(ElementDescriptor const&, std::span<const std::byte>)
-      -> std::optional<CommunicationError> = 0;
+      -> std::optional<Error> = 0;
   virtual auto publish_loaned(ElementDescriptor const&, std::size_t,
                               std::function<bool(std::span<std::byte>)>)
-      -> std::optional<CommunicationError> = 0;
+      -> std::optional<Error> = 0;
   virtual auto close() noexcept -> void = 0;
 };
 

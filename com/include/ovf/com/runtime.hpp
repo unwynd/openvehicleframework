@@ -39,19 +39,22 @@ struct TransportConfig {
   std::chrono::steady_clock::duration stop_timeout{std::chrono::seconds(5)};
 };
 
-enum class RuntimeError {
+// Unified com error enum. Covers both lifecycle failures (returned from Runtime
+// entry points as an enum) and method-call failures (embedded in MethodResult).
+enum class Error : std::uint8_t {
   none,
   invalid_argument,
   incompatible_abi,
   duplicate_transport,
   invalid_state,
-  transport_error,
+  provider_failure,
+  unavailable,
   unsupported,
   resource_exhausted,
   not_found,
   cancelled,
   deadline_exceeded,
-  shutting_down
+  shutting_down,
 };
 
 enum class TransportHealthState { initializing, ready, degraded, failed, stopped };
@@ -67,7 +70,7 @@ enum class DiagnosticOperation {
 
 struct CommunicationDiagnostic {
   std::string provider;
-  RuntimeError error;
+  Error error;
   DiagnosticOperation operation_kind{DiagnosticOperation::provider};
   std::int64_t native_code{};
   std::uint64_t endpoint{};
@@ -101,14 +104,14 @@ public:
   Runtime(const Runtime&) = delete;
   Runtime& operator=(const Runtime&) = delete;
 
-  [[nodiscard]] RuntimeError AddTransport(const ovf_com_transport_factory_v1& factory,
-                                          TransportConfig config = {});
+  [[nodiscard]] Error AddTransport(const ovf_com_transport_factory_v1& factory,
+                                   TransportConfig config = {});
 
-  [[nodiscard]] RuntimeError LoadTransport(std::string_view provider, TransportConfig config = {});
+  [[nodiscard]] Error LoadTransport(std::string_view provider, TransportConfig config = {});
 
-  [[nodiscard]] RuntimeError ConfigureDeployment(DeploymentConfig const& deployment);
+  [[nodiscard]] Error ConfigureDeployment(DeploymentConfig const& deployment);
 
-  [[nodiscard]] RuntimeError Start();
+  [[nodiscard]] Error Start();
   void Stop() noexcept;
 
   [[nodiscard]] bool IsRunning() const noexcept;
@@ -131,13 +134,13 @@ public:
   ApplicationRuntime(ApplicationRuntime const&) = delete;
   ApplicationRuntime& operator=(ApplicationRuntime const&) = delete;
 
-  [[nodiscard]] explicit operator bool() const noexcept { return error_ == RuntimeError::none; }
-  [[nodiscard]] auto error() const noexcept -> RuntimeError { return error_; }
+  [[nodiscard]] explicit operator bool() const noexcept { return error_ == Error::none; }
+  [[nodiscard]] auto error() const noexcept -> Error { return error_; }
   [[nodiscard]] auto get() noexcept -> Runtime& { return runtime_; }
 
 private:
   Runtime runtime_;
-  RuntimeError error_{RuntimeError::none};
+  Error error_{Error::none};
 };
 
 } // namespace ovf::com

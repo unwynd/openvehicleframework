@@ -60,39 +60,39 @@ auto HasSubscriptionState(ovf_com_transport_v1& provider) -> bool {
                       &ovf_com_transport_v1::subscription_set_state_handler);
 }
 
-auto MapStatus(ovf_com_status_v1 status) -> CommunicationError {
+auto MapStatus(ovf_com_status_v1 status) -> Error {
   switch (status) {
   case OVF_COM_STATUS_NOT_FOUND:
-    return CommunicationError::unavailable;
+    return Error::unavailable;
   case OVF_COM_STATUS_INCOMPATIBLE_ABI:
   case OVF_COM_STATUS_UNSUPPORTED:
-    return CommunicationError::incompatible;
+    return Error::incompatible_abi;
   case OVF_COM_STATUS_RESOURCE_EXHAUSTED:
-    return CommunicationError::resource_exhausted;
+    return Error::resource_exhausted;
   case OVF_COM_STATUS_DEADLINE_EXCEEDED:
-    return CommunicationError::deadline_exceeded;
+    return Error::deadline_exceeded;
   case OVF_COM_STATUS_CANCELLED:
-    return CommunicationError::cancelled;
+    return Error::cancelled;
   case OVF_COM_STATUS_SHUTTING_DOWN:
-    return CommunicationError::shutting_down;
+    return Error::shutting_down;
   default:
-    return CommunicationError::provider_failure;
+    return Error::provider_failure;
   }
 }
 
-auto AbiStatus(CommunicationError error) -> ovf_com_status_v1 {
+auto AbiStatus(Error error) -> ovf_com_status_v1 {
   switch (error) {
-  case CommunicationError::unavailable:
+  case Error::unavailable:
     return OVF_COM_STATUS_NOT_FOUND;
-  case CommunicationError::incompatible:
+  case Error::incompatible_abi:
     return OVF_COM_STATUS_UNSUPPORTED;
-  case CommunicationError::resource_exhausted:
+  case Error::resource_exhausted:
     return OVF_COM_STATUS_RESOURCE_EXHAUSTED;
-  case CommunicationError::deadline_exceeded:
+  case Error::deadline_exceeded:
     return OVF_COM_STATUS_DEADLINE_EXCEEDED;
-  case CommunicationError::cancelled:
+  case Error::cancelled:
     return OVF_COM_STATUS_CANCELLED;
-  case CommunicationError::shutting_down:
+  case Error::shutting_down:
     return OVF_COM_STATUS_SHUTTING_DOWN;
   default:
     return OVF_COM_STATUS_TRANSPORT_ERROR;
@@ -129,7 +129,7 @@ public:
     std::unique_lock lock(mutex_);
     if (!complete_ && !condition_.wait_until(lock, deadline, [this] { return complete_; })) {
       complete_ = true;
-      result_ = {CommunicationError::deadline_exceeded, true, false, {}};
+      result_ = {Error::deadline_exceeded, true, false, {}};
       auto operation = operation_;
       lock.unlock();
       if (operation != OVF_COM_INVALID_HANDLE_V1)
@@ -212,7 +212,7 @@ public:
     }
     if (callback && state)
       callback(ToState(state->first), state->second == OVF_COM_STATUS_OK
-                                          ? std::optional<CommunicationError>{}
+                                          ? std::optional<Error>{}
                                           : MapStatus(state->second));
   }
   auto close() noexcept -> void override {
@@ -265,7 +265,7 @@ private:
       callback = state_callback_;
     }
     if (callback)
-      callback(ToState(state), reason == OVF_COM_STATUS_OK ? std::optional<CommunicationError>{}
+      callback(ToState(state), reason == OVF_COM_STATUS_OK ? std::optional<Error>{}
                                                            : MapStatus(reason));
   }
   auto on_sample(ovf_com_sample_v1 const* sample) -> void {
@@ -679,7 +679,7 @@ struct ProviderServerBinding::Impl {
           {reinterpret_cast<std::byte const*>(payload.data), payload.size},
           std::chrono::steady_clock::time_point(std::chrono::nanoseconds(deadline_ns)));
     } catch (...) {
-      result = {CommunicationError::provider_failure, true, false, {}, 0, {}};
+      result = {Error::provider_failure, true, false, {}, 0, {}};
     }
     auto status = result.application_error ? OVF_COM_STATUS_APPLICATION_ERROR
                   : result.has_error       ? AbiStatus(result.error)
@@ -792,35 +792,35 @@ auto ProviderServerBinding::add_event(ElementDescriptor const& element) -> bool 
 
 auto ProviderServerBinding::publish(ElementDescriptor const& element,
                                     std::span<const std::byte> payload)
-    -> std::optional<CommunicationError> {
+    -> std::optional<Error> {
   if (!impl_)
-    return CommunicationError::shutting_down;
+    return Error::shutting_down;
   ovf_com_handle_v1 endpoint{};
   {
     std::lock_guard lock(impl_->mutex);
     auto found = impl_->events.find(element.id.bytes);
     if (impl_->closed || found == impl_->events.end())
-      return CommunicationError::unavailable;
+      return Error::unavailable;
     endpoint = found->second;
   }
   auto status = impl_->provider->publish(
       impl_->provider, endpoint,
       {reinterpret_cast<std::uint8_t const*>(payload.data()), payload.size()});
-  return status == OVF_COM_STATUS_OK ? std::optional<CommunicationError>{}
-                                     : std::optional<CommunicationError>{MapStatus(status)};
+  return status == OVF_COM_STATUS_OK ? std::optional<Error>{}
+                                     : std::optional<Error>{MapStatus(status)};
 }
 
 auto ProviderServerBinding::publish_loaned(ElementDescriptor const& element, std::size_t size,
                                            std::function<bool(std::span<std::byte>)> encode)
-    -> std::optional<CommunicationError> {
+    -> std::optional<Error> {
   if (!impl_)
-    return CommunicationError::shutting_down;
+    return Error::shutting_down;
   ovf_com_handle_v1 endpoint{};
   {
     std::lock_guard lock(impl_->mutex);
     auto found = impl_->events.find(element.id.bytes);
     if (impl_->closed || found == impl_->events.end())
-      return CommunicationError::unavailable;
+      return Error::unavailable;
     endpoint = found->second;
   }
   ovf_com_loan_v1 loan{sizeof(loan), OVF_COM_INVALID_HANDLE_V1, {nullptr, 0}};
@@ -828,7 +828,7 @@ auto ProviderServerBinding::publish_loaned(ElementDescriptor const& element, std
   if (status == OVF_COM_STATUS_UNSUPPORTED) {
     std::vector<std::byte> payload(size);
     if (!encode(payload))
-      return CommunicationError::provider_failure;
+      return Error::provider_failure;
     return publish(element, payload);
   }
   if (status != OVF_COM_STATUS_OK)
@@ -836,7 +836,7 @@ auto ProviderServerBinding::publish_loaned(ElementDescriptor const& element, std
   auto destination = std::span(reinterpret_cast<std::byte*>(loan.bytes.data), loan.bytes.size);
   if (!encode(destination)) {
     (void)impl_->provider->loan_release(impl_->provider, loan.handle);
-    return CommunicationError::provider_failure;
+    return Error::provider_failure;
   }
   status = impl_->provider->loan_publish(impl_->provider, endpoint, loan.handle, size);
   if (status != OVF_COM_STATUS_OK) {
