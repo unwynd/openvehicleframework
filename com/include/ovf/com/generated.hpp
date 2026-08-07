@@ -3,6 +3,7 @@
 #pragma once
 
 #include "ovf/com/runtime.hpp"
+#include "ovf/core/uuid.hpp"
 
 #include <array>
 #include <bit>
@@ -26,9 +27,7 @@
 
 namespace ovf::com {
 
-struct Uuid {
-  std::array<std::uint8_t, 16> bytes;
-};
+using Uuid = ovf::core::Uuid;
 
 template <class T, std::size_t Capacity> class BoundedVector {
 public:

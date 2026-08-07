@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "ovf/core/uuid.hpp"
 #include "ovf/per/codec.hpp"
 
 #include <array>
@@ -92,6 +93,7 @@ namespace {{ model.cpp_namespace }} {
 {% for record in model.records %}
 struct {{ record.name }}Persistent final {
   static constexpr std::string_view key = {{ record.key|cpp_string }};
+  static constexpr ovf::core::Uuid schemaUuid{{ '{' }}{ {{ record.id|uuid_bytes }} }};
   static constexpr std::array<std::byte, 16> schema{
       {{ record.id|uuid_byte_initializers }}};
   static constexpr std::uint64_t version = {{ record.version }}ULL;

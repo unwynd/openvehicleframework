@@ -729,6 +729,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         environment.add_filter("qualified_type", codec_type);
         environment.add_filter("cpp_string", cpp_string);
         environment.add_filter("uuid_byte_initializers", uuid_byte_initializers);
+        environment.add_filter("uuid_bytes", uuid_bytes);
         let rendered = environment
             .get_template("cpp_per_contract.hpp")?
             .render(context! { model => Value::from_serialize(&prepare_per(model)?) })?;
