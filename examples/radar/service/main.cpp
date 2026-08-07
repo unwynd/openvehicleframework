@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ovf/exec/application.hpp"
+#include "ovf/app/run.hpp"
 #include "ovf_application.hpp"
 #include "ovf_logging.hpp"
 #include "radar/ovf_contract.hpp"
@@ -34,8 +34,7 @@ public:
     return state_;
   }
 
-  auto setVehicleStateField(VehicleState const& value)
-      -> std::optional<ovf::com::Error> override {
+  auto setVehicleStateField(VehicleState const& value) -> std::optional<ovf::com::Error> override {
     std::lock_guard lock(mutex_);
     state_ = value;
     externally_set_ = true;
@@ -67,63 +66,38 @@ private:
 } // namespace
 
 int main() {
-  auto execution = ovf::exec::Application::Create();
-  if (!execution) {
-    std::cerr << "failed to create the radar execution context\n";
-    return 1;
-  }
-  auto communication = ovf::app::CreateRuntime("ovf-radar-service");
-  if (!communication) {
-    std::cerr << "failed to start the radar service runtime\n";
-    return 2;
-  }
-  auto logging = ovf::app::CreateLogRuntime();
-  if (!logging) {
-    std::cerr << "failed to start radar service logging runtime\n";
-    return 3;
-  }
-  auto logger = logging->CreateLogger("radar.service");
-
-  RadarService implementation;
-  auto service = implementation.OfferService(communication.get(), ovf::app::radar());
-  if (!service.valid()) {
-    std::cerr << "failed to offer RadarService\n";
-    logger.Error("failed to offer RadarService");
-    return 4;
-  }
-  auto ready = execution.value().ReportReady();
-  if (!ready) {
-    std::cerr << "failed to report radar readiness\n";
-    service.close();
-    logger.Error("failed to report radar readiness");
-    return 5;
-  }
-
-  logger.Info("radar service ready");
-  std::cout << "SERVICE_READY" << std::endl;
-  std::uint64_t sequence{};
-  while (!execution.value().StopRequested()) {
-    RadarFrame frame{};
-    frame.capturedAt = ++sequence;
-    if (!frame.objects.push_back({7, 12.5F, -1.5F, 98}) ||
-        service.publishRadarObjectsChanged(frame)) {
-      std::cerr << "failed to publish RadarObjectsChanged\n";
-      service.close();
-      logger.Error("failed to publish radar objects", "sequence"_field = sequence);
-      return 6;
+  return ovf::app::Run("ovf-radar-service", "radar.service", [](ovf::app::Context& ctx) {
+    RadarService implementation;
+    auto service = implementation.OfferService(ctx.com(), ovf::app::radar());
+    if (!service.valid()) {
+      std::cerr << "failed to offer RadarService\n";
+      ctx.logger().Error("failed to offer RadarService");
+      return ovf::app::ExitCode::service_offer_failed;
     }
-    implementation.set_speed(13.5F + static_cast<float>(sequence));
-    if (service.publishVehicleStateField(implementation.state())) {
-      std::cerr << "failed to publish VehicleStateField\n";
-      service.close();
-      logger.Error("failed to publish vehicle state", "sequence"_field = sequence);
-      return 7;
+    if (auto ready = ctx.ReportReady(); ready != ovf::app::ExitCode::ok) {
+      return ready;
     }
-    logger.Debug("radar scan published", "sequence"_field = sequence,
-                 "objects"_field = frame.objects.size());
-    std::this_thread::sleep_for(100ms);
-  }
-
-  service.close();
-  return 0;
+    ctx.logger().Info("radar service ready");
+    std::cout << "SERVICE_READY" << std::endl;
+    std::uint64_t sequence{};
+    return ctx.Tick(100ms, [&](ovf::log::Logger& log) {
+      RadarFrame frame{};
+      frame.capturedAt = ++sequence;
+      if (!frame.objects.push_back({7, 12.5F, -1.5F, 98}) ||
+          service.publishRadarObjectsChanged(frame)) {
+        std::cerr << "failed to publish RadarObjectsChanged\n";
+        log.Error("failed to publish radar objects", "sequence"_field = sequence);
+        return ovf::app::TickAction::stop;
+      }
+      implementation.set_speed(13.5F + static_cast<float>(sequence));
+      if (service.publishVehicleStateField(implementation.state())) {
+        std::cerr << "failed to publish VehicleStateField\n";
+        log.Error("failed to publish vehicle state", "sequence"_field = sequence);
+        return ovf::app::TickAction::stop;
+      }
+      log.Debug("radar scan published", "sequence"_field = sequence,
+                "objects"_field = frame.objects.size());
+      return ovf::app::TickAction::continue_loop;
+    });
+  });
 }

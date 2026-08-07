@@ -671,7 +671,7 @@ def ovf_cc_application(
         if interface_name in names:
             fail("duplicate interface target name: " + interface_name)
         names.append(interface_name)
-    generated_deps = [Label("//exec:application_api")]
+    generated_deps = [Label("//exec:application_api"), Label("//app:app")]
     generated_artifacts = []
     if logging:
         logging_target = name + "_logging"
