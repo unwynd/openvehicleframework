@@ -58,7 +58,7 @@ TEST(PerTypedContractTest, TypedFacadeWritesAndReadsWithoutDynamicKeys) {
   auto write_result = store.BeginWrite(ovf::per::Durability::buffered);
   ASSERT_TRUE(write_result);
   auto write = std::move(write_result).value();
-  ASSERT_TRUE(example::state::OperationalStatePersistent::Put(write, expected, 512));
+  ASSERT_TRUE(example::state::OperationalStatePersistent::Put(write, expected));
   ASSERT_TRUE(write.Commit());
 
   auto read_result = store.BeginRead();

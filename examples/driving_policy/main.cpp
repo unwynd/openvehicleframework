@@ -97,7 +97,7 @@ int main() {
         .producedAt = model.producedAt,
     };
     auto committed = policy_store.value().With([&](ovf::per::WriteTransaction& tx) {
-      return example::driving_policy::PolicyStatePersistent::Put(tx, state, 1024)
+      return example::driving_policy::PolicyStatePersistent::Put(tx, state)
           .map([](bool) {})
           .or_else([](ovf::per::Error err) -> ovf::per::Result<void> { return err; });
     });

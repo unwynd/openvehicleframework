@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -99,8 +100,11 @@ struct {{ record.name }}Persistent final {
     return {reinterpret_cast<const std::byte*>(key.data()), key.size()};
   }
 
+  // Encode serializes value into the persistent envelope. `maximum` caps the
+  // in-memory payload size; the store's max_value_size still applies on Put.
   static ovf::per::Result<std::vector<std::byte>> Encode(
-      const {{ record.name }}& value, std::size_t maximum) noexcept {
+      const {{ record.name }}& value,
+      std::size_t maximum = std::numeric_limits<std::size_t>::max()) noexcept {
     try {
       std::vector<std::byte> payload;
       std::vector<std::byte> envelope;
@@ -128,10 +132,12 @@ struct {{ record.name }}Persistent final {
     return value;
   }
 
+  // Put encodes value and stores it in the transaction. The store's declared
+  // max_value_size is enforced by the provider on commit; callers do not need
+  // to duplicate that bound at the call site.
   static ovf::per::Result<bool> Put(ovf::per::WriteTransaction& transaction,
-                                    const {{ record.name }}& value,
-                                    std::size_t maximum) noexcept {
-    auto encoded = Encode(value, maximum);
+                                    const {{ record.name }}& value) noexcept {
+    auto encoded = Encode(value);
     if (!encoded) {
       return encoded.error();
     }
