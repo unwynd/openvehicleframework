@@ -12,6 +12,7 @@
 namespace {
 using namespace example::camera;
 using namespace std::chrono_literals;
+using namespace ovf::log::literals;
 
 class CameraImplementation final : public CameraServiceSkeleton {};
 } // namespace
@@ -55,15 +56,14 @@ int main() {
     if (!object.classification.assign("vehicle") || !frame.objects.push_back(object) ||
         service.publishCameraObjectsChanged(frame)) {
       std::cerr << "failed to publish camera frame\n";
-      logger.Error("failed to publish camera frame",
-                                     ovf::log::Field::Unsigned("sequence", sequence));
+      logger.Error("failed to publish camera frame", "sequence"_field = sequence);
       service.close();
       return 6;
     }
     constexpr ovf::log::Event frame_published{0x125A0041U, "frame_published",
                                               ovf::log::Level::info};
-    static_cast<void>(logger.Event(frame_published, ovf::log::Field::Unsigned("sequence", sequence),
-                                   ovf::log::Field::Unsigned("objects", frame.objects.size())));
+    static_cast<void>(logger.Event(frame_published, "sequence"_field = sequence,
+                                   "objects"_field = frame.objects.size()));
     std::this_thread::sleep_for(100ms);
   }
   service.close();

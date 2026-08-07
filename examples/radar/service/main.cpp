@@ -13,6 +13,7 @@
 namespace {
 using namespace example::radar;
 using namespace std::chrono_literals;
+using namespace ovf::log::literals;
 
 class RadarService final : public RadarServiceSkeleton {
 public:
@@ -108,21 +109,18 @@ int main() {
         service.publishRadarObjectsChanged(frame)) {
       std::cerr << "failed to publish RadarObjectsChanged\n";
       service.close();
-      logger.Error("failed to publish radar objects",
-                                     ovf::log::Field::Unsigned("sequence", sequence));
+      logger.Error("failed to publish radar objects", "sequence"_field = sequence);
       return 6;
     }
     implementation.set_speed(13.5F + static_cast<float>(sequence));
     if (service.publishVehicleStateField(implementation.state())) {
       std::cerr << "failed to publish VehicleStateField\n";
       service.close();
-      logger.Error("failed to publish vehicle state",
-                                     ovf::log::Field::Unsigned("sequence", sequence));
+      logger.Error("failed to publish vehicle state", "sequence"_field = sequence);
       return 7;
     }
-    logger.Debug("radar scan published",
-                                   ovf::log::Field::Unsigned("sequence", sequence),
-                                   ovf::log::Field::Unsigned("objects", frame.objects.size()));
+    logger.Debug("radar scan published", "sequence"_field = sequence,
+                 "objects"_field = frame.objects.size());
     std::this_thread::sleep_for(100ms);
   }
 

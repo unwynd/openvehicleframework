@@ -9,6 +9,7 @@
 #include <memory>
 #include <span>
 #include <string_view>
+#include <type_traits>
 
 namespace ovf::log {
 
@@ -78,6 +79,55 @@ private:
   Type type_{Type::boolean};
   Sensitivity sensitivity_{Sensitivity::public_value};
 };
+
+namespace literals {
+
+// FieldName is the intermediate produced by `"name"_field`. Assigning a value
+// to it yields a Field of the matching type, so call sites can write
+//   logger.Info("msg", "sequence"_field = 5, "objects"_field = 12U)
+// instead of the verbose ovf::log::Field::Unsigned("sequence", 5) form.
+struct FieldName final {
+  std::string_view name;
+
+  [[nodiscard]] Field operator=(bool value) const noexcept {
+    return Field::Boolean(name, value);
+  }
+  [[nodiscard]] Field operator=(std::string_view value) const noexcept {
+    return Field::Text(name, value);
+  }
+  [[nodiscard]] Field operator=(const char* value) const noexcept {
+    return Field::Text(name, std::string_view{value});
+  }
+  [[nodiscard]] Field operator=(std::span<const std::byte> value) const noexcept {
+    return Field::Binary(name, value);
+  }
+  [[nodiscard]] Field operator=(double value) const noexcept {
+    return Field::Floating(name, value);
+  }
+  [[nodiscard]] Field operator=(float value) const noexcept {
+    return Field::Floating(name, static_cast<double>(value));
+  }
+  template <typename Integer,
+            std::enable_if_t<std::is_integral_v<Integer> && std::is_signed_v<Integer> &&
+                                 !std::is_same_v<Integer, bool>,
+                             int> = 0>
+  [[nodiscard]] Field operator=(Integer value) const noexcept {
+    return Field::Signed(name, static_cast<std::int64_t>(value));
+  }
+  template <typename Integer,
+            std::enable_if_t<std::is_integral_v<Integer> && !std::is_signed_v<Integer> &&
+                                 !std::is_same_v<Integer, bool>,
+                             int> = 0>
+  [[nodiscard]] Field operator=(Integer value) const noexcept {
+    return Field::Unsigned(name, static_cast<std::uint64_t>(value));
+  }
+};
+
+[[nodiscard]] inline FieldName operator""_field(const char* name, std::size_t size) noexcept {
+  return {std::string_view{name, size}};
+}
+
+} // namespace literals
 
 struct RuntimeConfig final {
   std::string_view application_name;
