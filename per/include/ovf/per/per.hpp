@@ -212,6 +212,29 @@ public:
   [[nodiscard]] Result<WriteTransaction>
   BeginWriteAt(std::uint64_t expected_generation,
                Durability durability = Durability::process_crash) const noexcept;
+
+  // With() runs `body` inside a write transaction, commits on Ok, aborts on
+  // any error returned by body or by Commit. This eliminates the common
+  // BeginWrite -> Put -> Commit dance and its silent-drop failure mode when
+  // Commit is forgotten. The body must return Result<void>.
+  template <typename Body>
+  [[nodiscard]] Result<CommitInfo>
+  With(Durability durability, Body&& body) const noexcept {
+    auto transaction = BeginWrite(durability);
+    if (!transaction) {
+      return transaction.error();
+    }
+    auto outcome = std::forward<Body>(body)(transaction.value());
+    if (!outcome) {
+      transaction.value().Abort();
+      return outcome.error();
+    }
+    return transaction.value().Commit();
+  }
+  template <typename Body>
+  [[nodiscard]] Result<CommitInfo> With(Body&& body) const noexcept {
+    return With(Durability::process_crash, std::forward<Body>(body));
+  }
   [[nodiscard]] Result<CommitInfo>
   Reset(std::span<const Entry> initial_data,
         Durability durability = Durability::process_crash) const noexcept;

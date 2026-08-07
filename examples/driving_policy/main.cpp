@@ -88,41 +88,32 @@ int main() {
   bool persistence_failed{};
   subscription.on_sample([&](EnvironmentModel const& model) {
     std::lock_guard lock(mutex);
-    if (!model.objects.empty()) {
-      auto write = policy_store.value().BeginWrite();
-      if (!write) {
-        persistence_failed = true;
-        logger.Error("failed to begin policy state update");
-        condition.notify_all();
-        return;
-      }
-      example::driving_policy::PolicyState state{
-          .sequence = ++sequence,
-          .objectCount = static_cast<std::uint32_t>(model.objects.size()),
-          .producedAt = model.producedAt,
-      };
-      auto stored = example::driving_policy::PolicyStatePersistent::Put(write.value(), state, 1024);
-      if (!stored) {
-        persistence_failed = true;
-        logger.Error("failed to encode policy state");
-        condition.notify_all();
-        return;
-      }
-      auto committed = write.value().Commit();
-      if (!committed) {
-        persistence_failed = true;
-        logger.Error("failed to commit policy state");
-        condition.notify_all();
-        return;
-      }
-      std::cout << "POLICY_STATE_COMMITTED sequence=" << sequence << std::endl;
-      received = true;
-      static_cast<void>(logger.Event(kEnvironmentModelReceived,
-                                     ovf::log::Field::Unsigned("objects", model.objects.size()),
-                                     ovf::log::Field::Unsigned("produced_at", model.producedAt)));
-      std::cout << "ENVIRONMENT_MODEL_RECEIVED " << model.objects.size() << std::endl;
-      condition.notify_all();
+    if (model.objects.empty()) {
+      return;
     }
+    example::driving_policy::PolicyState state{
+        .sequence = ++sequence,
+        .objectCount = static_cast<std::uint32_t>(model.objects.size()),
+        .producedAt = model.producedAt,
+    };
+    auto committed = policy_store.value().With([&](ovf::per::WriteTransaction& tx) {
+      return example::driving_policy::PolicyStatePersistent::Put(tx, state, 1024)
+          .map([](bool) {})
+          .or_else([](ovf::per::Error err) -> ovf::per::Result<void> { return err; });
+    });
+    if (!committed) {
+      persistence_failed = true;
+      logger.Error("failed to persist policy state");
+      condition.notify_all();
+      return;
+    }
+    std::cout << "POLICY_STATE_COMMITTED sequence=" << sequence << std::endl;
+    received = true;
+    static_cast<void>(logger.Event(kEnvironmentModelReceived,
+                                   ovf::log::Field::Unsigned("objects", model.objects.size()),
+                                   ovf::log::Field::Unsigned("produced_at", model.producedAt)));
+    std::cout << "ENVIRONMENT_MODEL_RECEIVED " << model.objects.size() << std::endl;
+    condition.notify_all();
   });
   auto ready = execution.value().ReportReady();
   if (!ready) {
