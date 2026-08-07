@@ -522,16 +522,23 @@ public:
 template <class T> class Operation {
 public:
   using Decode = T (*)(RawResult const&);
-  Operation(std::shared_ptr<RawOperation> state, Decode decode)
-      : state_(std::move(state)), decode_(decode) {}
+  // The deadline is captured at submission time; get() waits until then
+  // without asking the caller to re-supply it. An optional override is
+  // available for callers that want to wait less time than they originally
+  // asked for.
+  Operation(std::shared_ptr<RawOperation> state, Decode decode,
+            std::chrono::steady_clock::time_point deadline)
+      : state_(std::move(state)), decode_(decode), deadline_(deadline) {}
   Operation(Operation&&) noexcept = default;
   Operation(Operation const&) = delete;
+  auto get() -> T { return decode_(state_->wait(deadline_)); }
   auto get(CallOptions options) -> T { return decode_(state_->wait(options.deadline)); }
   auto cancel() noexcept -> void { state_->cancel(); }
 
 private:
   std::shared_ptr<RawOperation> state_;
   Decode decode_;
+  std::chrono::steady_clock::time_point deadline_;
 };
 
 template <class T> class EventSubscription {

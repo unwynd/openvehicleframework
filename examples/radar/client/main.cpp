@@ -77,7 +77,7 @@ int main() {
   }
 
   auto options = ovf::com::CallOptions{std::chrono::steady_clock::now() + 5s};
-  auto calibration = proxy->Calibrate({2.0F}, options).get(options);
+  auto calibration = proxy->Calibrate({2.0F}, options).get();
   if (!std::holds_alternative<CalibrateOutput>(calibration) ||
       std::get<CalibrateOutput>(calibration).acceptedAt != 42) {
     std::cerr << "Calibrate did not return the expected response\n";
@@ -87,7 +87,7 @@ int main() {
   std::cout << "METHOD_OK" << std::endl;
 
   options.deadline = std::chrono::steady_clock::now() + 5s;
-  auto invalid = proxy->Calibrate({-1.0F}, options).get(options);
+  auto invalid = proxy->Calibrate({-1.0F}, options).get();
   if (invalid.index() != 1 || std::get<InvalidTarget>(std::get<1>(invalid)).reason.view() !=
                                   "target distance must be non-negative") {
     std::cerr << "Calibrate did not return the expected application error (result index "
@@ -99,7 +99,7 @@ int main() {
   std::cout << "APPLICATION_ERROR_OK" << std::endl;
 
   options.deadline = std::chrono::steady_clock::now() + 5s;
-  auto field = proxy->getVehicleStateField(options).get(options);
+  auto field = proxy->getVehicleStateField(options).get();
   if (!std::holds_alternative<VehicleState>(field)) {
     std::cerr << "VehicleStateField read failed\n";
     logger.Error("vehicle state read failed");
@@ -108,13 +108,13 @@ int main() {
   std::cout << "FIELD_READ_OK" << std::endl;
 
   options.deadline = std::chrono::steady_clock::now() + 5s;
-  auto field_write = proxy->setVehicleStateField({31.25F}, options).get(options);
+  auto field_write = proxy->setVehicleStateField({31.25F}, options).get();
   if (field_write) {
     std::cerr << "VehicleStateField write failed\n";
     return 10;
   }
   options.deadline = std::chrono::steady_clock::now() + 5s;
-  auto updated_field = proxy->getVehicleStateField(options).get(options);
+  auto updated_field = proxy->getVehicleStateField(options).get();
   if (!std::holds_alternative<VehicleState>(updated_field) ||
       std::get<VehicleState>(updated_field).speedMetersPerSecond != 31.25F) {
     std::cerr << "VehicleStateField did not retain the written value\n";
@@ -123,7 +123,7 @@ int main() {
   std::cout << "FIELD_WRITE_OK" << std::endl;
 
   options.deadline = std::chrono::steady_clock::now() + 50ms;
-  auto delayed = proxy->Delay({300}, options).get(options);
+  auto delayed = proxy->Delay({300}, options).get();
   if (!std::holds_alternative<ovf::com::Error>(delayed) ||
       std::get<ovf::com::Error>(delayed) !=
           ovf::com::Error::deadline_exceeded) {
@@ -135,7 +135,7 @@ int main() {
   options.deadline = std::chrono::steady_clock::now() + 5s;
   auto cancelled = proxy->Delay({300}, options);
   cancelled.cancel();
-  auto cancelled_result = cancelled.get(options);
+  auto cancelled_result = cancelled.get();
   if (!std::holds_alternative<ovf::com::Error>(cancelled_result) ||
       std::get<ovf::com::Error>(cancelled_result) !=
           ovf::com::Error::cancelled) {

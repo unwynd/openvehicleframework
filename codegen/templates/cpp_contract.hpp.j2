@@ -162,7 +162,7 @@ public:
             if (!ovf::com::decode(raw.payload, value))
                 return ovf::com::Error::provider_failure;
             return value;
-        }};
+        }, options.deadline};
     }
 {% endfor %}
 {% for field in service.fields|sort(attribute="tag") %}
@@ -177,7 +177,7 @@ public:
             if (!ovf::com::decode(raw.payload, value))
                 return ovf::com::Error::provider_failure;
             return value;
-        }};
+        }, options.deadline};
     }
 {% endif %}
 {% if field.writable %}
@@ -195,7 +195,7 @@ public:
             if (raw.application_error || !raw.payload.empty())
                 return ovf::com::Error::provider_failure;
             return std::nullopt;
-        }};
+        }, options.deadline};
     }
 {% endif %}
 {% if field.notifiable %}
