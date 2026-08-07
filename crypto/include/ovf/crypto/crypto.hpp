@@ -241,6 +241,94 @@ struct OpenOptions final {
   std::string_view provider_directory{};
 };
 
+// Grouped facades over Runtime. Each facade holds a Runtime pointer and
+// forwards to the flat member functions. Callers can write
+//   auto digest = runtime->hash().Compute(algo, input);
+// instead of the flat runtime->Hash(algo, input), which makes the header
+// easier to skim by concern. The flat methods are unchanged.
+class Runtime;
+
+class RandomFacade final {
+public:
+  explicit RandomFacade(Runtime* rt) noexcept : runtime_(rt) {}
+  [[nodiscard]] Result<std::vector<std::byte>> Bytes(std::size_t size) const noexcept;
+
+private:
+  Runtime* runtime_;
+};
+
+class KeysFacade final {
+public:
+  explicit KeysFacade(Runtime* rt) noexcept : runtime_(rt) {}
+  [[nodiscard]] Result<Key> Import(KeyPolicy policy, KeyFormat format,
+                                   std::span<const std::byte> material) const noexcept;
+  [[nodiscard]] Result<Key> Generate(KeyPolicy policy) const noexcept;
+  [[nodiscard]] Result<std::vector<std::byte>> PublicValue(const Key& key) const noexcept;
+  [[nodiscard]] Result<Key> Agree(Algorithm algorithm, const Key& private_key,
+                                  std::span<const std::byte> peer_public_value,
+                                  std::span<const std::byte> salt,
+                                  KeyPolicy derived_key) const noexcept;
+  [[nodiscard]] Result<std::vector<std::byte>> Derive(Algorithm algorithm, const Key& key,
+                                                      std::span<const std::byte> salt,
+                                                      std::span<const std::byte> info,
+                                                      std::size_t output_size) const noexcept;
+
+private:
+  Runtime* runtime_;
+};
+
+class HashFacade final {
+public:
+  explicit HashFacade(Runtime* rt) noexcept : runtime_(rt) {}
+  [[nodiscard]] Result<std::vector<std::byte>>
+  Compute(Algorithm algorithm, std::span<const std::byte> input) const noexcept;
+  [[nodiscard]] Result<std::vector<std::byte>>
+  Mac(Algorithm algorithm, const Key& key, std::span<const std::byte> input) const noexcept;
+
+private:
+  Runtime* runtime_;
+};
+
+class AeadFacade final {
+public:
+  explicit AeadFacade(Runtime* rt) noexcept : runtime_(rt) {}
+  [[nodiscard]] Result<std::vector<std::byte>>
+  Encrypt(Algorithm algorithm, const Key& key, AeadParameters parameters,
+          std::span<const std::byte> plaintext) const noexcept;
+  [[nodiscard]] Result<std::vector<std::byte>>
+  Decrypt(Algorithm algorithm, const Key& key, AeadParameters parameters,
+          std::span<const std::byte> ciphertext) const noexcept;
+
+private:
+  Runtime* runtime_;
+};
+
+class SignatureFacade final {
+public:
+  explicit SignatureFacade(Runtime* rt) noexcept : runtime_(rt) {}
+  [[nodiscard]] Result<std::vector<std::byte>>
+  Sign(Algorithm algorithm, const Key& key, std::span<const std::byte> message) const noexcept;
+  [[nodiscard]] Result<bool> Verify(Algorithm algorithm, const Key& key,
+                                    std::span<const std::byte> message,
+                                    std::span<const std::byte> signature) const noexcept;
+
+private:
+  Runtime* runtime_;
+};
+
+class PkiFacade final {
+public:
+  explicit PkiFacade(Runtime* rt) noexcept : runtime_(rt) {}
+  [[nodiscard]] Result<CertificateValidationResult>
+  ValidateCertificate(const CertificateValidationRequest& request) const noexcept;
+  [[nodiscard]] Result<CertificatePublicKeyResult>
+  ValidateAndImportPublicKey(const CertificateValidationRequest& request,
+                             KeyPolicy policy) const noexcept;
+
+private:
+  Runtime* runtime_;
+};
+
 class Runtime final {
 public:
   // Open is the preferred factory entry point; the older Create/Load below
@@ -252,6 +340,14 @@ public:
   static Result<std::unique_ptr<Runtime>> Load(std::string_view provider,
                                                RuntimeConfig config = {}) noexcept;
   ~Runtime();
+
+  // Grouped facade accessors.
+  [[nodiscard]] RandomFacade random() noexcept { return RandomFacade(this); }
+  [[nodiscard]] KeysFacade keys() noexcept { return KeysFacade(this); }
+  [[nodiscard]] HashFacade hash() noexcept { return HashFacade(this); }
+  [[nodiscard]] AeadFacade aead() noexcept { return AeadFacade(this); }
+  [[nodiscard]] SignatureFacade signatures() noexcept { return SignatureFacade(this); }
+  [[nodiscard]] PkiFacade pki() noexcept { return PkiFacade(this); }
   Runtime(Runtime const&) = delete;
   Runtime& operator=(Runtime const&) = delete;
 
@@ -325,5 +421,70 @@ private:
   std::shared_ptr<detail::RuntimeState> state_;
   void* library_{};
 };
+
+// Facade forwarders. Kept inline so the runtime stays header-only for these
+// wrapper calls; each simply defers to the flat Runtime member.
+inline Result<std::vector<std::byte>> RandomFacade::Bytes(std::size_t size) const noexcept {
+  return runtime_->Random(size);
+}
+inline Result<Key> KeysFacade::Import(KeyPolicy policy, KeyFormat format,
+                                      std::span<const std::byte> material) const noexcept {
+  return runtime_->ImportKey(policy, format, material);
+}
+inline Result<Key> KeysFacade::Generate(KeyPolicy policy) const noexcept {
+  return runtime_->GenerateKey(policy);
+}
+inline Result<std::vector<std::byte>> KeysFacade::PublicValue(const Key& key) const noexcept {
+  return runtime_->PublicValue(key);
+}
+inline Result<Key> KeysFacade::Agree(Algorithm algorithm, const Key& private_key,
+                                     std::span<const std::byte> peer_public_value,
+                                     std::span<const std::byte> salt,
+                                     KeyPolicy derived_key) const noexcept {
+  return runtime_->Agree(algorithm, private_key, peer_public_value, salt, derived_key);
+}
+inline Result<std::vector<std::byte>> KeysFacade::Derive(Algorithm algorithm, const Key& key,
+                                                         std::span<const std::byte> salt,
+                                                         std::span<const std::byte> info,
+                                                         std::size_t output_size) const noexcept {
+  return runtime_->Derive(algorithm, key, salt, info, output_size);
+}
+inline Result<std::vector<std::byte>>
+HashFacade::Compute(Algorithm algorithm, std::span<const std::byte> input) const noexcept {
+  return runtime_->Hash(algorithm, input);
+}
+inline Result<std::vector<std::byte>> HashFacade::Mac(Algorithm algorithm, const Key& key,
+                                                      std::span<const std::byte> input) const noexcept {
+  return runtime_->Mac(algorithm, key, input);
+}
+inline Result<std::vector<std::byte>>
+AeadFacade::Encrypt(Algorithm algorithm, const Key& key, AeadParameters parameters,
+                    std::span<const std::byte> plaintext) const noexcept {
+  return runtime_->Encrypt(algorithm, key, parameters, plaintext);
+}
+inline Result<std::vector<std::byte>>
+AeadFacade::Decrypt(Algorithm algorithm, const Key& key, AeadParameters parameters,
+                    std::span<const std::byte> ciphertext) const noexcept {
+  return runtime_->Decrypt(algorithm, key, parameters, ciphertext);
+}
+inline Result<std::vector<std::byte>>
+SignatureFacade::Sign(Algorithm algorithm, const Key& key,
+                      std::span<const std::byte> message) const noexcept {
+  return runtime_->Sign(algorithm, key, message);
+}
+inline Result<bool> SignatureFacade::Verify(Algorithm algorithm, const Key& key,
+                                            std::span<const std::byte> message,
+                                            std::span<const std::byte> signature) const noexcept {
+  return runtime_->Verify(algorithm, key, message, signature);
+}
+inline Result<CertificateValidationResult>
+PkiFacade::ValidateCertificate(const CertificateValidationRequest& request) const noexcept {
+  return runtime_->ValidateCertificate(request);
+}
+inline Result<CertificatePublicKeyResult>
+PkiFacade::ValidateAndImportPublicKey(const CertificateValidationRequest& request,
+                                      KeyPolicy policy) const noexcept {
+  return runtime_->ValidateAndImportPublicKey(request, policy);
+}
 
 } // namespace ovf::crypto

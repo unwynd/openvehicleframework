@@ -233,6 +233,20 @@ std::span<const std::byte> Bytes(std::string_view value) {
   return {reinterpret_cast<const std::byte*>(value.data()), value.size()};
 }
 
+TEST(CryptoRuntimeFacade, ForwardsGroupedCallsToFlatMethods) {
+  auto runtime_result = ovf::crypto::Runtime::Create(kFactory);
+  ASSERT_TRUE(runtime_result) << runtime_result.error().message;
+  auto runtime = std::move(runtime_result).value();
+
+  const auto random = runtime->random().Bytes(8);
+  ASSERT_TRUE(random);
+  EXPECT_EQ(random.value().size(), 8U);
+
+  const auto digest = runtime->hash().Compute(ovf::crypto::Algorithm::sha2_256, Bytes("m"));
+  ASSERT_TRUE(digest);
+  EXPECT_EQ(digest.value().size(), 4U);
+}
+
 TEST(CryptoRuntimeTest, NegotiatesBuffersAndSeparatesInvalidSignatureFromFailure) {
   auto runtime_result = ovf::crypto::Runtime::Create(kFactory);
   ASSERT_TRUE(runtime_result) << runtime_result.error().message;
