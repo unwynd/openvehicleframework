@@ -87,18 +87,18 @@ int main() {
   auto service = implementation.OfferService(communication.get(), ovf::app::radar());
   if (!service.valid()) {
     std::cerr << "failed to offer RadarService\n";
-    static_cast<void>(logger.Error("failed to offer RadarService"));
+    logger.Error("failed to offer RadarService");
     return 4;
   }
   auto ready = execution.value().ReportReady();
   if (!ready) {
     std::cerr << "failed to report radar readiness\n";
     service.close();
-    static_cast<void>(logger.Error("failed to report radar readiness"));
+    logger.Error("failed to report radar readiness");
     return 5;
   }
 
-  static_cast<void>(logger.Info("radar service ready"));
+  logger.Info("radar service ready");
   std::cout << "SERVICE_READY" << std::endl;
   std::uint64_t sequence{};
   while (!execution.value().StopRequested()) {
@@ -108,21 +108,21 @@ int main() {
         service.publishRadarObjectsChanged(frame)) {
       std::cerr << "failed to publish RadarObjectsChanged\n";
       service.close();
-      static_cast<void>(logger.Error("failed to publish radar objects",
-                                     ovf::log::Field::Unsigned("sequence", sequence)));
+      logger.Error("failed to publish radar objects",
+                                     ovf::log::Field::Unsigned("sequence", sequence));
       return 6;
     }
     implementation.set_speed(13.5F + static_cast<float>(sequence));
     if (service.publishVehicleStateField(implementation.state())) {
       std::cerr << "failed to publish VehicleStateField\n";
       service.close();
-      static_cast<void>(logger.Error("failed to publish vehicle state",
-                                     ovf::log::Field::Unsigned("sequence", sequence)));
+      logger.Error("failed to publish vehicle state",
+                                     ovf::log::Field::Unsigned("sequence", sequence));
       return 7;
     }
-    static_cast<void>(logger.Debug("radar scan published",
+    logger.Debug("radar scan published",
                                    ovf::log::Field::Unsigned("sequence", sequence),
-                                   ovf::log::Field::Unsigned("objects", frame.objects.size())));
+                                   ovf::log::Field::Unsigned("objects", frame.objects.size()));
     std::this_thread::sleep_for(100ms);
   }
 

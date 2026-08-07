@@ -75,13 +75,13 @@ int main() {
       EnvironmentModelServiceProxy::Find(communication.get(), ovf::app::environment_model(), 10s);
   if (!proxy) {
     std::cerr << "timed out discovering EnvironmentModelService\n";
-    static_cast<void>(logger.Warning("timed out discovering EnvironmentModelService"));
+    logger.Warning("timed out discovering EnvironmentModelService");
     return 4;
   }
   auto subscription = proxy->subscribeEnvironmentModelChanged();
   if (!subscription.valid()) {
     std::cerr << "failed to subscribe to the environment model\n";
-    static_cast<void>(logger.Error("failed to subscribe to environment model"));
+    logger.Error("failed to subscribe to environment model");
     return 5;
   }
   bool received{};
@@ -92,7 +92,7 @@ int main() {
       auto write = policy_store.value().BeginWrite();
       if (!write) {
         persistence_failed = true;
-        static_cast<void>(logger.Error("failed to begin policy state update"));
+        logger.Error("failed to begin policy state update");
         condition.notify_all();
         return;
       }
@@ -104,14 +104,14 @@ int main() {
       auto stored = example::driving_policy::PolicyStatePersistent::Put(write.value(), state, 1024);
       if (!stored) {
         persistence_failed = true;
-        static_cast<void>(logger.Error("failed to encode policy state"));
+        logger.Error("failed to encode policy state");
         condition.notify_all();
         return;
       }
       auto committed = write.value().Commit();
       if (!committed) {
         persistence_failed = true;
-        static_cast<void>(logger.Error("failed to commit policy state"));
+        logger.Error("failed to commit policy state");
         condition.notify_all();
         return;
       }
@@ -128,16 +128,16 @@ int main() {
   if (!ready) {
     std::cerr << "failed to report driving policy readiness\n";
     subscription.close();
-    static_cast<void>(logger.Error("failed to report driving policy readiness"));
+    logger.Error("failed to report driving policy readiness");
     return 6;
   }
-  static_cast<void>(logger.Info("driving policy ready"));
+  logger.Info("driving policy ready");
   {
     std::unique_lock lock(mutex);
     if (!condition.wait_for(lock, 15s, [&] { return received || persistence_failed; })) {
       std::cerr << "timed out waiting for fused environment data\n";
       subscription.close();
-      static_cast<void>(logger.Warning("timed out waiting for fused environment data"));
+      logger.Warning("timed out waiting for fused environment data");
       return 7;
     }
     if (persistence_failed) {
@@ -150,7 +150,7 @@ int main() {
   if (!stopped) {
     std::cerr << "failed while waiting for driving policy termination\n";
     subscription.close();
-    static_cast<void>(logger.Error("failed while waiting for termination"));
+    logger.Error("failed while waiting for termination");
     return 8;
   }
   subscription.close();

@@ -42,7 +42,7 @@ int main() {
   auto output = implementation.OfferService(communication.get(), ovf::app::environment_model());
   if (!output.valid()) {
     std::cerr << "failed to offer EnvironmentModelService\n";
-    static_cast<void>(logger.Error("failed to offer EnvironmentModelService"));
+    logger.Error("failed to offer EnvironmentModelService");
     return 4;
   }
 
@@ -54,7 +54,7 @@ int main() {
   if (!camera || !radar) {
     std::cerr << "timed out discovering sensor inputs\n";
     output.close();
-    static_cast<void>(logger.Warning("timed out discovering sensor inputs"));
+    logger.Warning("timed out discovering sensor inputs");
     return 5;
   }
   auto camera_subscription = camera->subscribeCameraObjectsChanged();
@@ -62,7 +62,7 @@ int main() {
   if (!camera_subscription.valid() || !radar_subscription.valid()) {
     std::cerr << "failed to subscribe to sensor inputs\n";
     output.close();
-    static_cast<void>(logger.Error("failed to subscribe to sensor inputs"));
+    logger.Error("failed to subscribe to sensor inputs");
     return 6;
   }
 
@@ -120,10 +120,10 @@ int main() {
     radar_subscription.close();
     camera_subscription.close();
     output.close();
-    static_cast<void>(logger.Error("failed to report sensor fusion readiness"));
+    logger.Error("failed to report sensor fusion readiness");
     return 7;
   }
-  static_cast<void>(logger.Info("sensor fusion ready"));
+  logger.Info("sensor fusion ready");
   std::cout << "SENSOR_FUSION_READY" << std::endl;
   while (!execution.value().StopRequested() && !communication_failed.load()) {
     std::this_thread::sleep_for(100ms);
@@ -132,7 +132,7 @@ int main() {
   camera_subscription.close();
   output.close();
   if (communication_failed.load()) {
-    static_cast<void>(logger.Error("failed to publish fused environment model"));
+    logger.Error("failed to publish fused environment model");
     return 8;
   }
   return 0;

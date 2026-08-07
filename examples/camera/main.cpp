@@ -45,7 +45,7 @@ int main() {
     service.close();
     return 5;
   }
-  static_cast<void>(logger.Info("camera service ready"));
+  logger.Info("camera service ready");
   std::cout << "CAMERA_READY" << std::endl;
   std::uint64_t sequence{};
   while (!execution.value().StopRequested()) {
@@ -55,8 +55,8 @@ int main() {
     if (!object.classification.assign("vehicle") || !frame.objects.push_back(object) ||
         service.publishCameraObjectsChanged(frame)) {
       std::cerr << "failed to publish camera frame\n";
-      static_cast<void>(logger.Error("failed to publish camera frame",
-                                     ovf::log::Field::Unsigned("sequence", sequence)));
+      logger.Error("failed to publish camera frame",
+                                     ovf::log::Field::Unsigned("sequence", sequence));
       service.close();
       return 6;
     }

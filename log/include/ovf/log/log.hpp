@@ -123,33 +123,31 @@ public:
     return Log(level, message, std::span<const Field>(values));
   }
 
+  // Level-shortcut helpers do not mark WriteResult as [[nodiscard]] because most
+  // call sites are fire-and-forget log statements; use Event() or Log() when
+  // the WriteResult (drop accounting) matters.
   template <typename... Fields>
-  [[nodiscard]] WriteResult Fatal(std::string_view message,
-                                  Fields const&... fields) const noexcept {
+  WriteResult Fatal(std::string_view message, Fields const&... fields) const noexcept {
     return Log(Level::fatal, message, fields...);
   }
   template <typename... Fields>
-  [[nodiscard]] WriteResult Error(std::string_view message,
-                                  Fields const&... fields) const noexcept {
+  WriteResult Error(std::string_view message, Fields const&... fields) const noexcept {
     return Log(Level::error, message, fields...);
   }
   template <typename... Fields>
-  [[nodiscard]] WriteResult Warning(std::string_view message,
-                                    Fields const&... fields) const noexcept {
+  WriteResult Warning(std::string_view message, Fields const&... fields) const noexcept {
     return Log(Level::warning, message, fields...);
   }
   template <typename... Fields>
-  [[nodiscard]] WriteResult Info(std::string_view message, Fields const&... fields) const noexcept {
+  WriteResult Info(std::string_view message, Fields const&... fields) const noexcept {
     return Log(Level::info, message, fields...);
   }
   template <typename... Fields>
-  [[nodiscard]] WriteResult Debug(std::string_view message,
-                                  Fields const&... fields) const noexcept {
+  WriteResult Debug(std::string_view message, Fields const&... fields) const noexcept {
     return Log(Level::debug, message, fields...);
   }
   template <typename... Fields>
-  [[nodiscard]] WriteResult Trace(std::string_view message,
-                                  Fields const&... fields) const noexcept {
+  WriteResult Trace(std::string_view message, Fields const&... fields) const noexcept {
     return Log(Level::trace, message, fields...);
   }
 
