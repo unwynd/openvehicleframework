@@ -22,7 +22,10 @@ cc_library(
         "@platforms//os:linux": ["-ldl"],
         "//conditions:default": [],
     }),
-    deps = [":provider_abi"],
+    deps = [
+        ":provider_abi",
+        "//core",
+    ],
 )
 
 cc_library(
@@ -65,6 +68,7 @@ cc_library(
         "include/ovf/per/per.hpp",
     ],
     includes = ["include"],
+    deps = ["//core"],
 )
 
 cc_import(

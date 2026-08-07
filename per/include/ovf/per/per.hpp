@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "ovf/core/result.hpp"
 #include "ovf/per/backend_abi.h"
 
 #include <cstddef>
@@ -40,20 +41,7 @@ struct Error final {
   std::string message;
 };
 
-template <typename T> class [[nodiscard]] Result final {
-public:
-  Result(T value) : value_(std::move(value)) {}
-  Result(Error error) : value_(std::move(error)) {}
-  [[nodiscard]] bool has_value() const noexcept { return std::holds_alternative<T>(value_); }
-  explicit operator bool() const noexcept { return has_value(); }
-  [[nodiscard]] T& value() & { return std::get<T>(value_); }
-  [[nodiscard]] const T& value() const& { return std::get<T>(value_); }
-  [[nodiscard]] T&& value() && { return std::get<T>(std::move(value_)); }
-  [[nodiscard]] const Error& error() const& { return std::get<Error>(value_); }
-
-private:
-  std::variant<T, Error> value_;
-};
+template <typename T> using Result = ovf::core::Result<T, Error>;
 
 enum class Durability : std::uint8_t { buffered, process_crash, media };
 enum class Access : std::uint8_t { read_only, read_write };
