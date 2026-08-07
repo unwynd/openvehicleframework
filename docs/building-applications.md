@@ -31,33 +31,66 @@ ovf_cc_application(
     deployment = "radar.deployment.cue",
     logging = True,
     persistent_schemas = [":radar_state"],
+    crypto = True,
 )
 ```
 
 Communication interfaces and persistent schemas use the same bounded Smithy
 data-type profile and stable member tags. Their generated envelopes and codecs
 remain cluster-specific because network compatibility and durable-record
-evolution have different requirements.
+evolution have different requirements. `logging`, `persistent_schemas`, and
+`crypto` opt the application into the corresponding facilities; the deployment
+CUE must declare each facility that the target opts into, and vice versa.
 
-Application code includes generated contract types and one application facade:
+The recommended entry point is `ovf::app::Run`, which composes exec, com, log,
+persistence, and crypto startup and hands the body a `Context`:
 
 ```cpp
-#include "radar/ovf_contract.hpp"
+#include "ovf/app/run.hpp"
 #include "ovf_application.hpp"
+#include "ovf_logging.hpp"
+#include "radar/ovf_contract.hpp"
 
+using namespace ovf::log::literals;
+
+int main() {
+    return ovf::app::Run("radar-app", "radar.client", [](ovf::app::Context& ctx) {
+        auto proxy = RadarServiceProxy::Find(ctx.com(), ovf::app::radar(),
+                                             std::chrono::seconds(10));
+        if (!proxy) return ovf::app::ExitCode::discovery_timeout;
+        if (auto ready = ctx.ReportReady(); ready != ovf::app::ExitCode::ok) return ready;
+        ctx.logger().Info("radar client ready", "instance"_field = "front-radar");
+        return ctx.Run();
+    });
+}
+```
+
+`Context` exposes `com()`, `log()`, `logger()`, `per()`, and `crypto()`. The
+last two return `nullptr` when the facility is not declared; a declared
+facility that fails to initialize is fatal and prevents the body from running.
+The generated `ovf_application.hpp` provides logical instance selectors such
+as `ovf::app::radar()` and constants for every log event declared in the
+deployment (for example `ovf::app::kEnvironmentModelReceived`).
+
+Applications that need the flat facade can still use
+`ovf::app::CreateRuntime`, which returns
+`ovf::com::ApplicationRuntimeResult`:
+
+```cpp
 auto application = ovf::app::CreateRuntime("radar-app");
 if (!application) {
     // application.error() carries the communication error and diagnostic.
     return 1;
 }
-auto proxy = RadarServiceProxy::Find(
-    application.value().get(), ovf::app::radar(), std::chrono::seconds(10));
+auto proxy = RadarServiceProxy::Find(application.value().get(),
+                                     ovf::app::radar(), std::chrono::seconds(10));
 ```
 
-The application facade loads its system-installed runtime deployment, owns
-runtime start/stop through RAII, and exposes named instance selectors. Generated proxies
-perform bounded discovery and connection. Generated skeletons offer services
-without exposing raw bindings.
+Generated proxies perform bounded discovery and connection; generated skeletons
+offer services without exposing raw bindings. Method calls return a typed
+`MethodOutcome<Value, ApplicationError>` with `.ok()`, `.is<T>()`, and
+`.as<T>()` accessors, and `Operation<T>::get()` waits on the deadline captured
+at submission.
 
 ## Generated targets
 
@@ -75,13 +108,12 @@ The build fails before C++ compilation when the contract is invalid, and fails
 before packaging when application intent cannot be matched to its contracts.
 Provider capability and mapping validation occurs in system integration.
 
-`ovf::app::Run` performs the same checked communication startup and also owns
-optional facilities declared by the application deployment. Inside its body,
-`ctx.per()` and `ctx.crypto()` return pointers when the respective facility is
-declared and initialized, or `nullptr` when it is not declared. Failure to
-initialize a declared facility prevents the application body from running.
 Applications declare only the need for crypto (`crypto: {}`); the platform
 selects the provider through `OVF_CRYPTO_PROVIDER` and its provider path.
+Persistence declares its stores in the CUE deployment; the generated
+`ovf_persistence.hpp` emits per-store `Open<Store>` helpers and each record
+type gets a `<Name>Persistent` wrapper with `Put(tx, value)` and `Get(tx)`
+that use the deployment's bound internally.
 
 ## Shipping boundary
 
