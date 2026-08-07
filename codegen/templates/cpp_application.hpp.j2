@@ -6,15 +6,35 @@
 #include "ovf/com/provider_binding.hpp"
 #include "ovf/com/runtime.hpp"
 
+#include <cstdio>
 #include <cstdlib>
 #include <string>
 
 namespace ovf::app {
 
+// CreateRuntime reads the deployment path from OVF_COM_DEPLOYMENT. The env
+// var is populated by generated dinit service files at deploy time; when it
+// is absent (typically during interactive development), report the missing
+// precondition explicitly instead of silently returning an unconfigured
+// runtime.
 inline auto CreateRuntime(std::string instance_name) -> ovf::com::ApplicationRuntime {
     auto const* deployment = std::getenv("OVF_COM_DEPLOYMENT");
+    if (deployment == nullptr) {
+        std::fprintf(stderr,
+                     "ovf::app::CreateRuntime: OVF_COM_DEPLOYMENT is unset; "
+                     "cannot configure the com runtime for instance '%s'\n",
+                     instance_name.c_str());
+    }
     return ovf::com::ApplicationRuntime(
-        {.instance_name = std::move(instance_name), .logger = {}, .dispatcher = {}},
+        {.instance_name = std::move(instance_name),
+         .logger =
+             [](ovf::com::LogLevel level, std::string_view message) {
+                 if (level == ovf::com::LogLevel::error || level == ovf::com::LogLevel::warning) {
+                     std::fprintf(stderr, "ovf::com: %.*s\n",
+                                  static_cast<int>(message.size()), message.data());
+                 }
+             },
+         .dispatcher = {}},
         ovf::com::DeploymentConfig{deployment == nullptr ? "" : deployment});
 }
 
