@@ -44,6 +44,20 @@ public:
     return true;
   }
 
+  // Construct from a span. Returns nullopt when the input exceeds Capacity,
+  // so callers can write `auto v = BoundedVector<T, N>::from(values)` and
+  // check once instead of testing push_back on every element.
+  static constexpr auto from(std::span<const T> values) noexcept
+      -> std::optional<BoundedVector> {
+    if (values.size() > Capacity)
+      return std::nullopt;
+    BoundedVector result;
+    for (auto const& value : values) {
+      result.storage_[result.size_++] = value;
+    }
+    return result;
+  }
+
 private:
   std::array<T, Capacity> storage_{};
   std::size_t size_{};
@@ -62,6 +76,17 @@ public:
   constexpr auto view() const noexcept -> std::string_view { return {storage_.data(), size_}; }
   constexpr auto size() const noexcept -> std::size_t { return size_; }
   static constexpr auto capacity() noexcept -> std::size_t { return Capacity; }
+
+  // Return a populated BoundedString if the input fits, otherwise nullopt.
+  // Preferred over `default-construct then .assign(...)` because it lets
+  // struct initialization stay in one expression.
+  static constexpr auto from(std::string_view value) noexcept
+      -> std::optional<BoundedString> {
+    BoundedString result;
+    if (!result.assign(value))
+      return std::nullopt;
+    return result;
+  }
 
 private:
   std::array<char, Capacity> storage_{};
