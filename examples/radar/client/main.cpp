@@ -78,8 +78,7 @@ int main() {
 
   auto options = ovf::com::CallOptions{std::chrono::steady_clock::now() + 5s};
   auto calibration = proxy->Calibrate({2.0F}, options).get();
-  if (!std::holds_alternative<CalibrateOutput>(calibration) ||
-      std::get<CalibrateOutput>(calibration).acceptedAt != 42) {
+  if (!calibration.ok() || calibration.value().acceptedAt != 42) {
     std::cerr << "Calibrate did not return the expected response\n";
     logger.Error("calibration returned an unexpected response");
     return 7;
@@ -88,19 +87,17 @@ int main() {
 
   options.deadline = std::chrono::steady_clock::now() + 5s;
   auto invalid = proxy->Calibrate({-1.0F}, options).get();
-  if (invalid.index() != 1 || std::get<InvalidTarget>(std::get<1>(invalid)).reason.view() !=
-                                  "target distance must be non-negative") {
-    std::cerr << "Calibrate did not return the expected application error (result index "
-              << invalid.index() << ")\n";
-    logger.Error("calibration application error was invalid",
-                                   ovf::log::Field::Unsigned("result_index", invalid.index()));
+  if (!invalid.is<InvalidTarget>() ||
+      invalid.as<InvalidTarget>().reason.view() != "target distance must be non-negative") {
+    std::cerr << "Calibrate did not return the expected application error\n";
+    logger.Error("calibration application error was invalid");
     return 8;
   }
   std::cout << "APPLICATION_ERROR_OK" << std::endl;
 
   options.deadline = std::chrono::steady_clock::now() + 5s;
   auto field = proxy->getVehicleStateField(options).get();
-  if (!std::holds_alternative<VehicleState>(field)) {
+  if (!field.ok()) {
     std::cerr << "VehicleStateField read failed\n";
     logger.Error("vehicle state read failed");
     return 9;
@@ -115,8 +112,7 @@ int main() {
   }
   options.deadline = std::chrono::steady_clock::now() + 5s;
   auto updated_field = proxy->getVehicleStateField(options).get();
-  if (!std::holds_alternative<VehicleState>(updated_field) ||
-      std::get<VehicleState>(updated_field).speedMetersPerSecond != 31.25F) {
+  if (!updated_field.ok() || updated_field.value().speedMetersPerSecond != 31.25F) {
     std::cerr << "VehicleStateField did not retain the written value\n";
     return 11;
   }
@@ -124,9 +120,7 @@ int main() {
 
   options.deadline = std::chrono::steady_clock::now() + 50ms;
   auto delayed = proxy->Delay({300}, options).get();
-  if (!std::holds_alternative<ovf::com::Error>(delayed) ||
-      std::get<ovf::com::Error>(delayed) !=
-          ovf::com::Error::deadline_exceeded) {
+  if (!delayed.has_com_error() || delayed.com_error() != ovf::com::Error::deadline_exceeded) {
     std::cerr << "Delay did not expire at its deadline\n";
     return 12;
   }
@@ -136,9 +130,8 @@ int main() {
   auto cancelled = proxy->Delay({300}, options);
   cancelled.cancel();
   auto cancelled_result = cancelled.get();
-  if (!std::holds_alternative<ovf::com::Error>(cancelled_result) ||
-      std::get<ovf::com::Error>(cancelled_result) !=
-          ovf::com::Error::cancelled) {
+  if (!cancelled_result.has_com_error() ||
+      cancelled_result.com_error() != ovf::com::Error::cancelled) {
     std::cerr << "Delay did not complete as cancelled\n";
     return 13;
   }

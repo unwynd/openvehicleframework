@@ -122,33 +122,31 @@ int main() {
 
   auto deadline = ovf::com::CallOptions{std::chrono::steady_clock::now() + 1s};
   auto operation = proxy.Calibrate({2.0F}, deadline);
-  auto result = operation.get(deadline);
-  assert(std::holds_alternative<CalibrateOutput>(result));
-  assert(std::get<CalibrateOutput>(result).acceptedAt == 123456789U);
+  auto result = operation.get();
+  assert(result.ok());
+  assert(result.value().acceptedAt == 123456789U);
 
   auto invalid_operation = proxy.Calibrate({-1.0F}, deadline);
-  auto invalid = invalid_operation.get(deadline);
-  assert(invalid.index() == 1);
-  auto const& app_error = std::get<1>(invalid);
-  assert(std::get<InvalidTarget>(app_error).reason.view() ==
-         "target distance must be non-negative");
+  auto invalid = invalid_operation.get();
+  assert(invalid.is<InvalidTarget>());
+  assert(invalid.as<InvalidTarget>().reason.view() == "target distance must be non-negative");
 
   auto field_operation = proxy.getVehicleStateField(deadline);
-  auto field_value = field_operation.get(deadline);
-  assert(std::holds_alternative<VehicleState>(field_value));
-  assert(std::fabs(std::get<VehicleState>(field_value).speedMetersPerSecond - 13.5F) < 0.001F);
+  auto field_value = field_operation.get();
+  assert(field_value.ok());
+  assert(std::fabs(field_value.value().speedMetersPerSecond - 13.5F) < 0.001F);
 
   auto set_operation = proxy.setVehicleStateField({18.25F}, deadline);
-  assert(!set_operation.get(deadline));
+  assert(!set_operation.get());
   auto updated_operation = proxy.getVehicleStateField(deadline);
-  auto updated_value = updated_operation.get(deadline);
-  assert(std::holds_alternative<VehicleState>(updated_value));
-  assert(std::fabs(std::get<VehicleState>(updated_value).speedMetersPerSecond - 18.25F) < 0.001F);
+  auto updated_value = updated_operation.get();
+  assert(updated_value.ok());
+  assert(std::fabs(updated_value.value().speedMetersPerSecond - 18.25F) < 0.001F);
 
   auto delay_operation = proxy.Delay({25}, deadline);
-  auto delay_result = delay_operation.get(deadline);
-  assert(std::holds_alternative<DelayOutput>(delay_result));
-  assert(std::get<DelayOutput>(delay_result).completedAt == 25);
+  auto delay_result = delay_operation.get();
+  assert(delay_result.ok());
+  assert(delay_result.value().completedAt == 25);
 
   int field_updates{};
   VehicleState notified{};
@@ -164,17 +162,15 @@ int main() {
 
   auto expired = ovf::com::CallOptions{std::chrono::steady_clock::now() - 1ms};
   auto expired_operation = proxy.Calibrate({2.0F}, expired);
-  auto expired_result = expired_operation.get(expired);
-  assert(std::get<ovf::com::Error>(expired_result) ==
-         ovf::com::Error::deadline_exceeded);
+  auto expired_result = expired_operation.get();
+  assert(expired_result.com_error() == ovf::com::Error::deadline_exceeded);
 
   offer.close();
   assert(discovery->routes().size() == 1);
   assert(discovery->select()->instance_id().bytes.back() == 0x6a);
   auto unavailable_operation = proxy.Calibrate({2.0F}, deadline);
-  auto unavailable = unavailable_operation.get(deadline);
-  assert(std::get<ovf::com::Error>(unavailable) ==
-         ovf::com::Error::unavailable);
+  auto unavailable = unavailable_operation.get();
+  assert(unavailable.com_error() == ovf::com::Error::unavailable);
   fallback_offer.close();
   assert(discovery->routes().empty());
 

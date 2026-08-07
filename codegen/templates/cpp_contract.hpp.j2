@@ -134,7 +134,7 @@ public:
 {% endfor %}
 {% for method in service.methods|sort(attribute="tag") %}
     auto {{ method.name }}({{ method.input|cpp_type }} request, ovf::com::CallOptions options)
-        -> ovf::com::Operation<ovf::com::MethodResult<{{ method.output|cpp_type }}, {{ method.application_error }}>> {
+        -> ovf::com::Operation<ovf::com::MethodOutcome<{{ method.output|cpp_type }}, {{ method.application_error }}>> {
         auto size = ovf::com::encoded_size(request);
         auto state = binding_->invoke_loaned(
             {{ service.name }}Contract::{{ method.name }}Descriptor, size,
@@ -142,8 +142,9 @@ public:
                 return ovf::com::encode_into(request, output);
             }, options);
         return {std::move(state), +[](ovf::com::RawResult const& raw)
-            -> ovf::com::MethodResult<{{ method.output|cpp_type }}, {{ method.application_error }}> {
-            if (raw.has_error) return raw.error;
+            -> ovf::com::MethodOutcome<{{ method.output|cpp_type }}, {{ method.application_error }}> {
+            using Inner = ovf::com::MethodResult<{{ method.output|cpp_type }}, {{ method.application_error }}>;
+            if (raw.has_error) return Inner{raw.error};
 {% if method.errors %}
             if (raw.application_error) {
 {% for error in method.errors %}
@@ -151,32 +152,33 @@ public:
                     std::to_integer<unsigned>(raw.payload[0]) == {{ loop.index0 }}) {
                     {{ error }} value{};
                     if (ovf::com::decode(std::span(raw.payload).subspan(1), value)) {
-                        return {{ method.application_error }}{std::in_place_index<{{ loop.index0 }}>, std::move(value)};
+                        return Inner{{ '{' }}{{ method.application_error }}{std::in_place_index<{{ loop.index0 }}>, std::move(value)}};
                     }
                 }
 {% endfor %}
-                return ovf::com::Error::provider_failure;
+                return Inner{ovf::com::Error::provider_failure};
             }
 {% endif %}
             {{ method.output|cpp_type }} value{};
             if (!ovf::com::decode(raw.payload, value))
-                return ovf::com::Error::provider_failure;
-            return value;
+                return Inner{ovf::com::Error::provider_failure};
+            return Inner{std::move(value)};
         }, options.deadline};
     }
 {% endfor %}
 {% for field in service.fields|sort(attribute="tag") %}
 {% if field.readable %}
     auto get{{ field.name }}(ovf::com::CallOptions options)
-        -> ovf::com::Operation<ovf::com::MethodResult<{{ field.value|cpp_type }}, std::monostate>> {
+        -> ovf::com::Operation<ovf::com::MethodOutcome<{{ field.value|cpp_type }}, std::monostate>> {
         auto state = binding_->invoke({{ service.name }}Contract::{{ field.name }}GetDescriptor, {}, options);
         return {std::move(state), +[](ovf::com::RawResult const& raw)
-            -> ovf::com::MethodResult<{{ field.value|cpp_type }}, std::monostate> {
-            if (raw.has_error) return raw.error;
+            -> ovf::com::MethodOutcome<{{ field.value|cpp_type }}, std::monostate> {
+            using Inner = ovf::com::MethodResult<{{ field.value|cpp_type }}, std::monostate>;
+            if (raw.has_error) return Inner{raw.error};
             {{ field.value|cpp_type }} value{};
             if (!ovf::com::decode(raw.payload, value))
-                return ovf::com::Error::provider_failure;
-            return value;
+                return Inner{ovf::com::Error::provider_failure};
+            return Inner{std::move(value)};
         }, options.deadline};
     }
 {% endif %}

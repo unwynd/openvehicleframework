@@ -79,6 +79,59 @@ enum class SubscriptionState : std::uint8_t {
 template <class Value, class ApplicationError>
 using MethodResult = std::variant<Value, ApplicationError, Error>;
 
+// MethodOutcome wraps MethodResult with named accessors so callers do not have
+// to reason about std::variant<>::index() magic numbers. is<T>() / as<T>()
+// treat com::Error and every application-error alternative uniformly.
+template <class Value, class ApplicationError> class MethodOutcome final {
+public:
+  using Inner = MethodResult<Value, ApplicationError>;
+  MethodOutcome(Inner inner) : inner_(std::move(inner)) {}
+
+  [[nodiscard]] bool ok() const noexcept { return inner_.index() == 0; }
+  [[nodiscard]] bool has_application_error() const noexcept { return inner_.index() == 1; }
+  [[nodiscard]] bool has_com_error() const noexcept { return inner_.index() == 2; }
+  [[nodiscard]] explicit operator bool() const noexcept { return ok(); }
+
+  [[nodiscard]] Value const& value() const& { return std::get<0>(inner_); }
+  [[nodiscard]] Value&& value() && { return std::get<0>(std::move(inner_)); }
+  [[nodiscard]] ApplicationError const& application_error() const& {
+    return std::get<1>(inner_);
+  }
+  [[nodiscard]] ApplicationError&& application_error() && {
+    return std::get<1>(std::move(inner_));
+  }
+  [[nodiscard]] Error com_error() const noexcept { return std::get<2>(inner_); }
+
+  // is<T>() checks whether the outcome carries the requested alternative.
+  // T may be Value, com::Error, or any application-error alternative.
+  template <class T> [[nodiscard]] bool is() const noexcept {
+    if constexpr (std::is_same_v<T, Error>) {
+      return has_com_error();
+    } else if constexpr (std::is_same_v<T, Value>) {
+      return ok();
+    } else {
+      return has_application_error() &&
+             std::holds_alternative<T>(std::get<1>(inner_));
+    }
+  }
+  // as<T>() reads the requested alternative. Non-application-error alternatives
+  // are returned by reference; application-error alternatives are also
+  // returned by reference into the underlying application-error variant.
+  template <class T> [[nodiscard]] T const& as() const& {
+    if constexpr (std::is_same_v<T, Value>) {
+      return std::get<0>(inner_);
+    } else {
+      return std::get<T>(std::get<1>(inner_));
+    }
+  }
+
+  [[nodiscard]] Inner const& raw() const& noexcept { return inner_; }
+  [[nodiscard]] Inner&& raw() && noexcept { return std::move(inner_); }
+
+private:
+  Inner inner_;
+};
+
 struct ElementDescriptor {
   enum class Operation : std::uint8_t { event, method, field_get, field_set, field_notify };
   Uuid id;
