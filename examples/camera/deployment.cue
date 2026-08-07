@@ -16,6 +16,11 @@ application: {
 			name:        "camera.capture"
 			description: "Camera capture pipeline"
 		}]
+		events: [{
+			name:        "frame_published"
+			level:       "info"
+			description: "Camera frame published to the runtime"
+		}]
 		queueCapacity:   1024
 		criticalReserve: 32
 		initialLevel:    "info"

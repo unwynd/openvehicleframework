@@ -9,8 +9,15 @@ package ovf_deployment
 	description: string & =~"^.{1,255}$" | *name
 }
 
+#Event: {
+	name:        string & =~"^[a-z][a-z0-9_]{0,62}$"
+	level:       #Level
+	description: string & =~"^.{1,255}$" | *name
+}
+
 #Logging: {
 	loggers:         [...#Logger] & [_, ...]
+	events:          [...#Event] | *[]
 	queueCapacity:   int & >=2 & <=65536 | *4096
 	criticalReserve: int & >=1 & <queueCapacity | *64
 	producerWaitMs:  int & >=0 & <=1000 | *5

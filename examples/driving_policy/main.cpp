@@ -19,9 +19,6 @@ using namespace example::environment;
 using namespace std::chrono_literals;
 using namespace ovf::log::literals;
 
-constexpr ovf::log::Event kEnvironmentModelReceived{0x36A10001U, "environment_model_received",
-                                                    ovf::log::Level::info};
-
 int PersistenceFailure(std::string_view operation, const ovf::per::Error& error) {
   std::cerr << operation << ": " << error.message << '\n';
   return 4;
@@ -110,7 +107,7 @@ int main() {
     }
     std::cout << "POLICY_STATE_COMMITTED sequence=" << sequence << std::endl;
     received = true;
-    static_cast<void>(logger.Event(kEnvironmentModelReceived,
+    static_cast<void>(logger.Event(ovf::app::kEnvironmentModelReceived,
                                    "objects"_field = model.objects.size(),
                                    "produced_at"_field = model.producedAt));
     std::cout << "ENVIRONMENT_MODEL_RECEIVED " << model.objects.size() << std::endl;

@@ -280,6 +280,40 @@ def compile_log_deployment(args: argparse.Namespace) -> int:
             "id": _dlt_id(f"{application['name']}:{name}", used),
             "description": logger.get("description", name),
         })
+
+    # Assign a deterministic 32-bit id per declared event; reject duplicates
+    # so runtime code and log tooling can rely on globally-unique identifiers.
+    events = []
+    event_names: set[str] = set()
+    event_ids: set[int] = set()
+    for event in logging.get("events", []):
+        name = event["name"]
+        if name in event_names:
+            raise ValueError(f"duplicate event name: {name}")
+        event_names.add(name)
+        hash_value = 2166136261
+        seed = f"{application['name']}:event:{name}".encode("utf-8")
+        for byte in seed:
+            hash_value = ((hash_value ^ byte) * 16777619) & 0xFFFFFFFF
+        # Reserve the low bit for future extension flags; keep 0 for now.
+        candidate = hash_value & 0xFFFFFFFE
+        salt = 0
+        while candidate in event_ids:
+            salt += 1
+            if salt > 256:
+                raise ValueError(f"cannot allocate unique event id for {name}")
+            candidate = (hash_value ^ (salt * 0x9E3779B9)) & 0xFFFFFFFE
+        event_ids.add(candidate)
+        parts = name.split("_")
+        constant = "k" + "".join(part.capitalize() for part in parts)
+        events.append({
+            "name": name,
+            "constant": constant,
+            "id": candidate,
+            "level": event["level"],
+            "description": event.get("description", name),
+        })
+
     output = {
         "logDeploymentVersion": 1,
         "application": application["name"],
@@ -292,6 +326,7 @@ def compile_log_deployment(args: argparse.Namespace) -> int:
         "shutdownFlushMs": logging["shutdownFlushMs"],
         "initialLevel": logging["initialLevel"],
         "contexts": contexts,
+        "events": events,
     }
     write_if_changed(args.output, json.dumps(output, sort_keys=True, indent=2) + "\n")
     return 0

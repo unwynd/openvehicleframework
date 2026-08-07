@@ -12,6 +12,12 @@
 
 namespace ovf::app {
 
+{% for event in deployment.events %}
+// {{ event.description }}
+inline constexpr ovf::log::Event {{ event.constant }}{
+    {{ event.id }}U, {{ event.name|cpp_string }}, ovf::log::Level::{{ event.level }}};
+{% endfor %}
+
 inline auto CreateLogRuntime() noexcept -> std::unique_ptr<ovf::log::Runtime> {
   using namespace std::chrono_literals;
   static constexpr std::array mappings{

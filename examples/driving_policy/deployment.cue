@@ -16,6 +16,11 @@ application: {
 			name:        "driving_policy.environment"
 			description: "Driving policy environment input"
 		}]
+		events: [{
+			name:        "environment_model_received"
+			level:       "info"
+			description: "Fused environment model received from sensor fusion"
+		}]
 		queueCapacity:   512
 		criticalReserve: 32
 		initialLevel:    "info"

@@ -60,9 +60,7 @@ int main() {
       service.close();
       return 6;
     }
-    constexpr ovf::log::Event frame_published{0x125A0041U, "frame_published",
-                                              ovf::log::Level::info};
-    static_cast<void>(logger.Event(frame_published, "sequence"_field = sequence,
+    static_cast<void>(logger.Event(ovf::app::kFramePublished, "sequence"_field = sequence,
                                    "objects"_field = frame.objects.size()));
     std::this_thread::sleep_for(100ms);
   }
